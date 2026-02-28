@@ -7,10 +7,10 @@ import logging
 import re
 from typing import Optional
 
-from backend.llm.gemini_client import GeminiClient, GeminiJSONError
-from backend.llm.prompts import CV_SUMMARY_PROMPT, CV_EXPERIENCE_PROMPT, MOTIVATION_LETTER_PROMPT
-from backend.llm.validators import CVSummaryEdit, CVExperienceEdit, BulletEdit, LetterEdit
 from backend.latex.parser import LaTeXSections
+from backend.llm.gemini_client import GeminiClient, GeminiJSONError
+from backend.llm.prompts import CV_EXPERIENCE_PROMPT, CV_SUMMARY_PROMPT, MOTIVATION_LETTER_PROMPT
+from backend.llm.validators import BulletEdit, CVExperienceEdit, CVSummaryEdit, LetterEdit
 from backend.models.schemas import JobDetails
 
 logger = logging.getLogger(__name__)

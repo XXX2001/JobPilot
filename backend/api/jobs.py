@@ -3,26 +3,21 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
+from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
 from backend.models.job import Job, JobMatch
-from backend.models.schemas import RawJob, JobDetails
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], redirect_slashes=False)
 
 
-# ─── Response schemas ─────────────────────────────────────────────────────────
-
-from pydantic import BaseModel
-from datetime import datetime
-from typing import Any
 
 
 class JobOut(BaseModel):
@@ -150,10 +145,11 @@ async def search_jobs(body: SearchRequest, db: DBSession):
 
     Returns the list of newly stored jobs.
     """
+    import hashlib
+
+    from backend.matching.filters import JobFilters
     from backend.scraping.adzuna_client import AdzunaClient
     from backend.scraping.deduplicator import JobDeduplicator
-    from backend.matching.filters import JobFilters
-    import hashlib
 
     client = AdzunaClient()
     deduplicator = JobDeduplicator()

@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
-
 import json
+from typing import Annotated, Literal, Union
 
 try:
     from pydantic import BaseModel, Field, confloat  # type: ignore

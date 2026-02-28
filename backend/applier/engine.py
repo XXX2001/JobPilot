@@ -9,13 +9,12 @@ from pathlib import Path
 from typing import Optional
 
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
-from backend.applier.daily_limit import DailyLimitGuard, DailyLimitExceeded
+from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
+from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.models.application import Application, ApplicationEvent
 
 logger = logging.getLogger(__name__)

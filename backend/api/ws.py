@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
+import json
 import uuid
 from typing import Dict
-import json
 
 try:
     from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 except Exception:  # pragma: no cover - fallback for environments without fastapi
-    APIRouter = lambda: None  # type: ignore
+
+    def APIRouter():  # type: ignore
+        class _R:
+            def websocket(self, path: str):
+                def _decorator(func):
+                    return func
+
+                return _decorator
+
+        return _R()
 
     class WebSocketDisconnect(Exception):
         pass
@@ -23,16 +31,6 @@ except Exception:  # pragma: no cover - fallback for environments without fastap
 
         async def send_text(self, data: str):
             return None
-
-    def APIRouter():  # type: ignore
-        class _R:
-            def websocket(self, path: str):
-                def _decorator(func):
-                    return func
-
-                return _decorator
-
-        return _R()
 
 
 router = APIRouter()

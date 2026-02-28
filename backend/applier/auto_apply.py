@@ -96,7 +96,8 @@ class AutoApplyStrategy:
             result = await agent.run()
 
             raw = result.final_result() if hasattr(result, "final_result") else ""
-            import json, re
+            import json
+            import re
 
             m = re.search(r"\{[^{}]+\}", raw or "", re.DOTALL)
             if m:

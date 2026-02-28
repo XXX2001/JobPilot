@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import logging
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
 from pydantic import BaseModel
-from datetime import datetime
+from sqlalchemy import select
 
 from backend.api.deps import DBSession
 from backend.config import settings
-from backend.models.user import UserProfile, SearchSettings
+from backend.models.user import SearchSettings, UserProfile
 
 logger = logging.getLogger(__name__)
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import hashlib
 import re
 
@@ -10,8 +11,9 @@ class JobDeduplicator:
 
     def _make_key(self, job: RawJob) -> str:
         """Normalize and hash: company + title + location."""
-        norm = lambda s: re.sub(r"\s+", " ", s.lower().strip())
-        key = f"{norm(job.company)}|{norm(job.title)}|{norm(job.location)}"
+        def _norm(s: str) -> str:
+            return re.sub(r"\s+", " ", s.lower().strip())
+        key = f"{_norm(job.company)}|{_norm(job.title)}|{_norm(job.location)}"
         return hashlib.md5(key.encode()).hexdigest()
 
     def deduplicate(self, jobs: list[RawJob]) -> list[RawJob]:

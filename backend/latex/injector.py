@@ -1,7 +1,7 @@
 from __future__ import annotations
-import re
+
 import logging
-from typing import Optional
+import re
 
 logger = logging.getLogger(__name__)
 

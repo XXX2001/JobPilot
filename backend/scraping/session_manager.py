@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -139,7 +139,10 @@ class BrowserSessionManager:
                 LoginRequired(
                     type="login_required",
                     site=site,
-                    browser_window_title=f"Please log into {site} in the browser window, then click 'Done' in JobPilot.",
+                    browser_window_title=(
+                        f"Please log into {site} in the browser window,"
+                        " then click 'Done' in JobPilot."
+                    ),
                 )
             )
         except Exception as exc:

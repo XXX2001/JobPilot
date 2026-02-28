@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Optional
-from datetime import datetime, date
-from sqlalchemy import Integer, String, Boolean, DateTime, Text, JSON, Float, Date
+
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
+
 from backend.models.base import Base
 
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
+
 import logging
 
 import httpx
 
 from backend.config import settings
-from backend.models.schemas import RawJob
 from backend.matching.filters import JobFilters
+from backend.models.schemas import RawJob
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
-from typing import Annotated, TYPE_CHECKING
+
+from typing import TYPE_CHECKING, Annotated
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,11 +15,11 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 # These pull module-level singletons from ``app.state`` (set in main.py lifespan).
 
 if TYPE_CHECKING:  # pragma: no cover
-    from backend.scraping.session_manager import BrowserSessionManager
     from backend.applier.engine import ApplicationEngine
-    from backend.latex.pipeline import CVPipeline, LetterPipeline
-    from backend.scraping.orchestrator import ScrapingOrchestrator
+    from backend.latex.pipeline import CVPipeline
     from backend.scheduler.morning_batch import MorningBatchScheduler
+    from backend.scraping.orchestrator import ScrapingOrchestrator
+    from backend.scraping.session_manager import BrowserSessionManager
 
 
 def get_session_manager(request: Request) -> "BrowserSessionManager":

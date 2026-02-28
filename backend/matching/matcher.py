@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 import logging
 import re
 from datetime import datetime, timezone
 
-from backend.models.schemas import JobDetails
 from backend.matching.filters import JobFilters
+from backend.models.schemas import JobDetails
 
 logger = logging.getLogger(__name__)
 

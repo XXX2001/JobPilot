@@ -5,11 +5,17 @@ SQLAlchemy installed. We keep runtime imports but add type ignores and
 silencing comments to reduce noisy diagnostics from the language server.
 """
 
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession  # type: ignore
-from sqlalchemy import event  # type: ignore
-from contextlib import asynccontextmanager
-from backend.config import settings
 import logging
+from contextlib import asynccontextmanager
+
+from sqlalchemy import event  # type: ignore
+from sqlalchemy.ext.asyncio import (  # type: ignore
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+
+from backend.config import settings
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,7 @@ import logging
 import re
 from pathlib import Path
 
-from backend.latex.compiler import LaTeXCompiler, LaTeXCompilationError
+from backend.latex.compiler import LaTeXCompilationError, LaTeXCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +40,8 @@ class LaTeXValidator:
     async def _validate_via_tectonic(self, tex_path: Path) -> list[str]:
         """Try to compile and return errors on failure, empty list on success."""
         try:
-            import tempfile
             import asyncio
+            import tempfile
 
             tectonic = self._compiler._find_tectonic()
             if tectonic is None:
@@ -82,8 +82,10 @@ class LaTeXValidator:
 
         for env, count in begin_counts.items():
             if end_counts.get(env, 0) != count:
+                end_count = end_counts.get(env, 0)
                 warnings.append(
-                    f"Unmatched environment: \\begin{{{env}}} ({count}) vs \\end{{{env}}} ({end_counts.get(env, 0)})"
+                    f"Unmatched environment: \\begin{{{env}}} ({count})"
+                    f" vs \\end{{{env}}} ({end_count})"
                 )
 
         if "\\documentclass" not in content:

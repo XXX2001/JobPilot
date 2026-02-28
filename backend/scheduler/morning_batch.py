@@ -11,13 +11,13 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models.job import Job, JobMatch, JobSource
-from backend.models.user import SearchSettings, UserProfile
-from backend.models.document import TailoredDocument
-from backend.models.schemas import JobDetails
+from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
 from backend.matching.filters import JobFilters
+from backend.models.document import TailoredDocument
+from backend.models.job import Job, JobMatch, JobSource
+from backend.models.schemas import JobDetails
+from backend.models.user import SearchSettings, UserProfile
 
-from backend.applier.daily_limit import DailyLimitGuard, DailyLimitExceeded  # noqa: PLC0415
 logger = logging.getLogger(__name__)
 
 try:

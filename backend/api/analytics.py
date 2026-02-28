@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Query
-from sqlalchemy import select, func, and_
 from pydantic import BaseModel
+from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
 from backend.models.application import Application

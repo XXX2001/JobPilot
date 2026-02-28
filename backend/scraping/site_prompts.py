@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-
-
 SITE_PROMPTS: dict[str, str] = {
 
     "linkedin": """

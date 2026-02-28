@@ -13,7 +13,7 @@ import random
 from typing import TYPE_CHECKING
 
 from backend.models.schemas import JobDetails, RawJob
-from backend.scraping.site_prompts import SITE_PROMPTS, format_prompt
+from backend.scraping.site_prompts import SITE_PROMPTS
 
 if TYPE_CHECKING:
     from backend.matching.filters import JobFilters

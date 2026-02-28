@@ -1,10 +1,11 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import time
 from collections import deque
-from typing import TypeVar, Type
+from typing import Type, TypeVar
 
 from google import genai
 from pydantic import BaseModel

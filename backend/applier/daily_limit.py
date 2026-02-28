@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.application import Application

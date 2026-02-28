@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
-from sqlalchemy import select
 from pydantic import BaseModel
-from datetime import datetime
+from sqlalchemy import select
 
 from backend.api.deps import DBSession
 from backend.models.document import TailoredDocument
-from backend.models.job import JobMatch, Job
+from backend.models.job import JobMatch
 
 logger = logging.getLogger(__name__)
 

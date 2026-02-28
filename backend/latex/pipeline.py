@@ -5,9 +5,9 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.latex.compiler import LaTeXCompiler, LaTeXCompilationError
-from backend.latex.parser import LaTeXParser
+from backend.latex.compiler import LaTeXCompiler
 from backend.latex.injector import LaTeXInjector
+from backend.latex.parser import LaTeXParser
 from backend.models.schemas import JobDetails
 
 logger = logging.getLogger(__name__)

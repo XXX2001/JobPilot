@@ -1,16 +1,16 @@
-from fastapi import FastAPI, Request  # type: ignore
-from fastapi.middleware.cors import CORSMiddleware  # type: ignore
-from fastapi.staticfiles import StaticFiles  # type: ignore
+import json
+import logging
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+
+from fastapi import FastAPI, Request  # type: ignore
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.responses import JSONResponse  # type: ignore
-import shutil
-import logging
-import json
+from fastapi.staticfiles import StaticFiles  # type: ignore
 
 from backend.config import settings
-
 
 logger = logging.getLogger("jobpilot")
 
@@ -42,19 +42,18 @@ async def lifespan(app: FastAPI):
 
     # ── Instantiate singletons ────────────────────────────────────────────
     try:
-        from backend.llm.gemini_client import GeminiClient
-        from backend.llm.cv_editor import CVEditor
+
+        from backend.applier.engine import ApplicationEngine
         from backend.latex.pipeline import CVPipeline, LetterPipeline
+        from backend.llm.cv_editor import CVEditor
+        from backend.llm.gemini_client import GeminiClient
+        from backend.matching.matcher import JobMatcher
+        from backend.scheduler.morning_batch import MorningBatchScheduler
+        from backend.scraping.adaptive_scraper import AdaptiveScraper
         from backend.scraping.adzuna_client import AdzunaClient
         from backend.scraping.deduplicator import JobDeduplicator
-        from backend.scraping.adaptive_scraper import AdaptiveScraper
-        from backend.scraping.session_manager import BrowserSessionManager
         from backend.scraping.orchestrator import ScrapingOrchestrator
-        from backend.matching.matcher import JobMatcher
-        from backend.applier.engine import ApplicationEngine
-        from backend.scheduler.morning_batch import MorningBatchScheduler
-        from backend.database import get_db
-        import asyncio
+        from backend.scraping.session_manager import BrowserSessionManager
 
         gemini = GeminiClient()
         cv_editor = CVEditor(gemini_client=gemini)
@@ -111,21 +110,16 @@ async def lifespan(app: FastAPI):
     # ── Wire WS client message routing ──────────────────────────────────
     try:
         from backend.api import ws as ws_module
-        from backend.api.ws_models import ConfirmSubmit, CancelApply, LoginDone
 
         _original_endpoint = None
 
         async def _patched_ws_handler(websocket):  # type: ignore
             """Extended WS handler that routes client messages to singletons."""
-            import uuid
 
             client_id = await ws_module.manager.connect(websocket)
             try:
                 while True:
-                    try:
-                        from fastapi.websockets import WebSocketDisconnect  # type: ignore
-                    except ImportError:
-                        from starlette.websockets import WebSocketDisconnect  # type: ignore
+                    pass  # WebSocketDisconnect imported via ws_module; skip local import
                     try:
                         data = await websocket.receive_text()
                     except Exception:
@@ -192,12 +186,12 @@ app.add_middleware(
 
 # Include API routers (stubs implemented in backend/api/*.py)
 try:
-    import backend.api.jobs as jobs  # type: ignore
-    import backend.api.queue as queue  # type: ignore
+    import backend.api.analytics as analytics  # type: ignore
     import backend.api.applications as applications  # type: ignore
     import backend.api.documents as documents  # type: ignore
+    import backend.api.jobs as jobs  # type: ignore
+    import backend.api.queue as queue  # type: ignore
     import backend.api.settings as api_settings  # type: ignore
-    import backend.api.analytics as analytics  # type: ignore
     import backend.api.ws as ws  # type: ignore
 
     app.include_router(jobs.router)
@@ -276,7 +270,10 @@ if _GeminiRateErr is not None:
         logger.warning("Gemini rate limit: %s", exc)
         return JSONResponse(
             status_code=429,
-            content={"error": "LLM rate limit reached — please try again shortly", "code": "rate_limit"},
+            content={
+                "error": "LLM rate limit reached — please try again shortly",
+                "code": "rate_limit",
+            },
         )
 
 

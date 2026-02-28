@@ -1,6 +1,8 @@
-from pydantic_settings import BaseSettings  # type: ignore
 from pydantic import Field  # type: ignore
-from pydantic_settings import SettingsConfigDict  # type: ignore
+from pydantic_settings import (
+    BaseSettings,  # type: ignore
+    SettingsConfigDict,  # type: ignore
+)
 
 
 class Settings(BaseSettings):

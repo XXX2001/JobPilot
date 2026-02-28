@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from sqlalchemy import select, func
 from pydantic import BaseModel
-from datetime import datetime
+from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
 from backend.models.application import Application, ApplicationEvent
@@ -236,7 +236,11 @@ class ApplyRequest(BaseModel):
 async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request: Request):
     """Trigger an application for a job match via auto / assisted / manual strategy."""
     try:
-        from backend.applier.engine import ApplicationEngine, ApplyMode, ApplicantInfo  # noqa: PLC0415
+        from backend.applier.engine import (  # noqa: PLC0415
+            ApplicantInfo,
+            ApplicationEngine,
+            ApplyMode,
+        )
     except ImportError:
         raise HTTPException(status_code=503, detail="ApplicationEngine not available")
 

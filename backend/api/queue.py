@@ -8,8 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from backend.api.deps import DBSession
 from backend.models.job import Job, JobMatch
@@ -88,6 +87,7 @@ async def refresh_queue(db: DBSession):
     Runs the batch in a background task so the endpoint returns promptly.
     """
     import asyncio
+
     from backend.scraping.orchestrator import ScrapingOrchestrator
 
     orchestrator = ScrapingOrchestrator()

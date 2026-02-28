@@ -29,17 +29,20 @@ async def lifespan(app: FastAPI):
     for d in data_dirs:
         d.mkdir(parents=True, exist_ok=True)
 
-    # TODO Task 2: call alembic upgrade head
-
-    # Placeholder: initialize DB, connection pools, background tasks here
-
+    # Initialize DB (create tables if not exists via SQLAlchemy)
+    try:
+        from backend.database import init_db
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.warning("DB init failed (may already be up): %s", e)
     yield
 
     # Shutdown
     logger.info("Shutting down JobPilot application")
 
 
-app: Any = FastAPI(lifespan=lifespan)  # type: ignore[arg-type]
+app: Any = FastAPI(lifespan=lifespan, redirect_slashes=False)  # type: ignore[arg-type]
 
 # Allow all origins for development
 app.add_middleware(
@@ -67,7 +70,7 @@ try:
     app.include_router(api_settings.router)
     app.include_router(analytics.router)
     # ws.py is present but may not register routes yet
-    # app.include_router(ws.router)  # WebSocket router to be implemented in Task 5
+    app.include_router(ws.router)
 except Exception as e:
     # If api package or modules don't exist yet, continue — stubs will be added
     logger.debug("API routers not all available yet: %s", e)

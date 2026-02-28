@@ -99,9 +99,28 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 break
             except Exception:
                 continue
-            # Business logic deliberately omitted from handler per task
+            # Handle ping/pong keepalive
+            try:
+                msg = json.loads(data)
+                if isinstance(msg, dict) and msg.get("type") == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
+            except Exception:
+                pass
     finally:
         manager.disconnect(client_id)
 
 
-__all__ = ["ConnectionManager", "manager", "router"]
+async def broadcast_status(message: str, progress: float = 0.0) -> None:
+    """Broadcast a status update to all connected WebSocket clients."""
+    payload = json.dumps({"type": "status", "message": message, "progress": progress})
+    to_remove: list[str] = []
+    for cid, ws in list(manager.active_connections.items()):
+        try:
+            await ws.send_text(payload)
+        except Exception:
+            to_remove.append(cid)
+    for cid in to_remove:
+        manager.disconnect(cid)
+
+
+__all__ = ["ConnectionManager", "manager", "router", "broadcast_status"]

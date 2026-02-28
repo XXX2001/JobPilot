@@ -58,7 +58,7 @@
 					? 'bg-accent text-accent-foreground font-medium'
 					: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
 			>
-				<svelte:component this={link.icon} size={16} />
+				<link.icon size={16} />
 				{link.label}
 			</a>
 		{/each}

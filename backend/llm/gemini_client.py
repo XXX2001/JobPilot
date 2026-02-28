@@ -65,12 +65,27 @@ class GeminiClient:
 
     async def generate_json(self, prompt: str, schema: Type[T]) -> T:
         text = await self.generate_text(prompt)
-        text = text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1]
-            text = text.rsplit("```", 1)[0]
-        try:
-            data = json.loads(text.strip())
+
+        def _parse(raw: str) -> T:
+            raw = raw.strip()
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1]
+                raw = raw.rsplit("```", 1)[0]
+            data = json.loads(raw.strip())
             return schema.model_validate(data)
-        except (json.JSONDecodeError, Exception) as e:
-            raise GeminiJSONError(f"Invalid JSON from LLM: {e}\nRaw: {text[:200]}") from e
+
+        try:
+            return _parse(text)
+        except (json.JSONDecodeError, Exception) as first_exc:
+            # One retry: ask Gemini to reformat the output as plain JSON
+            retry_prompt = (
+                f"The following text is not valid JSON. "
+                f"Return ONLY the JSON object, no markdown fences, no prose:\n\n{text}"
+            )
+            try:
+                text2 = await self.generate_text(retry_prompt)
+                return _parse(text2)
+            except (json.JSONDecodeError, Exception) as retry_exc:
+                raise GeminiJSONError(
+                    f"Invalid JSON from LLM (after retry): {retry_exc}\nRaw: {text[:200]}"
+                ) from first_exc

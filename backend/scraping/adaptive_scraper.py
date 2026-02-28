@@ -103,7 +103,7 @@ class AdaptiveScraper:
             Returns an empty list on any error (graceful degradation).
         """
         try:
-            from browser_use import Agent, Browser, BrowserConfig  # type: ignore
+            from browser_use import Agent, Browser  # type: ignore
         except ImportError:
             logger.warning("browser_use not installed; returning empty list")
             return []
@@ -134,25 +134,34 @@ class AdaptiveScraper:
             except KeyError:
                 prompt = prompt_template
 
-        browser = Browser(config=BrowserConfig(headless=True))
-        try:
-            agent = Agent(
-                task=prompt,
-                llm=llm,
-                browser=browser,
-                max_steps=15,
-            )
-            result = await agent.run()
-        except Exception as exc:
-            logger.warning("browser-use agent failed for %s: %s", url, exc)
-            return []
-        finally:
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            browser = Browser(headless=True)
             try:
-                await browser.close()
-            except Exception:
-                pass
+                agent = Agent(
+                    task=prompt,
+                    llm=llm,
+                    browser=browser,
+                    max_steps=15,
+                )
+                result = await agent.run()
+                return self._parse_agent_result(result, source_url=url)
+            except Exception as exc:
+                last_exc = exc
+                backoff = 2 ** attempt * 2  # 2s, 4s, 8s
+                logger.warning(
+                    "browser-use agent failed for %s (attempt %d/3): %s — retrying in %ds",
+                    url, attempt + 1, exc, backoff,
+                )
+                await asyncio.sleep(backoff)
+            finally:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
-        return self._parse_agent_result(result, source_url=url)
+        logger.error("browser-use agent exhausted retries for %s: %s", url, last_exc)
+        return []
 
     async def scrape_job_details(self, job_url: str) -> JobDetails | None:
         """Navigate to a single job posting and extract full details.
@@ -164,7 +173,7 @@ class AdaptiveScraper:
             JobDetails if extraction succeeds, None on failure.
         """
         try:
-            from browser_use import Agent, Browser, BrowserConfig  # type: ignore
+            from browser_use import Agent, Browser  # type: ignore
         except ImportError:
             logger.warning("browser_use not installed; returning None")
             return None
@@ -193,7 +202,7 @@ This is a job posting page. Extract the FULL details and return as JSON:
 Do NOT click the apply button. Just extract and return JSON.
 """
 
-        browser = Browser(config=BrowserConfig(headless=True))
+        browser = Browser(headless=True)
         try:
             agent = Agent(
                 task=prompt,

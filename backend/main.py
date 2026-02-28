@@ -1,9 +1,10 @@
-from fastapi import FastAPI  # type: ignore
+from fastapi import FastAPI, Request  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from fastapi.responses import JSONResponse  # type: ignore
 import shutil
 import logging
 import json
@@ -214,15 +215,84 @@ except Exception as e:
 
 @app.get("/api/health")
 async def health():
-    tectonic = Path("bin/tectonic").exists() or shutil.which("tectonic") is not None
+    tectonic_bin = Path("bin/tectonic")
+    tectonic = tectonic_bin.exists() or shutil.which("tectonic") is not None
     gemini_key_set = getattr(settings, "GOOGLE_API_KEY", "") not in (None, "", "placeholder")
-    return {
+    result: dict[str, Any] = {
         "status": "ok",
         "version": "0.1.0",
         "db": "connected",
         "tectonic": bool(tectonic),
         "gemini_key_set": bool(gemini_key_set),
     }
+    if not tectonic:
+        result["tectonic_hint"] = (
+            "Tectonic not found. Run: uv run python scripts/download_tectonic.py"
+        )
+    return result
+
+
+
+# ── Global exception handlers ────────────────────────────────────────────────
+try:
+    from backend.latex.compiler import LaTeXCompilationError as _LaTeXErr
+except ImportError:
+    _LaTeXErr = None  # type: ignore[assignment,misc]
+
+try:
+    from backend.llm.gemini_client import GeminiJSONError as _GeminiJSONErr
+    from backend.llm.gemini_client import GeminiRateLimitError as _GeminiRateErr
+except ImportError:
+    _GeminiJSONErr = None  # type: ignore[assignment,misc]
+    _GeminiRateErr = None  # type: ignore[assignment,misc]
+
+
+if _LaTeXErr is not None:
+
+    @app.exception_handler(_LaTeXErr)
+    async def _latex_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("LaTeX compilation error: %s", exc)
+        return JSONResponse(
+            status_code=422,
+            content={"error": str(exc), "code": "latex_compile_error"},
+        )
+
+
+if _GeminiJSONErr is not None:
+
+    @app.exception_handler(_GeminiJSONErr)
+    async def _gemini_json_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("Gemini JSON error: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "LLM response validation failed", "code": "gemini_json_error"},
+        )
+
+
+if _GeminiRateErr is not None:
+
+    @app.exception_handler(_GeminiRateErr)
+    async def _gemini_rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("Gemini rate limit: %s", exc)
+        return JSONResponse(
+            status_code=429,
+            content={"error": "LLM rate limit reached — please try again shortly", "code": "rate_limit"},
+        )
+
+
+@app.exception_handler(Exception)
+async def _generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "Unhandled exception on %s %s: %s",
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "code": "internal_error"},
+    )
 
 
 # Serve frontend static files if built (don't crash if missing)

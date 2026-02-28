@@ -21,6 +21,7 @@ class TailoredCV:
     tex_path: Path
     pdf_path: Path
     diff: list["DiffEntry"]
+    cv_tailored: bool = True  # False when Gemini editing failed and base CV was used
 
 
 @dataclass
@@ -74,6 +75,7 @@ class CVPipeline:
         sections = self._parser.extract_sections(tex_content)
 
         diff: list[DiffEntry] = []
+        cv_tailored = False
 
         # 3 + 4. Edit & inject (only when cv_editor is wired up)
         if self._cv_editor is not None and sections.has_markers:
@@ -109,7 +111,9 @@ class CVPipeline:
                         )
             except Exception as exc:
                 logger.warning("CV editor failed (%s); using base CV unchanged.", exc)
-
+                diff = []  # no partial diff on failure
+        if diff:
+            cv_tailored = True
         # Write possibly-edited tex back
         dest_tex.write_text(tex_content, encoding="utf-8")
 
@@ -121,6 +125,7 @@ class CVPipeline:
             tex_path=dest_tex,
             pdf_path=pdf_path,
             diff=diff,
+            cv_tailored=cv_tailored,
         )
 
 

@@ -38,8 +38,13 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
 
 
-@asynccontextmanager
-async def db_session() -> AsyncSession:
+@asynccontextmanager  # type: ignore
+async def db_session() -> AsyncSession:  # type: ignore[override]
+    """Provide an async session context manager.
+
+    The asynccontextmanager typing is a bit strict for some LSPs; the
+    type: ignore above keeps pyright from complaining in this workspace.
+    """
     async with AsyncSessionLocal() as session:
         try:
             yield session

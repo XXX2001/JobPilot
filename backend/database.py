@@ -1,5 +1,12 @@
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from sqlalchemy import event
+"""Database utilities for JobPilot.
+
+Note: Some CI/LSP environments running inside this agent may not have
+SQLAlchemy installed. We keep runtime imports but add type ignores and
+silencing comments to reduce noisy diagnostics from the language server.
+"""
+
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession  # type: ignore
+from sqlalchemy import event  # type: ignore
 from contextlib import asynccontextmanager
 from backend.config import settings
 import logging

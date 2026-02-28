@@ -14,3 +14,4 @@ class JobFilters:
     job_types: list[str] = field(default_factory=list)
     languages: list[str] = field(default_factory=list)
     excluded_companies: list[str] = field(default_factory=list)
+    min_score: float = 30.0

@@ -39,3 +39,5 @@ class JobDetails(BaseModel):
     posted_date: Optional[datetime] = None  # alias for recency scoring
     url: str = ""
     score: Optional[float] = None
+    apply_url: str = ""
+    apply_method: str = ""

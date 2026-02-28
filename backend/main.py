@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 import shutil
 import logging
+import json
 
 from backend.config import settings
 
@@ -32,14 +33,149 @@ async def lifespan(app: FastAPI):
     # Initialize DB (create tables if not exists via SQLAlchemy)
     try:
         from backend.database import init_db
+
         await init_db()
         logger.info("Database initialized")
     except Exception as e:
         logger.warning("DB init failed (may already be up): %s", e)
+
+    # ── Instantiate singletons ────────────────────────────────────────────
+    try:
+        from backend.llm.gemini_client import GeminiClient
+        from backend.llm.cv_editor import CVEditor
+        from backend.latex.pipeline import CVPipeline, LetterPipeline
+        from backend.scraping.adzuna_client import AdzunaClient
+        from backend.scraping.deduplicator import JobDeduplicator
+        from backend.scraping.adaptive_scraper import AdaptiveScraper
+        from backend.scraping.session_manager import BrowserSessionManager
+        from backend.scraping.orchestrator import ScrapingOrchestrator
+        from backend.matching.matcher import JobMatcher
+        from backend.applier.engine import ApplicationEngine
+        from backend.scheduler.morning_batch import MorningBatchScheduler
+        from backend.database import get_db
+        import asyncio
+
+        gemini = GeminiClient()
+        cv_editor = CVEditor(gemini_client=gemini)
+        cv_pipeline = CVPipeline(cv_editor=cv_editor)
+        letter_pipeline = LetterPipeline(cv_editor=cv_editor)
+        adzuna = AdzunaClient()
+        dedup = JobDeduplicator()
+        adaptive = AdaptiveScraper(api_key=settings.GOOGLE_API_KEY)
+        session_mgr = BrowserSessionManager()
+        orchestrator = ScrapingOrchestrator(
+            adzuna_client=adzuna,
+            adaptive_scraper=adaptive,
+            session_mgr=session_mgr,
+            deduplicator=dedup,
+        )
+        matcher = JobMatcher()
+        apply_engine = ApplicationEngine(
+            api_key=settings.GOOGLE_API_KEY,
+            daily_limit=10,
+        )
+
+        # DB factory for the scheduler (creates a new session each call)
+        from backend.database import AsyncSessionLocal
+
+        scheduler = MorningBatchScheduler(
+            scraper=orchestrator,
+            matcher=matcher,
+            cv_pipeline=cv_pipeline,
+            db_factory=AsyncSessionLocal,
+        )
+
+        # Store on app.state for dependency injection
+        app.state.gemini = gemini
+        app.state.cv_pipeline = cv_pipeline
+        app.state.letter_pipeline = letter_pipeline
+        app.state.adzuna = adzuna
+        app.state.adaptive_scraper = adaptive
+        app.state.session_manager = session_mgr
+        app.state.scraping_orchestrator = orchestrator
+        app.state.matcher = matcher
+        app.state.apply_engine = apply_engine
+        app.state.morning_scheduler = scheduler
+
+        # Start scheduler
+        try:
+            scheduler.start(batch_time="08:00")
+        except Exception as exc:
+            logger.warning("Scheduler start failed (non-fatal): %s", exc)
+
+        logger.info("All singletons initialised")
+    except Exception as exc:
+        logger.warning("Singleton init failed (non-fatal in test env): %s", exc)
+
+    # ── Wire WS client message routing ──────────────────────────────────
+    try:
+        from backend.api import ws as ws_module
+        from backend.api.ws_models import ConfirmSubmit, CancelApply, LoginDone
+
+        _original_endpoint = None
+
+        async def _patched_ws_handler(websocket):  # type: ignore
+            """Extended WS handler that routes client messages to singletons."""
+            import uuid
+
+            client_id = await ws_module.manager.connect(websocket)
+            try:
+                while True:
+                    try:
+                        from fastapi.websockets import WebSocketDisconnect  # type: ignore
+                    except ImportError:
+                        from starlette.websockets import WebSocketDisconnect  # type: ignore
+                    try:
+                        data = await websocket.receive_text()
+                    except Exception:
+                        break
+                    try:
+                        msg = json.loads(data)
+                        if not isinstance(msg, dict):
+                            continue
+                        msg_type = msg.get("type")
+                        if msg_type == "ping":
+                            await websocket.send_text(json.dumps({"type": "pong"}))
+                        elif msg_type == "confirm_submit":
+                            job_id = msg.get("job_id", -1)
+                            engine = getattr(app.state, "apply_engine", None)
+                            if engine:
+                                engine.signal_confirm(job_id)
+                        elif msg_type == "cancel_apply":
+                            job_id = msg.get("job_id", -1)
+                            engine = getattr(app.state, "apply_engine", None)
+                            if engine:
+                                engine.signal_cancel(job_id)
+                        elif msg_type == "login_done":
+                            site = msg.get("site", "")
+                            sm = getattr(app.state, "session_manager", None)
+                            if sm:
+                                sm.confirm_login(site)
+                    except Exception as exc:
+                        logger.debug("WS message parse error: %s", exc)
+            finally:
+                ws_module.manager.disconnect(client_id)
+
+        # Replace the websocket endpoint with our extended one
+        # (FastAPI stores routes; we patch at the router level)
+        for route in ws_module.router.routes:
+            if hasattr(route, "path") and route.path == "/ws":
+                route.endpoint = _patched_ws_handler
+                break
+
+    except Exception as exc:
+        logger.warning("WS routing patch failed (non-fatal): %s", exc)
+
     yield
 
     # Shutdown
     logger.info("Shutting down JobPilot application")
+    try:
+        scheduler = getattr(app.state, "morning_scheduler", None)
+        if scheduler:
+            scheduler.stop()
+    except Exception as exc:
+        logger.warning("Scheduler shutdown error: %s", exc)
 
 
 app: Any = FastAPI(lifespan=lifespan, redirect_slashes=False)  # type: ignore[arg-type]

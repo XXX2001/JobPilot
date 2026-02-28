@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import select, func
 from pydantic import BaseModel
 from datetime import datetime
@@ -217,3 +217,51 @@ async def add_application_event(application_id: int, body: CreateEventRequest, d
     await db.refresh(event)
     logger.info("Added event type=%s to application id=%d", body.event_type, application_id)
     return ApplicationEventOut.model_validate(event)
+
+
+# ─── Apply endpoint ───────────────────────────────────────────────────────────
+
+
+class ApplyRequest(BaseModel):
+    method: str = "manual"  # "auto" | "assisted" | "manual"
+    apply_url: str = ""
+    full_name: str = ""
+    email: str = ""
+    phone: str = ""
+    location: str = ""
+    additional_answers_json: str = ""
+
+
+@router.post("/{match_id}/apply", status_code=200)
+async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request: Request):
+    """Trigger an application for a job match via auto / assisted / manual strategy."""
+    try:
+        from backend.applier.engine import ApplicationEngine, ApplyMode, ApplicantInfo  # noqa: PLC0415
+    except ImportError:
+        raise HTTPException(status_code=503, detail="ApplicationEngine not available")
+
+    engine: ApplicationEngine = getattr(request.app.state, "apply_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="ApplicationEngine not initialised")
+
+    try:
+        mode = ApplyMode(body.method)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid apply method: {body.method!r}")
+
+    applicant = ApplicantInfo(
+        full_name=body.full_name,
+        email=body.email,
+        phone=body.phone,
+        location=body.location,
+        additional_answers_json=body.additional_answers_json,
+    )
+
+    result = await engine.apply(
+        job_match_id=match_id,
+        mode=mode,
+        db=db,
+        apply_url=body.apply_url,
+        applicant=applicant,
+    )
+    return result.model_dump()

@@ -1,11 +1,18 @@
+import sys
+from pathlib import Path
 import pytest
 import unittest.mock as mock
+
+# Ensure project root is in sys.path so tests can import backend package
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 @pytest.fixture
 def test_app():
     """Provide a TestClient for the FastAPI app."""
-    import os, sys
+    import os
 
     if os.getcwd() not in sys.path:
         sys.path.insert(0, os.getcwd())
@@ -19,14 +26,10 @@ def test_app():
 
 @pytest.fixture
 def mock_gemini():
-    """Mock google.generativeai.GenerativeModel to avoid real API calls.
-
-    Returns a mock that yields a simple text value when generate_content is called.
-    """
+    """Mock google.generativeai.GenerativeModel to avoid real API calls."""
     patcher = mock.patch("google.generativeai.GenerativeModel")
     MockModel = patcher.start()
 
-    # Configure the mock instance's generate_content return value shape
     instance = MockModel.return_value
 
     class DummyResponse:
@@ -44,7 +47,7 @@ def mock_gemini():
 @pytest.fixture
 def test_settings(monkeypatch):
     """Return a Settings instance with deterministic test values."""
-    import os, sys
+    import os
 
     if os.getcwd() not in sys.path:
         sys.path.insert(0, os.getcwd())

@@ -1,6 +1,7 @@
 """FastAPI routes for /api/documents (T14 - document management)."""
 
 from __future__ import annotations
+# pyright: reportInvalidTypeForm=false
 
 import logging
 from datetime import datetime
@@ -9,7 +10,7 @@ from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from backend.api.deps import DBSession
@@ -25,6 +26,7 @@ router = APIRouter(prefix="/api/documents", tags=["documents"], redirect_slashes
 
 
 class DocumentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     job_match_id: Optional[int]
     doc_type: str
@@ -33,12 +35,13 @@ class DocumentOut(BaseModel):
     diff_json: Optional[dict]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
-
 
 class RegenerateRequest(BaseModel):
     force: bool = False
+
+
+class ValidateTemplateRequest(BaseModel):
+    tex_content: str
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -51,6 +54,17 @@ async def list_documents(db: DBSession):
     result = await db.execute(stmt)
     docs = result.scalars().all()
     return [DocumentOut.model_validate(d) for d in docs]
+
+
+@router.post("/validate-template")
+async def validate_template(body: ValidateTemplateRequest):
+    """Check whether a LaTeX CV template contains JOBPILOT markers."""
+    from backend.latex.parser import LaTeXParser
+
+    parser = LaTeXParser()
+    sections = parser.extract_sections(body.tex_content)
+    warnings = parser.validate_markers(body.tex_content)
+    return {"has_markers": sections.has_markers, "warnings": warnings}
 
 
 @router.get("/{match_id}/cv/pdf")

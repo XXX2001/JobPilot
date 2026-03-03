@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
@@ -18,9 +18,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], redirect_slashes=False)
 
 
-
-
 class JobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     id: int
     title: str
     company: str
@@ -34,9 +33,6 @@ class JobOut(BaseModel):
     posted_at: Optional[datetime] = None
     scraped_at: datetime
     score: Optional[float] = None
-
-    class Config:
-        from_attributes = True
 
 
 class JobListOut(BaseModel):

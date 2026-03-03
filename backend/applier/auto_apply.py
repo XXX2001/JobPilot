@@ -11,7 +11,7 @@ from backend.applier.manual_apply import ApplicationResult
 logger = logging.getLogger(__name__)
 
 try:
-    from browser_use import Agent, Browser, BrowserConfig  # type: ignore
+    from browser_use import Agent, Browser  # type: ignore
     from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
 
     _BROWSER_USE_AVAILABLE = True
@@ -19,7 +19,6 @@ except ImportError:
     _BROWSER_USE_AVAILABLE = False
     Agent = None  # type: ignore
     Browser = None  # type: ignore
-    BrowserConfig = None  # type: ignore
     ChatGoogleGenerativeAI = None  # type: ignore
 
 
@@ -91,8 +90,8 @@ class AutoApplyStrategy:
                 model=self._model,
                 google_api_key=self._api_key,
             )
-            browser = Browser(config=BrowserConfig(headless=False))
-            agent = Agent(task=fill_task, llm=llm, browser=browser, max_steps=25)
+            browser = Browser(headless=False)
+            agent = Agent(task=fill_task, llm=llm, browser=browser)
             result = await agent.run()
 
             raw = result.final_result() if hasattr(result, "final_result") else ""
@@ -175,7 +174,7 @@ class AutoApplyStrategy:
                 model=self._model,
                 google_api_key=self._api_key,
             )
-            submit_agent = Agent(task=submit_task, llm=llm2, browser=browser, max_steps=10)
+            submit_agent = Agent(task=submit_task, llm=llm2, browser=browser)
             await submit_agent.run()
             logger.info("Auto-apply submitted for job_id=%d", job_id)
             return ApplicationResult(status="applied", method="auto")

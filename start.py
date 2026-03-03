@@ -36,6 +36,59 @@ def _find_binary(name: str) -> bool:
     return (Path("bin") / f"{name}{ext}").exists()
 
 
+def free_port(port: int) -> None:
+    """Kill any process currently listening on *port* so we can bind cleanly."""
+    import signal
+    import socket
+
+    # Quick check: is the port actually in use?
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.2)
+        if s.connect_ex(("127.0.0.1", port)) != 0:
+            return  # port is free, nothing to do
+
+    print(f"  Port {port} is in use — stopping existing process…")
+
+    if platform.system() == "Windows":
+        # netstat to find PID, then taskkill
+        result = subprocess.run(
+            ["netstat", "-ano"],
+            capture_output=True, text=True
+        )
+        for line in result.stdout.splitlines():
+            if f":{port}" in line and "LISTENING" in line:
+                parts = line.split()
+                pid = parts[-1]
+                subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
+                break
+    else:
+        # lsof / fuser to find PID, then SIGTERM → SIGKILL
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True, text=True
+        )
+        pids = result.stdout.strip().split()
+        for pid_str in pids:
+            try:
+                pid = int(pid_str)
+                os.kill(pid, signal.SIGTERM)
+            except (ValueError, ProcessLookupError):
+                pass
+        if pids:
+            import time
+            time.sleep(1.5)  # give process time to exit gracefully
+            # Force-kill anything still alive
+            for pid_str in pids:
+                try:
+                    pid = int(pid_str)
+                    os.kill(pid, signal.SIGKILL)
+                except (ValueError, ProcessLookupError):
+                    pass
+            time.sleep(0.5)
+
+    print(f"  Port {port} freed.")
+
+
 def main():
     check_prerequisites()
 
@@ -45,6 +98,8 @@ def main():
 
     host = "127.0.0.1"
     port = 8000
+
+    free_port(port)
 
     print(f"\n  JobPilot starting on http://{host}:{port}\n")
 
@@ -61,7 +116,6 @@ def main():
         reload=False,
         log_level="info",
     )
-
 
 if __name__ == "__main__":
     main()

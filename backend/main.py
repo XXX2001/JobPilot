@@ -9,6 +9,8 @@ from fastapi import FastAPI, Request  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.responses import JSONResponse  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
+from starlette.responses import FileResponse  # type: ignore
+from starlette.staticfiles import NotModifiedResponse  # type: ignore
 
 from backend.config import settings
 
@@ -26,6 +28,7 @@ async def lifespan(app: FastAPI):
         Path(settings.jobpilot_data_dir) / "letters",
         Path(settings.jobpilot_data_dir) / "templates",
         Path(settings.jobpilot_data_dir) / "browser_sessions",
+        Path(settings.jobpilot_data_dir) / "browser_profiles",
         Path(settings.jobpilot_data_dir) / "logs",
     ]
     for d in data_dirs:
@@ -56,12 +59,12 @@ async def lifespan(app: FastAPI):
         from backend.scraping.session_manager import BrowserSessionManager
 
         gemini = GeminiClient()
-        cv_editor = CVEditor(gemini_client=gemini)
+        cv_editor = CVEditor(client=gemini)
         cv_pipeline = CVPipeline(cv_editor=cv_editor)
         letter_pipeline = LetterPipeline(cv_editor=cv_editor)
         adzuna = AdzunaClient()
         dedup = JobDeduplicator()
-        adaptive = AdaptiveScraper(api_key=settings.GOOGLE_API_KEY)
+        adaptive = AdaptiveScraper(gemini_api_key=settings.GOOGLE_API_KEY)
         session_mgr = BrowserSessionManager()
         orchestrator = ScrapingOrchestrator(
             adzuna_client=adzuna,
@@ -292,13 +295,22 @@ async def _generic_error_handler(request: Request, exc: Exception) -> JSONRespon
     )
 
 
+# SPA fallback — serve index.html for any path not handled by the API
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except Exception:
+            # Fall back to index.html for client-side routing
+            return await super().get_response("index.html", scope)
+
+
 # Serve frontend static files if built (don't crash if missing)
 try:
     static_dir = Path("frontend/build")
     if static_dir.exists():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+        app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="static")
     else:
-        # attempt mount anyway, but guard in case missing
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True), name="static")
+        logger.warning("Frontend build not found at %s — run 'npm run build' in frontend/", static_dir)
 except Exception as e:
     logger.warning("Could not mount static files: %s", e)

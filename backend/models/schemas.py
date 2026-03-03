@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RawJob(BaseModel):
@@ -17,8 +17,8 @@ class RawJob(BaseModel):
     salary_min: Optional[int] = None
     salary_max: Optional[int] = None
     description: str = ""
-    requirements: list[str] = []
-    benefits: list[str] = []
+    requirements: list[str] = Field(default_factory=list)
+    benefits: list[str] = Field(default_factory=list)
     url: str
     apply_url: str = ""
     apply_method: str = ""

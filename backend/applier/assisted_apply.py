@@ -10,7 +10,7 @@ from backend.applier.manual_apply import ApplicationResult
 logger = logging.getLogger(__name__)
 
 try:
-    from browser_use import Agent, Browser, BrowserConfig  # type: ignore
+    from browser_use import Agent, Browser  # type: ignore
     from langchain_google_genai import ChatGoogleGenerativeAI  # type: ignore
 
     _BROWSER_USE_AVAILABLE = True
@@ -18,7 +18,6 @@ except ImportError:
     _BROWSER_USE_AVAILABLE = False
     Agent = None  # type: ignore
     Browser = None  # type: ignore
-    BrowserConfig = None  # type: ignore
     ChatGoogleGenerativeAI = None  # type: ignore
 
 
@@ -70,8 +69,8 @@ class AssistedApplyStrategy:
                 model=self._model,
                 google_api_key=self._api_key,
             )
-            browser = Browser(config=BrowserConfig(headless=False))
-            agent = Agent(task=task, llm=llm, browser=browser, max_steps=20)
+            browser = Browser(headless=False)
+            agent = Agent(task=task, llm=llm, browser=browser)
             await agent.run()
             logger.info("Assisted apply agent completed for %s", apply_url)
         except Exception as exc:

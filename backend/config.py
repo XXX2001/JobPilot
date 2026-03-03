@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     # Optional
     SERPAPI_KEY: str = ""
+    CREDENTIAL_KEY: str = ""  # Fernet key for encrypting stored credentials
 
     # App settings with sensible defaults
     jobpilot_host: str = Field("127.0.0.1", env="JOBPILOT_HOST")

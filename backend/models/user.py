@@ -45,3 +45,14 @@ class SearchSettings(Base):
     daily_limit: Mapped[int] = mapped_column(Integer, default=10)
     batch_time: Mapped[str] = mapped_column(String, default="08:00")
     min_match_score: Mapped[float] = mapped_column(nullable=False, default=30.0)
+
+
+class SiteCredential(Base):
+    __tablename__ = "site_credentials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    site_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    encrypted_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    encrypted_password: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

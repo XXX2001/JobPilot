@@ -7,11 +7,12 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
 from backend.models.application import Application, ApplicationEvent
+from backend.models.job import Job, JobMatch
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +29,7 @@ class ApplicationEventOut(BaseModel):
     details: Optional[str]
     event_date: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApplicationOut(BaseModel):
@@ -42,9 +42,13 @@ class ApplicationOut(BaseModel):
     error_log: Optional[str]
     created_at: datetime
     events: list[ApplicationEventOut] = []
+    # Denormalized job fields for display
+    job_title: Optional[str] = None
+    company: Optional[str] = None
+    location: Optional[str] = None
+    url: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApplicationListOut(BaseModel):
@@ -98,10 +102,20 @@ async def list_applications(
     status: Optional[str] = Query(None),
 ):
     """List applications with optional status filter and pagination."""
-    stmt = select(Application).order_by(Application.created_at.desc()).offset(skip).limit(limit)
+    # Query applications with joined job data
+    stmt = (
+        select(Application, Job)
+        .outerjoin(JobMatch, Application.job_match_id == JobMatch.id)
+        .outerjoin(Job, JobMatch.job_id == Job.id)
+        .order_by(Application.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
     if status:
         stmt = (
-            select(Application)
+            select(Application, Job)
+            .outerjoin(JobMatch, Application.job_match_id == JobMatch.id)
+            .outerjoin(Job, JobMatch.job_id == Job.id)
             .where(Application.status == status)
             .order_by(Application.created_at.desc())
             .offset(skip)
@@ -109,11 +123,11 @@ async def list_applications(
         )
 
     result = await db.execute(stmt)
-    apps = result.scalars().all()
+    rows = result.all()
 
-    # Fetch events for each application
+    # Fetch events for each application and build response
     app_outs: list[ApplicationOut] = []
-    for app in apps:
+    for app, job in rows:
         events_stmt = (
             select(ApplicationEvent)
             .where(ApplicationEvent.application_id == app.id)
@@ -123,6 +137,11 @@ async def list_applications(
         events = events_result.scalars().all()
         out = ApplicationOut.model_validate(app)
         out.events = [ApplicationEventOut.model_validate(e) for e in events]
+        if job is not None:
+            out.job_title = job.title
+            out.company = job.company
+            out.location = job.location
+            out.url = job.url
         app_outs.append(out)
 
     # Total count (with same filter)
@@ -139,12 +158,19 @@ async def list_applications(
 @router.get("/{application_id}", response_model=ApplicationOut)
 async def get_application(application_id: int, db: DBSession):
     """Get a single application with its lifecycle events."""
-    stmt = select(Application).where(Application.id == application_id)
+    stmt = (
+        select(Application, Job)
+        .outerjoin(JobMatch, Application.job_match_id == JobMatch.id)
+        .outerjoin(Job, JobMatch.job_id == Job.id)
+        .where(Application.id == application_id)
+    )
     result = await db.execute(stmt)
-    app = result.scalar_one_or_none()
+    row = result.one_or_none()
 
-    if app is None:
+    if row is None:
         raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
+
+    app, job = row
 
     events_stmt = (
         select(ApplicationEvent)
@@ -156,6 +182,11 @@ async def get_application(application_id: int, db: DBSession):
 
     out = ApplicationOut.model_validate(app)
     out.events = [ApplicationEventOut.model_validate(e) for e in events]
+    if job is not None:
+        out.job_title = job.title
+        out.company = job.company
+        out.location = job.location
+        out.url = job.url
     return out
 
 
@@ -182,6 +213,17 @@ async def update_application(application_id: int, body: UpdateApplicationRequest
     await db.refresh(app)
     logger.info("Updated application id=%d status=%s", app.id, app.status)
 
+    # Fetch job data for response
+    job = None
+    if app.job_match_id is not None:
+        job_stmt = (
+            select(Job)
+            .join(JobMatch, JobMatch.job_id == Job.id)
+            .where(JobMatch.id == app.job_match_id)
+        )
+        job_result = await db.execute(job_stmt)
+        job = job_result.scalar_one_or_none()
+
     # Return with events
     events_stmt = (
         select(ApplicationEvent)
@@ -193,6 +235,11 @@ async def update_application(application_id: int, body: UpdateApplicationRequest
 
     out = ApplicationOut.model_validate(app)
     out.events = [ApplicationEventOut.model_validate(e) for e in events]
+    if job is not None:
+        out.job_title = job.title
+        out.company = job.company
+        out.location = job.location
+        out.url = job.url
     return out
 
 

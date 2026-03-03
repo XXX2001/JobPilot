@@ -23,8 +23,10 @@ logger = logging.getLogger(__name__)
 try:
     from backend.api.ws import broadcast_status  # type: ignore
 except Exception:
+
     async def broadcast_status(message: str, progress: float = 0.0) -> None:  # type: ignore[misc]
         pass
+
 
 try:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
@@ -113,7 +115,6 @@ class MorningBatchScheduler:
     #  Internal pipeline steps                                            #
     # ------------------------------------------------------------------ #
 
-
     async def _run_batch_inner(self, db: AsyncSession) -> None:
         # ── Load settings ────────────────────────────────────────────────
         settings_row = await self._load_settings(db)
@@ -177,7 +178,9 @@ class MorningBatchScheduler:
                 (mid, jd) for mid, (jd, _) in zip(top_ids, ranked[: len(top_ids)])
             ):
                 try:
-                    output_dir = Path(f"data/cvs/{match_id}")
+                    from backend.config import settings as _settings
+
+                    output_dir = Path(_settings.jobpilot_data_dir) / "cvs" / str(match_id)
                     output_dir.mkdir(parents=True, exist_ok=True)
                     tailored = await self._cv_pipeline.generate_tailored_cv(
                         base_cv_path=cv_path,

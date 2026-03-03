@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from backend.api.deps import DBSession
@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/queue", tags=["queue"], redirect_slashes=False)
 
 
 class QueueMatchOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
     match_id: int
     job_id: int
     title: str
@@ -32,9 +33,6 @@ class QueueMatchOut(BaseModel):
     batch_date: Optional[date] = None
     matched_at: datetime
     url: str
-
-    class Config:
-        from_attributes = True
 
 
 class QueueOut(BaseModel):

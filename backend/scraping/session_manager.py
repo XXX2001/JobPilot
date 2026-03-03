@@ -12,10 +12,9 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 try:
-    from browser_use import Browser, BrowserConfig  # type: ignore
+    from browser_use import Browser  # type: ignore
 except ImportError:  # pragma: no cover
     Browser = None  # type: ignore
-    BrowserConfig = None  # type: ignore
 
 
 @dataclass
@@ -42,9 +41,12 @@ class BrowserSessionManager:
       - Load saved storage-state directly — no interaction needed.
     """
 
-    SESSIONS_DIR = Path("data/browser_sessions")
-
     def __init__(self) -> None:
+        from backend.config import settings as _settings
+
+        self.SESSIONS_DIR = Path(_settings.jobpilot_data_dir) / "browser_sessions"
+        self.PROFILES_DIR = Path(_settings.jobpilot_data_dir) / "browser_profiles"
+
         self._pending_logins: dict[str, asyncio.Event] = {}
 
     # ------------------------------------------------------------------ #
@@ -56,32 +58,34 @@ class BrowserSessionManager:
 
         If no session exists, blocks until the user logs in (or 10 min timeout).
         """
-        if Browser is None or BrowserConfig is None:
+        if Browser is None:
             raise ImportError(
                 "browser-use is not installed. Install it with: pip install browser-use"
             )
 
         self.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        storage_path = self.SESSIONS_DIR / f"{site}_state.json"
+        # New canonical path: data/browser_profiles/{site}/state.json
+        # Backward compat: fall back to old flat file if profile dir not yet used
+        new_path = self.PROFILES_DIR / site / "state.json"
+        old_path = self.SESSIONS_DIR / f"{site}_state.json"
+        storage_path = new_path if (new_path.exists() or not old_path.exists()) else old_path
 
         if storage_path.exists():
             logger.info("Reusing saved session for site=%s", site)
-            config = BrowserConfig(
-                headless=False,
-                storage_state=str(storage_path),
-            )
-            return Browser(config=config)
+            return Browser(headless=False, storage_state=str(storage_path))
 
         # First time: open headful browser and wait for user to log in
         logger.info("No saved session for site=%s — requesting manual login", site)
         await self._request_login(site)
 
         # After the event fires, save state and return browser
-        browser = Browser(config=BrowserConfig(headless=False))
+        save_path = self.PROFILES_DIR / site / "state.json"
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        browser = Browser(headless=False)
         try:
             ctx = await browser.new_context()
-            await ctx.storage_state(path=str(storage_path))
-            logger.info("Saved session state for site=%s to %s", site, storage_path)
+            await ctx.storage_state(path=str(save_path))
+            logger.info("Saved session state for site=%s to %s", site, save_path)
         except Exception as exc:
             logger.warning("Could not save storage state for site=%s: %s", site, exc)
         return browser
@@ -100,10 +104,27 @@ class BrowserSessionManager:
 
     def list_sessions(self) -> list[SessionInfo]:
         """Return metadata for all saved sessions on disk."""
-        self.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         infos: list[SessionInfo] = []
+        # New profile dirs: data/browser_profiles/{site}/state.json
+        self.PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+        for state_file in sorted(self.PROFILES_DIR.glob("*/state.json")):
+            site = state_file.parent.name
+            stat = state_file.stat()
+            infos.append(
+                SessionInfo(
+                    site=site,
+                    storage_path=str(state_file),
+                    exists=True,
+                    last_used_at=datetime.fromtimestamp(stat.st_mtime),
+                )
+            )
+        # Also include old flat-file sessions for backward compat
+        self.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
         for p in sorted(self.SESSIONS_DIR.glob("*_state.json")):
             site = p.stem.replace("_state", "")
+            # Skip if already covered by profile dir entry
+            if any(i.site == site for i in infos):
+                continue
             stat = p.stat()
             infos.append(
                 SessionInfo(
@@ -116,13 +137,22 @@ class BrowserSessionManager:
         return infos
 
     def clear_session(self, site: str) -> None:
-        """Delete the saved session file for *site*."""
-        storage_path = self.SESSIONS_DIR / f"{site}_state.json"
-        if storage_path.exists():
-            storage_path.unlink()
-            logger.info("Cleared session for site=%s", site)
-        else:
-            logger.warning("No session file to clear for site=%s", site)
+        """Delete the saved session for *site* (both profile dir and old flat file)."""
+        import shutil
+
+        profile_dir = self.PROFILES_DIR / site
+        old_path = self.SESSIONS_DIR / f"{site}_state.json"
+        cleared_any = False
+        if profile_dir.exists():
+            shutil.rmtree(profile_dir)
+            logger.info("Cleared profile dir for site=%s", site)
+            cleared_any = True
+        if old_path.exists():
+            old_path.unlink()
+            logger.info("Cleared old session file for site=%s", site)
+            cleared_any = True
+        if not cleared_any:
+            logger.warning("No session to clear for site=%s", site)
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #

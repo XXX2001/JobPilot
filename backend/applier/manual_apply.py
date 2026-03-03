@@ -31,7 +31,9 @@ class ManualApplyStrategy:
         cv_pdf: Path | None = None,
         letter_pdf: Path | None = None,
     ) -> ApplicationResult:
-        docs_dir = str(cv_pdf.parent) if cv_pdf else "data/cvs"
+        from backend.config import settings as _settings
+
+        docs_dir = str(cv_pdf.parent) if cv_pdf else str(Path(_settings.jobpilot_data_dir) / "cvs")
         try:
             webbrowser.open(apply_url)
             logger.info("Opened URL in browser: %s", apply_url)

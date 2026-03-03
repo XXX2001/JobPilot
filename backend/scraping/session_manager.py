@@ -48,6 +48,8 @@ class BrowserSessionManager:
         self.PROFILES_DIR = Path(_settings.jobpilot_data_dir) / "browser_profiles"
 
         self._pending_logins: dict[str, asyncio.Event] = {}
+        # Tracks sites where the user cancelled the manual login flow
+        self._cancelled_logins: set[str] = set()
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -72,9 +74,28 @@ class BrowserSessionManager:
 
         if storage_path.exists():
             logger.info("Reusing saved session for site=%s", site)
-            return Browser(headless=False, storage_state=str(storage_path))
+            # Create browser with stored state and ensure we can open a page/context
+            browser = Browser(headless=False, storage_state=str(storage_path))
+            try:
+                # warm up / probe available APIs so callers don't hit AttributeError
+                await self._open_page_and_context(browser)
+            except Exception:
+                # non-fatal: we still return the browser even if probing fails
+                logger.debug("Probing browser APIs failed for site=%s", site)
+            return browser
 
-        # First time: open headful browser and wait for user to log in
+        # First, try auto-login using stored credentials (if any). If that
+        # succeeds we return a browser with the saved storage state already
+        # persisted. Otherwise fall back to manual login flow.
+        try:
+            browser = await self._attempt_auto_login(site)
+            if browser is not None:
+                logger.info("Auto-login succeeded for site=%s", site)
+                return browser
+        except Exception:
+            logger.debug("Auto-login attempt raised an exception for site=%s", site)
+
+        # Auto-login not available or failed: request manual login via WS
         logger.info("No saved session for site=%s — requesting manual login", site)
         await self._request_login(site)
 
@@ -83,9 +104,24 @@ class BrowserSessionManager:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         browser = Browser(headless=False)
         try:
-            ctx = await browser.new_context()
-            await ctx.storage_state(path=str(save_path))
-            logger.info("Saved session state for site=%s to %s", site, save_path)
+            page, ctx = await self._open_page_and_context(browser)
+            # Prefer context.storage_state when available
+            if ctx is not None and hasattr(ctx, "storage_state"):
+                await ctx.storage_state(path=str(save_path))
+                logger.info("Saved session state for site=%s to %s", site, save_path)
+            elif page is not None:
+                # Some browser APIs expose storage_state via the page's context
+                page_ctx = getattr(page, "context", None)
+                if page_ctx is not None and hasattr(page_ctx, "storage_state"):
+                    await page_ctx.storage_state(path=str(save_path))
+                    logger.info("Saved session state for site=%s to %s", site, save_path)
+                elif hasattr(page, "storage_state"):
+                    await page.storage_state(path=str(save_path))
+                    logger.info("Saved session state for site=%s to %s", site, save_path)
+                else:
+                    raise RuntimeError("no storage_state API available on page/context")
+            else:
+                raise RuntimeError("no page/context API available on browser")
         except Exception as exc:
             logger.warning("Could not save storage state for site=%s: %s", site, exc)
         return browser
@@ -101,6 +137,21 @@ class BrowserSessionManager:
             logger.info("Login confirmed for site=%s", site)
         else:
             logger.warning("confirm_login called for unknown site=%s", site)
+
+    def cancel_login(self, site: str) -> None:
+        """Mark the login as cancelled and wake any waiter.
+
+        Called by the WS handler when it receives a ``login_cancel`` message.
+        """
+        event = self._pending_logins.get(site)
+        # Mark cancelled so the waiter can detect the cancellation after
+        # the event unblocks.
+        self._cancelled_logins.add(site)
+        if event:
+            event.set()
+            logger.info("Login cancelled by user for site=%s", site)
+        else:
+            logger.warning("cancel_login called for unknown site=%s", site)
 
     def list_sessions(self) -> list[SessionInfo]:
         """Return metadata for all saved sessions on disk."""
@@ -187,6 +238,234 @@ class BrowserSessionManager:
             raise TimeoutError(f"Login for {site} timed out after 10 minutes")
         finally:
             self._pending_logins.pop(site, None)
+
+        # If the user cancelled the login flow, raise an error so callers
+        # don't proceed with scraping for this site.
+        if site in self._cancelled_logins:
+            # remove the flag and raise a specific error
+            self._cancelled_logins.discard(site)
+            logger.info("Login for site=%s was cancelled by user", site)
+            raise RuntimeError(f"Login for {site} cancelled by user")
+
+    async def _attempt_auto_login(self, site: str) -> Optional[object]:
+        """Try to perform an automatic login using stored SiteCredential.
+
+        Returns a Browser instance with the logged-in session on success,
+        or None on failure / when no credentials are available.
+        """
+        # Only attempt for known sites we have selectors for
+        if site not in ("linkedin", "indeed"):
+            return None
+
+        # Lazy imports to avoid heavy startup dependencies / circular imports
+        try:
+            from backend.config import settings
+            from backend.models.user import SiteCredential
+            from backend.database import AsyncSessionLocal
+            from sqlalchemy import select
+            from cryptography.fernet import Fernet
+        except Exception:
+            return None
+
+        # Fetch credentials from DB
+        try:
+            async with AsyncSessionLocal() as db:  # type: ignore[name-defined]
+                stmt = select(SiteCredential).where(SiteCredential.site_name == site)
+                result = await db.execute(stmt)
+                row = result.scalar_one_or_none()
+        except Exception:
+            row = None
+
+        if not row or not row.encrypted_email or not row.encrypted_password:
+            return None
+
+        if not getattr(settings, "CREDENTIAL_KEY", None):
+            return None
+
+        try:
+            f = Fernet(settings.CREDENTIAL_KEY.encode())
+            email = f.decrypt(row.encrypted_email.encode()).decode()
+            password = f.decrypt(row.encrypted_password.encode()).decode()
+        except Exception:
+            return None
+
+        # Open browser + page/context via compatibility helper
+        browser = Browser(headless=False)
+        try:
+            page, ctx = await self._open_page_and_context(browser)
+
+            if page is None:
+                # cannot interact
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                return None
+
+            # Site-specific login flows
+            success = False
+
+            if site == "linkedin":
+                try:
+                    await page.goto("https://www.linkedin.com/login")
+                    # fill known LinkedIn inputs
+                    await page.fill("input#username", email)
+                    await page.fill("input#password", password)
+                    # submit
+                    await page.click("button[type=submit]")
+                    # wait a short while for navigation/auth
+                    await page.wait_for_timeout(3000)
+                    # consider login successful if we're not on the login path
+                    url = getattr(page, "url", None) or ""
+                    if "/login" not in url:
+                        success = True
+                except Exception:
+                    success = False
+
+            elif site == "indeed":
+                try:
+                    # Indeed account login endpoint
+                    await page.goto("https://www.indeed.com/account/login")
+
+                    # Try several possible selectors for email + password
+                    email_selectors = [
+                        "input#login-email-input",
+                        "input#email",
+                        "input[name=login_email]",
+                        "input[name=email]",
+                    ]
+                    pass_selectors = [
+                        "input#login-password-input",
+                        "input#password",
+                        "input[name=password]",
+                    ]
+
+                    filled = False
+                    for sel in email_selectors:
+                        try:
+                            if await page.query_selector(sel):
+                                await page.fill(sel, email)
+                                filled = True
+                                break
+                        except Exception:
+                            continue
+                    for sel in pass_selectors:
+                        try:
+                            if await page.query_selector(sel):
+                                await page.fill(sel, password)
+                                break
+                        except Exception:
+                            continue
+
+                    # submit: try common submit buttons
+                    try:
+                        if await page.query_selector("button[type=submit]"):
+                            await page.click("button[type=submit]")
+                        else:
+                            # fallback: press Enter in password field
+                            await page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+
+                    await page.wait_for_timeout(3000)
+                    url = getattr(page, "url", None) or ""
+                    if "/account/login" not in url and "/login" not in url:
+                        success = True
+                except Exception:
+                    success = False
+
+            if not success:
+                # close browser and return None to fall back to manual
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+                return None
+
+            # Save storage state to disk using the same logic as manual save
+            save_path = self.PROFILES_DIR / site / "state.json"
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Re-open page/context in case previous objects don't expose storage_state
+            page, ctx = await self._open_page_and_context(browser)
+            try:
+                if ctx is not None and hasattr(ctx, "storage_state"):
+                    await ctx.storage_state(path=str(save_path))
+                    logger.info("Auto-saved session state for site=%s to %s", site, save_path)
+                elif page is not None:
+                    page_ctx = getattr(page, "context", None)
+                    if page_ctx is not None and hasattr(page_ctx, "storage_state"):
+                        await page_ctx.storage_state(path=str(save_path))
+                        logger.info("Auto-saved session state for site=%s to %s", site, save_path)
+                    elif hasattr(page, "storage_state"):
+                        await page.storage_state(path=str(save_path))
+                        logger.info("Auto-saved session state for site=%s to %s", site, save_path)
+                    else:
+                        logger.warning(
+                            "Could not find storage_state API to save auto-login for %s", site
+                        )
+                else:
+                    logger.warning(
+                        "No page/context available to save auto-login state for %s", site
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to save storage state after auto-login for %s: %s", site, exc
+                )
+
+            return browser
+
+        except Exception:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+            return None
+
+    async def _open_page_and_context(self, browser) -> tuple[Optional[object], Optional[object]]:
+        """Compatibility helper: return (page, context) for different browser APIs.
+
+        Tries the following in order:
+        1. browser.new_context() -> ctx.new_page()
+        2. browser.new_page()
+        3. browser.open_page()
+
+        Returns (page, ctx) where either may be None if unavailable.
+        """
+        # Try Playwright-style context -> page
+        try:
+            if hasattr(browser, "new_context"):
+                ctx = await browser.new_context()
+                page = None
+                if hasattr(ctx, "new_page"):
+                    try:
+                        page = await ctx.new_page()
+                    except Exception:
+                        page = None
+                return page, ctx
+        except Exception:
+            # fallthrough to other APIs
+            pass
+
+        # Try browser.new_page()
+        try:
+            if hasattr(browser, "new_page"):
+                page = await browser.new_page()
+                ctx = getattr(page, "context", None)
+                return page, ctx
+        except Exception:
+            pass
+
+        # Try older/open_page API
+        try:
+            if hasattr(browser, "open_page"):
+                page = await browser.open_page()
+                ctx = getattr(page, "context", None)
+                return page, ctx
+        except Exception:
+            pass
+
+        return None, None
 
 
 __all__ = ["BrowserSessionManager", "SessionInfo"]

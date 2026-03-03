@@ -45,7 +45,6 @@ async def lifespan(app: FastAPI):
 
     # ── Instantiate singletons ────────────────────────────────────────────
     try:
-
         from backend.applier.engine import ApplicationEngine
         from backend.latex.pipeline import CVPipeline, LetterPipeline
         from backend.llm.cv_editor import CVEditor
@@ -149,6 +148,11 @@ async def lifespan(app: FastAPI):
                             sm = getattr(app.state, "session_manager", None)
                             if sm:
                                 sm.confirm_login(site)
+                        elif msg_type == "login_cancel":
+                            site = msg.get("site", "")
+                            sm = getattr(app.state, "session_manager", None)
+                            if sm:
+                                sm.cancel_login(site)
                     except Exception as exc:
                         logger.debug("WS message parse error: %s", exc)
             finally:
@@ -227,7 +231,6 @@ async def health():
             "Tectonic not found. Run: uv run python scripts/download_tectonic.py"
         )
     return result
-
 
 
 # ── Global exception handlers ────────────────────────────────────────────────
@@ -311,6 +314,8 @@ try:
     if static_dir.exists():
         app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="static")
     else:
-        logger.warning("Frontend build not found at %s — run 'npm run build' in frontend/", static_dir)
+        logger.warning(
+            "Frontend build not found at %s — run 'npm run build' in frontend/", static_dir
+        )
 except Exception as e:
     logger.warning("Could not mount static files: %s", e)

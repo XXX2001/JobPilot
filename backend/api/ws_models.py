@@ -104,7 +104,14 @@ class LoginDone(BaseModel):
     site: str
 
 
-ClientMessage = Annotated[Union[ConfirmSubmit, CancelApply, LoginDone], Field(discriminator="type")]
+class LoginCancel(BaseModel):
+    type: Literal["login_cancel"]
+    site: str
+
+
+ClientMessage = Annotated[
+    Union[ConfirmSubmit, CancelApply, LoginDone, LoginCancel], Field(discriminator="type")
+]
 
 
 __all__ = [
@@ -121,4 +128,5 @@ __all__ = [
     "ConfirmSubmit",
     "CancelApply",
     "LoginDone",
+    "LoginCancel",
 ]

@@ -27,6 +27,8 @@
 			<span>Matching: {$lastMessage.data?.matched ?? 0} matched</span>
 		{:else if $lastMessage.type === 'tailoring_progress'}
 			<span>Tailoring CV for {$lastMessage.data?.company ?? 'job'}…</span>
+		{:else if $lastMessage.type === 'login_required'}
+			<span class="text-yellow-400">Waiting for manual login: {$lastMessage.site}</span>
 		{:else if $lastMessage.type === 'error'}
 			<span class="text-red-400">Error: {$lastMessage.data?.message ?? 'Unknown error'}</span>
 		{:else}

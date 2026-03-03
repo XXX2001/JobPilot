@@ -5,6 +5,7 @@
 	import { wsStatus, connectWs } from '$lib/stores/websocket';
 	import { onMount } from 'svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
+	import LoginRequiredModal from '$lib/components/LoginRequiredModal.svelte';
 	import { page } from '$app/stores';
 	import {
 		LayoutDashboard,
@@ -39,6 +40,8 @@
 </svelte:head>
 
 <ModeWatcher defaultMode="dark" />
+
+<LoginRequiredModal />
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
 	<!-- Sidebar -->

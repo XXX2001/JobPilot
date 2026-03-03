@@ -42,9 +42,9 @@ export function connectWs() {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        _messages.update(msgs => [...msgs, data]);
+        _messages.update(msgs => [...msgs.slice(-199), data]);
       } catch (e) {
-        _messages.update(msgs => [...msgs, event.data]);
+        _messages.update(msgs => [...msgs.slice(-199), event.data]);
       }
     };
 

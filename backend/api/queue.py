@@ -6,7 +6,7 @@ import logging
 from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
@@ -79,20 +79,20 @@ async def get_queue(db: DBSession, batch_date: Optional[date] = None):
 
 
 @router.post("/refresh")
-async def refresh_queue(db: DBSession):
+async def refresh_queue(request: Request, db: DBSession):
     """Trigger a new morning batch run immediately (manual re-run).
 
     Runs the batch in a background task so the endpoint returns promptly.
     """
     import asyncio
 
-    from backend.scraping.orchestrator import ScrapingOrchestrator
-
-    orchestrator = ScrapingOrchestrator()
+    scheduler = getattr(request.app.state, "morning_scheduler", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="Morning scheduler not available")
 
     async def _run():
         try:
-            await orchestrator.run_morning_batch()
+            await scheduler.run_batch()
         except Exception as exc:
             logger.error("Morning batch error: %s", exc)
 

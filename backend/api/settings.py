@@ -112,8 +112,8 @@ async def get_profile(db: DBSession):
     if profile is None:
         return ProfileOut(
             id=0,
-            full_name='',
-            email='',
+            full_name="",
+            email="",
             phone=None,
             location=None,
             base_cv_path=None,
@@ -309,16 +309,16 @@ async def get_setup_status(db: DBSession):
 
 
 def _mask_email(email: str) -> str:
-    parts = email.split('@')
+    parts = email.split("@")
     if len(parts) == 2 and len(parts[0]) >= 2:
-        return parts[0][:2] + '***@' + parts[1]
-    return '***'
+        return parts[0][:2] + "***@" + parts[1]
+    return "***"
 
 
 def _has_session(site: str) -> bool:
     base = Path(settings.jobpilot_data_dir)
-    new_path = base / 'browser_profiles' / site / 'state.json'
-    old_path = base / 'browser_sessions' / f'{site}_state.json'
+    new_path = base / "browser_profiles" / site / "state.json"
+    old_path = base / "browser_sessions" / f"{site}_state.json"
     return new_path.exists() or old_path.exists()
 
 
@@ -369,7 +369,7 @@ class CustomSiteCreate(BaseModel):
 # ─── Sites routes ─────────────────────────────────────────────────────────────
 
 
-@router.get('/sites', response_model=list[SiteOut])
+@router.get("/sites", response_model=list[SiteOut])
 async def get_sites(db: DBSession):
     """Return all known job source sites with enabled state and session presence."""
     # Build a dict of DB-stored enabled states keyed by name
@@ -381,23 +381,25 @@ async def get_sites(db: DBSession):
     for key, cfg in SITE_CONFIGS.items():
         db_row = db_sources.get(key)
         enabled = db_row.enabled if db_row is not None else True
-        out.append(SiteOut(
-            name=cfg['name'],
-            display_name=cfg['display_name'],
-            type=cfg['type'],
-            requires_login=cfg.get('requires_login', False),
-            base_url=cfg.get('base_url', ''),
-            enabled=enabled,
-            has_session=_has_session(key),
-        ))
+        out.append(
+            SiteOut(
+                name=cfg["name"],
+                display_name=cfg["display_name"],
+                type=cfg["type"],
+                requires_login=cfg.get("requires_login", False),
+                base_url=cfg.get("base_url", ""),
+                enabled=enabled,
+                has_session=_has_session(key),
+            )
+        )
     return out
 
 
-@router.put('/sites/{site_name}')
+@router.put("/sites/{site_name}")
 async def toggle_site(site_name: str, body: SiteToggle, db: DBSession):
     """Enable or disable a job source site."""
     if site_name not in SITE_CONFIGS:
-        raise HTTPException(status_code=404, detail=f'Unknown site: {site_name}')
+        raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
 
     stmt = select(JobSource).where(JobSource.name == site_name)
     result = await db.execute(stmt)
@@ -407,8 +409,8 @@ async def toggle_site(site_name: str, body: SiteToggle, db: DBSession):
     if row is None:
         row = JobSource(
             name=site_name,
-            type=cfg['type'],
-            url=cfg.get('base_url', ''),
+            type=cfg["type"],
+            url=cfg.get("base_url", ""),
             enabled=body.enabled,
         )
         db.add(row)
@@ -416,16 +418,16 @@ async def toggle_site(site_name: str, body: SiteToggle, db: DBSession):
         row.enabled = body.enabled
 
     await db.commit()
-    return {'name': site_name, 'enabled': body.enabled}
+    return {"name": site_name, "enabled": body.enabled}
 
 
 # ─── Credentials routes ────────────────────────────────────────────────────────
 
 
-@router.get('/credentials', response_model=list[CredentialOut])
+@router.get("/credentials", response_model=list[CredentialOut])
 async def get_credentials(db: DBSession):
     """Return sites that require login, with masked email and session status."""
-    login_sites = {k: v for k, v in SITE_CONFIGS.items() if v.get('requires_login', False)}
+    login_sites = {k: v for k, v in SITE_CONFIGS.items() if v.get("requires_login", False)}
 
     stmt = select(SiteCredential)
     result = await db.execute(stmt)
@@ -438,37 +440,41 @@ async def get_credentials(db: DBSession):
         if cred_row and cred_row.encrypted_email:
             try:
                 from cryptography.fernet import Fernet
+
                 if settings.CREDENTIAL_KEY:
                     f = Fernet(settings.CREDENTIAL_KEY.encode())
                     decrypted = f.decrypt(cred_row.encrypted_email.encode()).decode()
                     masked = _mask_email(decrypted)
                 else:
-                    masked = '***@***'
+                    masked = "***@***"
             except Exception:
-                masked = '***@***'
-        out.append(CredentialOut(
-            site_name=key,
-            display_name=cfg['display_name'],
-            masked_email=masked,
-            has_session=_has_session(key),
-        ))
+                masked = "***@***"
+        out.append(
+            CredentialOut(
+                site_name=key,
+                display_name=cfg["display_name"],
+                masked_email=masked,
+                has_session=_has_session(key),
+            )
+        )
     return out
 
 
-@router.put('/credentials/{site_name}')
+@router.put("/credentials/{site_name}")
 async def save_credential(site_name: str, body: CredentialUpdate, db: DBSession):
     """Encrypt and store email/password for a site that requires login."""
     if site_name not in SITE_CONFIGS:
-        raise HTTPException(status_code=404, detail=f'Unknown site: {site_name}')
-    if not SITE_CONFIGS[site_name].get('requires_login', False):
-        raise HTTPException(status_code=400, detail=f'Site {site_name} does not require login.')
+        raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
+    if not SITE_CONFIGS[site_name].get("requires_login", False):
+        raise HTTPException(status_code=400, detail=f"Site {site_name} does not require login.")
     if not settings.CREDENTIAL_KEY:
         raise HTTPException(
             status_code=400,
-            detail='CREDENTIAL_KEY is not set. Add a Fernet key to your .env file.',
+            detail="CREDENTIAL_KEY is not set. Add a Fernet key to your .env file.",
         )
 
     from cryptography.fernet import Fernet
+
     f = Fernet(settings.CREDENTIAL_KEY.encode())
     enc_email = f.encrypt(body.email.encode()).decode()
     enc_pass = f.encrypt(body.password.encode()).decode()
@@ -490,18 +496,18 @@ async def save_credential(site_name: str, body: CredentialUpdate, db: DBSession)
         row.updated_at = datetime.utcnow()
 
     await db.commit()
-    return {'site_name': site_name, 'saved': True}
+    return {"site_name": site_name, "saved": True}
 
 
-@router.delete('/credentials/{site_name}/session')
+@router.delete("/credentials/{site_name}/session")
 async def clear_session(site_name: str):
     """Delete the browser session files for a site."""
     if site_name not in SITE_CONFIGS:
-        raise HTTPException(status_code=404, detail=f'Unknown site: {site_name}')
+        raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
 
     base = Path(settings.jobpilot_data_dir)
-    profile_dir = base / 'browser_profiles' / site_name
-    old_path = base / 'browser_sessions' / f'{site_name}_state.json'
+    profile_dir = base / "browser_profiles" / site_name
+    old_path = base / "browser_sessions" / f"{site_name}_state.json"
 
     cleared = False
     if profile_dir.exists():
@@ -511,28 +517,42 @@ async def clear_session(site_name: str):
         old_path.unlink()
         cleared = True
 
-    return {'cleared': cleared}
+    return {"cleared": cleared}
 
 
 # ─── Custom sites routes ───────────────────────────────────────────────────────
 
 
-@router.get('/custom-sites', response_model=list[CustomSiteOut])
+@router.get("/custom-sites", response_model=list[CustomSiteOut])
 async def get_custom_sites(db: DBSession):
     """Return custom/lab_url job source entries from the DB."""
-    stmt = select(JobSource).where(JobSource.type.in_(['lab_url', 'custom']))
+    stmt = select(JobSource).where(JobSource.type.in_(["lab_url", "custom"]))
     result = await db.execute(stmt)
-    return [CustomSiteOut.model_validate(row) for row in result.scalars().all()]
+    rows = result.scalars().all()
+    out: list[CustomSiteOut] = []
+    for row in rows:
+        cfg = row.config if isinstance(row.config, dict) else {}
+        display_name = cfg.get("display_name") or row.name
+        out.append(
+            CustomSiteOut(
+                id=row.id,
+                name=row.name,
+                display_name=display_name,
+                url=row.url,
+                enabled=row.enabled,
+            )
+        )
+    return out
 
 
-@router.post('/custom-sites', response_model=CustomSiteOut)
+@router.post("/custom-sites", response_model=CustomSiteOut)
 async def add_custom_site(body: CustomSiteCreate, db: DBSession):
     """Add a custom lab/URL job source."""
     row = JobSource(
         name=body.name,
-        type='lab_url',
+        type="lab_url",
         url=body.url,
-        config={'display_name': body.display_name or body.name},
+        config={"display_name": body.display_name or body.name},
         enabled=True,
     )
     db.add(row)
@@ -547,14 +567,16 @@ async def add_custom_site(body: CustomSiteCreate, db: DBSession):
     )
 
 
-@router.delete('/custom-sites/{site_id}')
+@router.delete("/custom-sites/{site_id}")
 async def delete_custom_site(site_id: int, db: DBSession):
     """Delete a custom site by ID."""
-    stmt = select(JobSource).where(JobSource.id == site_id, JobSource.type.in_(['lab_url', 'custom']))
+    stmt = select(JobSource).where(
+        JobSource.id == site_id, JobSource.type.in_(["lab_url", "custom"])
+    )
     result = await db.execute(stmt)
     row = result.scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=404, detail='Custom site not found')
+        raise HTTPException(status_code=404, detail="Custom site not found")
     await db.delete(row)
     await db.commit()
-    return {'deleted': site_id}
+    return {"deleted": site_id}

@@ -1,7 +1,5 @@
 """Tests for the JOBPILOT_SCRAPER_HEADLESS config flag."""
 
-import pytest
-
 
 def _make_settings(monkeypatch, **extra_env):
     """Return a fresh Settings instance with required fields set via env vars."""

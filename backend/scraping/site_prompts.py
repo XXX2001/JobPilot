@@ -94,9 +94,9 @@ SITE_PROMPTS: dict[str, str] = {
 
     "indeed": """
 
-        You are on Indeed.com. Search for: {keywords} in {location}
+        You are on Indeed. Search for: {keywords} in {location}
 
-        URL: https://www.indeed.com/jobs?q={keywords}&l={location}
+        Navigate to: https://{country_domain}/jobs?q={keywords}&l={location}
 
         Extract job listings from the search results (first page only).
 
@@ -312,6 +312,8 @@ SITE_CONFIGS: dict[str, dict] = {
 
         "base_url": "https://www.linkedin.com/jobs/",
 
+        "login_url": "https://www.linkedin.com/login",
+
     },
 
     "indeed": {
@@ -478,6 +480,17 @@ def format_prompt(site: str, **kwargs) -> str:
 
     # Provide sensible defaults for all substitution variables
 
+    # Build country_domain from country_code if not explicitly provided
+    _country_code = str(kwargs.get("country_code", "gb")).lower()
+    _INDEED_DOMAINS = {
+        "fr": "fr.indeed.com", "gb": "uk.indeed.com", "de": "de.indeed.com",
+        "es": "es.indeed.com", "it": "it.indeed.com", "nl": "indeed.nl",
+        "be": "be.indeed.com", "ca": "ca.indeed.com", "au": "au.indeed.com",
+        "us": "www.indeed.com", "in": "in.indeed.com", "br": "br.indeed.com",
+        "sg": "sg.indeed.com",
+    }
+    _country_domain = _INDEED_DOMAINS.get(_country_code, f"{_country_code}.indeed.com")
+
     defaults: dict[str, str] = {
 
         "keywords": "",
@@ -488,7 +501,9 @@ def format_prompt(site: str, **kwargs) -> str:
 
         "url": "",
 
-        "country_code": "gb",
+        "country_code": _country_code,
+
+        "country_domain": _country_domain,
 
         "apply_url": "",
 

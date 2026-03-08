@@ -179,17 +179,22 @@ class ScrapingOrchestrator:
                     prompt_template = source.prompt_template or SITE_PROMPTS.get(
                         source.name, SITE_PROMPTS["generic"]
                     )
+                    src_country_code = _normalize_country(
+                        (source.config or {}).get("country", "")
+                        or site_cfg.get("country_codes", [""])[0]
+                        or location
+                    )
                     jobs = await self.adaptive_scraper.scrape_job_listings(
                         url=source.url or "",
                         keywords=keywords,
                         prompt_template=prompt_template,
                         site=source.name,
                         location=location,
+                        country_code=src_country_code,
                     )
-                    src_country = (source.config or {}).get("country", "")
                     for job in jobs:
                         if not job.country:
-                            job.country = src_country or _normalize_country(location)
+                            job.country = src_country_code
                     all_jobs.extend(jobs)
                     logger.info("Phase 2: %d jobs from %s", len(jobs), source.name)
                     await broadcast_status(

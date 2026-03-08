@@ -92,6 +92,7 @@ class AdaptiveScraper:
         prompt_template: str | None = None,
         site: str | None = None,
         location: str = "",
+        country_code: str = "",
     ) -> list[RawJob]:
         """Navigate to a job listing page and extract all jobs.
 
@@ -122,6 +123,7 @@ class AdaptiveScraper:
             "location": location,
             "max_jobs": str(max_jobs),
             "url": url,
+            "country_code": country_code,
         }
 
         if prompt_template == SITE_PROMPTS["generic"] or prompt_template is None:
@@ -149,7 +151,7 @@ class AdaptiveScraper:
                     )
                     if storage_path.exists():
                         storage_state = str(storage_path)
-            except Exception:
+            except OSError:
                 storage_state = None
 
             browser = (

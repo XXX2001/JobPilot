@@ -40,15 +40,18 @@ async def lifespan(app: FastAPI):
 
         await init_db()
         logger.info("Database initialized")
-    except Exception as e:
-        logger.warning("DB init failed (may already be up): %s", e)
+    except Exception:
+        logger.exception("DB init failed (may already be up)")
 
     # ── Instantiate singletons ────────────────────────────────────────────
     try:
         from backend.applier.engine import ApplicationEngine
+        from backend.latex.applicator import CVApplicator
         from backend.latex.pipeline import CVPipeline, LetterPipeline
         from backend.llm.cv_editor import CVEditor
+        from backend.llm.cv_modifier import CVModifier
         from backend.llm.gemini_client import GeminiClient
+        from backend.llm.job_analyzer import JobAnalyzer
         from backend.matching.matcher import JobMatcher
         from backend.scheduler.morning_batch import MorningBatchScheduler
         from backend.scraping.adaptive_scraper import AdaptiveScraper
@@ -59,7 +62,11 @@ async def lifespan(app: FastAPI):
 
         gemini = GeminiClient()
         cv_editor = CVEditor(client=gemini)
-        cv_pipeline = CVPipeline(cv_editor=cv_editor)
+        cv_pipeline = CVPipeline(
+            job_analyzer=JobAnalyzer(),
+            cv_modifier=CVModifier(),
+            cv_applicator=CVApplicator(),
+        )
         letter_pipeline = LetterPipeline(cv_editor=cv_editor)
         adzuna = AdzunaClient()
         dedup = JobDeduplicator()
@@ -99,11 +106,8 @@ async def lifespan(app: FastAPI):
         app.state.apply_engine = apply_engine
         app.state.morning_scheduler = scheduler
 
-        # Start scheduler
-        try:
-            scheduler.start(batch_time="08:00")
-        except Exception as exc:
-            logger.warning("Scheduler start failed (non-fatal): %s", exc)
+        # APScheduler auto-start removed — batch runs only on user action
+        # (POST /api/queue/refresh → scheduler.run_batch())
 
         logger.info("All singletons initialised")
     except Exception as exc:
@@ -113,60 +117,37 @@ async def lifespan(app: FastAPI):
     try:
         from backend.api import ws as ws_module
 
-        _original_endpoint = None
+        def _handle_login_done(msg: dict) -> None:
+            site = msg.get("site", "")
+            sm = getattr(app.state, "session_manager", None)
+            if sm:
+                sm.confirm_login(site)
 
-        async def _patched_ws_handler(websocket):  # type: ignore
-            """Extended WS handler that routes client messages to singletons."""
+        def _handle_login_cancel(msg: dict) -> None:
+            site = msg.get("site", "")
+            sm = getattr(app.state, "session_manager", None)
+            if sm:
+                sm.cancel_login(site)
 
-            client_id = await ws_module.manager.connect(websocket)
-            try:
-                while True:
-                    pass  # WebSocketDisconnect imported via ws_module; skip local import
-                    try:
-                        data = await websocket.receive_text()
-                    except Exception:
-                        break
-                    try:
-                        msg = json.loads(data)
-                        if not isinstance(msg, dict):
-                            continue
-                        msg_type = msg.get("type")
-                        if msg_type == "ping":
-                            await websocket.send_text(json.dumps({"type": "pong"}))
-                        elif msg_type == "confirm_submit":
-                            job_id = msg.get("job_id", -1)
-                            engine = getattr(app.state, "apply_engine", None)
-                            if engine:
-                                engine.signal_confirm(job_id)
-                        elif msg_type == "cancel_apply":
-                            job_id = msg.get("job_id", -1)
-                            engine = getattr(app.state, "apply_engine", None)
-                            if engine:
-                                engine.signal_cancel(job_id)
-                        elif msg_type == "login_done":
-                            site = msg.get("site", "")
-                            sm = getattr(app.state, "session_manager", None)
-                            if sm:
-                                sm.confirm_login(site)
-                        elif msg_type == "login_cancel":
-                            site = msg.get("site", "")
-                            sm = getattr(app.state, "session_manager", None)
-                            if sm:
-                                sm.cancel_login(site)
-                    except Exception as exc:
-                        logger.debug("WS message parse error: %s", exc)
-            finally:
-                ws_module.manager.disconnect(client_id)
+        def _handle_confirm_submit(msg: dict) -> None:
+            job_id = msg.get("job_id", -1)
+            engine = getattr(app.state, "apply_engine", None)
+            if engine:
+                engine.signal_confirm(job_id)
 
-        # Replace the websocket endpoint with our extended one
-        # (FastAPI stores routes; we patch at the router level)
-        for route in ws_module.router.routes:
-            if hasattr(route, "path") and route.path == "/ws":
-                route.endpoint = _patched_ws_handler
-                break
+        def _handle_cancel_apply(msg: dict) -> None:
+            job_id = msg.get("job_id", -1)
+            engine = getattr(app.state, "apply_engine", None)
+            if engine:
+                engine.signal_cancel(job_id)
+
+        ws_module.manager.register_handler("login_done", _handle_login_done)
+        ws_module.manager.register_handler("login_cancel", _handle_login_cancel)
+        ws_module.manager.register_handler("confirm_submit", _handle_confirm_submit)
+        ws_module.manager.register_handler("cancel_apply", _handle_cancel_apply)
 
     except Exception as exc:
-        logger.warning("WS routing patch failed (non-fatal): %s", exc)
+        logger.warning("WS handler registration failed (non-fatal): %s", exc)
 
     yield
 

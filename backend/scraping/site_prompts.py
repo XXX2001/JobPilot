@@ -14,27 +14,33 @@ SITE_PROMPTS: dict[str, str] = {
 
         Apply filters if available: location={location}
 
-        Extract job listings from the results (first page only).
+        Extract job listings from the search results (first page only).
 
-        For each job listing (up to {max_jobs}), extract:
+        CRITICAL — DO NOT CLICK ANYTHING:
+        - Do NOT click on any job card, job title, or company name.
+        - Do NOT click "Easy Apply" or any apply button.
+        - Do NOT navigate away from the search results page.
+        - Read all data directly from the search results list without clicking.
 
-        - title: The full job title
+        For each job listing visible in the results (up to {max_jobs}), extract:
 
-        - company: The company name
+        - title: The full job title (read from the card text)
 
-        - location: Where the job is located
+        - company: The company name (read from the card text)
 
-        - salary: Salary/compensation if shown (null if not)
+        - location: Where the job is located (read from the card text)
 
-        - posted_date: When it was posted (null if not shown)
+        - salary: Salary/compensation if shown on the card (null if not)
 
-        - description_preview: First 200 chars of the description preview
+        - posted_date: When it was posted if shown on the card (null if not)
 
-        - apply_url: The URL to the job detail page
+        - description_preview: Any description snippet visible on the card (null if not shown)
 
-        IMPORTANT: Do NOT click "Easy Apply" — only extract data.
-
-        IMPORTANT: Do NOT navigate away from the search results page.
+        - apply_url: Construct this as https://www.linkedin.com/jobs/view/{jobId}/
+          where {jobId} is the numeric job ID found in the card's data attributes or
+          in the currentJobId URL parameter when hovering. Look for aria-label, data-job-id,
+          or href attributes on the job card element to find the job ID number.
+          NEVER use the search results URL as apply_url.
 
         Return the results as a JSON array with the above fields.
 
@@ -116,9 +122,10 @@ SITE_PROMPTS: dict[str, str] = {
 
         - apply_url: The direct job detail URL (not the Indeed redirect if possible)
 
-        Do NOT click any apply buttons.
+        Do NOT click any job titles, cards, or apply buttons.
+        Read all data directly from the search results list without navigating away.
 
-        If prompted to sign in, skip that step and continue extracting from the search page.
+        If prompted to sign in, dismiss the modal and continue extracting from the search page.
 
         Return the results as a JSON array.
 
@@ -131,6 +138,7 @@ SITE_PROMPTS: dict[str, str] = {
         Click on the "Jobs" tab or section in Google results if it appears.
 
         Extract job listings from the Google Jobs panel/section.
+        Do NOT click on individual job cards to open them — read data from the panel list only.
 
         For each job (up to {max_jobs}), extract:
 
@@ -144,9 +152,9 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted (null if not shown)
 
-        - description_preview: First 200 chars of the description
+        - description_preview: First 200 chars of any description visible in the panel
 
-        - apply_url: The link to the original job posting
+        - apply_url: The link to the original job posting (found in the job card href or "Apply" link)
 
         If there is no Jobs panel, extract from the regular search results instead.
 

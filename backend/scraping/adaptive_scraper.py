@@ -78,7 +78,8 @@ class AdaptiveScraper:
         try:
             from browser_use import ChatGoogle  # type: ignore
 
-            return ChatGoogle(model="gemini-2.0-flash", api_key=self._api_key)
+            model = settings.GOOGLE_MODEL or "gemini-2.0-flash"
+            return ChatGoogle(model=model, api_key=self._api_key)
         except ImportError:
             logger.warning("browser_use not installed; AdaptiveScraper will be a no-op")
             return None
@@ -89,6 +90,8 @@ class AdaptiveScraper:
         keywords: list[str],
         max_jobs: int = 20,
         prompt_template: str | None = None,
+        site: str | None = None,
+        location: str = "",
     ) -> list[RawJob]:
         """Navigate to a job listing page and extract all jobs.
 
@@ -97,7 +100,7 @@ class AdaptiveScraper:
             keywords: Search keywords to filter/search on the page.
             max_jobs: Maximum number of jobs to extract.
             prompt_template: Optional override prompt. Uses 'generic' template if None.
-
+            location: User's target location (e.g. "France", "Paris").
         Returns:
             List of RawJob objects parsed from the agent output.
             Returns an empty list on any error (graceful degradation).
@@ -112,58 +115,78 @@ class AdaptiveScraper:
         if llm is None:
             return []
 
-        if prompt_template is None:
-            prompt_template = SITE_PROMPTS["generic"]
+        # Build prompt: use format_prompt(site, ...) for safe default substitution
+        # (handles {country_code} and other template vars automatically)
+        fmt_kwargs = {
+            "keywords": ", ".join(keywords),
+            "location": location,
+            "max_jobs": str(max_jobs),
+            "url": url,
+        }
 
-        prompt = format_prompt(
-            "generic",
-            keywords=", ".join(keywords),
-            location="",
-            max_jobs=str(max_jobs),
-            url=url,
-        )
-        # Use caller-supplied template if provided
-        if prompt_template != SITE_PROMPTS["generic"]:
+        if prompt_template == SITE_PROMPTS["generic"] or prompt_template is None:
+            prompt = format_prompt("generic", **fmt_kwargs)
+        elif site and SITE_PROMPTS.get(site) == prompt_template:
+            # Site-specific template from SITE_PROMPTS — use format_prompt for safe defaults
+            prompt = format_prompt(site, **fmt_kwargs)
+        else:
+            # Custom user-supplied template — best-effort .format()
             try:
-                prompt = prompt_template.format(
-                    keywords=", ".join(keywords),
-                    location="",
-                    max_jobs=max_jobs,
-                    url=url,
-                )
-            except KeyError:
+                prompt = prompt_template.format(**fmt_kwargs)
+            except (KeyError, IndexError):
+                logger.warning("Custom prompt template formatting failed for site=%s; using raw template", site)
                 prompt = prompt_template
-
         last_exc: Exception | None = None
-        for attempt in range(3):
-            browser = Browser(headless=True)
+        for attempt in range(2):
+            # If a site is provided and a saved storage state exists, pass it to Browser
+            storage_state = None
+            try:
+                from pathlib import Path
+
+                if site:
+                    storage_path = (
+                        Path(settings.jobpilot_data_dir) / "browser_profiles" / site / "state.json"
+                    )
+                    if storage_path.exists():
+                        storage_state = str(storage_path)
+            except Exception:
+                storage_state = None
+
+            browser = (
+                Browser(headless=settings.jobpilot_scraper_headless, storage_state=storage_state)
+                if storage_state
+                else Browser(headless=settings.jobpilot_scraper_headless)
+            )
             try:
                 agent = Agent(
                     task=prompt,
                     llm=llm,
                     browser=browser,
-                    max_steps=15,
+                    max_steps=10,
                 )
-                result = await agent.run()
+                result = await asyncio.wait_for(agent.run(), timeout=120)
                 return self._parse_agent_result(result, source_url=url)
             except Exception as exc:
                 last_exc = exc
-                backoff = 2 ** attempt * 2  # 2s, 4s, 8s
+                backoff = 2**attempt * 2  # 2s, 4s, 8s
                 logger.warning(
-                    "browser-use agent failed for %s (attempt %d/3): %s — retrying in %ds",
-                    url, attempt + 1, exc, backoff,
+                    "browser-use agent failed for %s (attempt %d/2): %s — retrying in %ds",
+                    url,
+                    attempt + 1,
+                    exc,
+                    backoff,
                 )
                 await asyncio.sleep(backoff)
             finally:
                 try:
-                    await browser.close()
+                    await browser.stop()
                 except Exception:
                     pass
 
         logger.error("browser-use agent exhausted retries for %s: %s", url, last_exc)
         return []
 
-    async def scrape_job_details(self, job_url: str) -> JobDetails | None:
+    async def scrape_job_details(self, job_url: str, site: str | None = None) -> JobDetails | None:
         """Navigate to a single job posting and extract full details.
 
         Args:
@@ -202,21 +225,39 @@ This is a job posting page. Extract the FULL details and return as JSON:
 Do NOT click the apply button. Just extract and return JSON.
 """
 
-        browser = Browser(headless=True)
+        # Try to load saved storage_state for the given site if present
+        storage_state = None
+        try:
+            from pathlib import Path
+
+            if site:
+                storage_path = (
+                    Path(settings.jobpilot_data_dir) / "browser_profiles" / site / "state.json"
+                )
+                if storage_path.exists():
+                    storage_state = str(storage_path)
+        except Exception:
+            storage_state = None
+
+        browser = (
+            Browser(headless=True, storage_state=storage_state)
+            if storage_state
+            else Browser(headless=True)
+        )
         try:
             agent = Agent(
                 task=prompt,
                 llm=llm,
                 browser=browser,
-                max_steps=10,
+                max_steps=8,
             )
-            result = await agent.run()
+            result = await asyncio.wait_for(agent.run(), timeout=90)
         except Exception as exc:
             logger.warning("browser-use detail agent failed for %s: %s", job_url, exc)
             return None
         finally:
             try:
-                await browser.close()
+                    await browser.stop()
             except Exception:
                 pass
 

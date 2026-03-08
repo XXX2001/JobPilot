@@ -23,7 +23,13 @@ class Settings(BaseSettings):
     jobpilot_host: str = Field("127.0.0.1", env="JOBPILOT_HOST")
     jobpilot_port: int = Field(8000, env="JOBPILOT_PORT")
     jobpilot_log_level: str = Field("info", env="JOBPILOT_LOG_LEVEL")
+    jobpilot_scraper_headless: bool = Field(True, env="JOBPILOT_SCRAPER_HEADLESS")
     jobpilot_data_dir: str = Field("./data", env="JOBPILOT_DATA_DIR")
+    # Google / Gemini model settings
+    # Primary model name (Gemini 3 Flash Preview — newest, most intelligent flash)
+    GOOGLE_MODEL: str = Field("gemini-3-flash-preview", env="GOOGLE_MODEL")
+    # Comma-separated fallback model names (empty => no fallbacks)
+    GOOGLE_MODEL_FALLBACKS: str = Field("", env="GOOGLE_MODEL_FALLBACKS")
 
 
 settings = Settings()

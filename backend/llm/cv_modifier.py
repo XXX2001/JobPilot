@@ -29,4 +29,6 @@ class CVModifier:
             job_context_md=context_md,
             cv_tex=cv_tex,
         )
-        return await self._client.generate_json(prompt, CVModifierOutput)
+        raw = await self._client.generate_json(prompt, CVModifierOutput)
+        # Enforce ≤3 cap and confidence threshold at the class boundary
+        return CVModifierOutput(replacements=raw.top_three())

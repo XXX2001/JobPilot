@@ -47,5 +47,6 @@ class CVModifierOutput(BaseModel):
     replacements: list[CVReplacement] = []
 
     def top_three(self) -> list[CVReplacement]:
-        """Return at most 3 replacements, sorted by confidence descending."""
-        return sorted(self.replacements, key=lambda r: r.confidence, reverse=True)[:3]
+        """Return at most 3 applicable replacements (confidence ≥ 0.7), sorted by confidence descending."""
+        applicable = [r for r in self.replacements if r.is_applicable()]
+        return sorted(applicable, key=lambda r: r.confidence, reverse=True)[:3]

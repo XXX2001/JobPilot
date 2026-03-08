@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import date, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -21,15 +19,11 @@ def _raw_job(title="SWE", url="https://example.com/1"):
     return RawJob(title=title, company="ACME", url=url)
 
 
-def _details(title="SWE", url="https://example.com/1", score=80.0):
-    return JobDetails(title=title, company="ACME", url=url, score=score)
-
-
 class MockScraper:
     def __init__(self, jobs=None):
         self._jobs = jobs or []
 
-    async def run_morning_batch(self, keywords, filters, sources, **kwargs):
+    async def run_morning_batch(self, **kwargs):  # noqa: ARG002
         return self._jobs
 
 
@@ -87,7 +81,7 @@ async def test_batch_runs_all_steps(tmp_path):
 
     # Patch heavy collaborators
     with (
-        patch("backend.scheduler.morning_batch.select") as mock_select,
+        patch("backend.scheduler.morning_batch.select"),
         patch("backend.scheduler.morning_batch.broadcast_status", side_effect=fake_broadcast),
         patch.object(scheduler, "_load_settings", new_callable=AsyncMock) as mock_settings,
         patch.object(scheduler, "_load_profile", new_callable=AsyncMock) as mock_profile,
@@ -97,7 +91,11 @@ async def test_batch_runs_all_steps(tmp_path):
         ) as mock_store,
         patch.object(scheduler, "_store_tailored_doc", new_callable=AsyncMock),
         patch("backend.scheduler.morning_batch.DailyLimitGuard") as MockGuard,
+        patch("backend.scheduler.morning_batch.settings") as mock_cfg,
     ):
+        # Point data dir at tmp_path so templates/ scan finds nothing → no CV generation
+        mock_cfg.jobpilot_data_dir = str(tmp_path)
+
         settings_obj = MagicMock()
         settings_obj.keywords = ["python"]
         settings_obj.locations = []
@@ -110,7 +108,7 @@ async def test_batch_runs_all_steps(tmp_path):
         mock_settings.return_value = settings_obj
 
         profile_obj = MagicMock()
-        profile_obj.base_cv_path = None  # skip CV generation
+        profile_obj.base_cv_path = None  # no profile path → auto-detect from templates/
         mock_profile.return_value = profile_obj
 
         mock_sources.return_value = []

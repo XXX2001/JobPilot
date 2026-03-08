@@ -25,7 +25,7 @@ try:
     from backend.api.ws import broadcast_status  # type: ignore
 except Exception:
 
-    async def broadcast_status(message: str, progress: float = 0.0) -> None:  # type: ignore[misc]
+    async def broadcast_status(_message: str, _progress: float = 0.0) -> None:  # type: ignore[misc]
         pass
 
 

@@ -105,7 +105,7 @@ async def test_scraper_succeeds_on_second_attempt():
 
 @pytest.mark.asyncio
 async def test_cv_pipeline_fallback_when_gemini_fails(tmp_path):
-    """CVPipeline returns base CV (cv_tailored=False) when Gemini editing fails."""
+    """CVPipeline returns base CV (cv_tailored=False) when Gemini modifier fails."""
     from backend.latex.pipeline import CVPipeline
     from backend.models.schemas import JobDetails
 
@@ -115,10 +115,11 @@ async def test_cv_pipeline_fallback_when_gemini_fails(tmp_path):
 
     output_dir = tmp_path / "out"
 
-    # cv_editor that always raises
-    failing_editor = MagicMock()
-    failing_editor.edit_summary = AsyncMock(side_effect=RuntimeError("Gemini down"))
-    failing_editor.edit_experience = AsyncMock(side_effect=RuntimeError("Gemini down"))
+    # job_analyzer and cv_modifier that always raise
+    failing_analyzer = MagicMock()
+    failing_analyzer.analyze = AsyncMock(side_effect=RuntimeError("Gemini down"))
+    failing_modifier = MagicMock()
+    failing_modifier.modify = AsyncMock(side_effect=RuntimeError("Gemini down"))
 
     # Compiler that always succeeds (returns a fake PDF path)
     fake_pdf = tmp_path / "out" / "cv.pdf"
@@ -132,7 +133,13 @@ async def test_cv_pipeline_fallback_when_gemini_fails(tmp_path):
 
     fake_compiler.compile = _fake_compile
 
-    pipeline = CVPipeline(compiler=fake_compiler, cv_editor=failing_editor)
+    from backend.latex.applicator import CVApplicator
+    pipeline = CVPipeline(
+        compiler=fake_compiler,
+        job_analyzer=failing_analyzer,
+        cv_modifier=failing_modifier,
+        cv_applicator=CVApplicator(),
+    )
 
     job = JobDetails(
         title="Software Engineer",

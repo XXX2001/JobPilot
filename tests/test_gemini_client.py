@@ -6,7 +6,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 import pytest
 
 from backend.llm.gemini_client import GeminiClient, GeminiJSONError
-from backend.llm.validators import CVSummaryEdit
+from backend.llm.validators import LetterEdit
 
 
 async def test_generate_json_valid():
@@ -15,14 +15,14 @@ async def test_generate_json_valid():
     client._call_times = deque(maxlen=GeminiClient.RPM_LIMIT)
     client._lock = asyncio.Lock()
 
-    valid_json = '{"edited_summary": "new text", "changes_made": ["changed foo"]}'
+    valid_json = '{"edited_paragraph": "new text", "company_name": "ACME"}'
 
     with patch.object(client, "generate_text", new=AsyncMock(return_value=valid_json)):
-        result = await client.generate_json("some prompt", CVSummaryEdit)
+        result = await client.generate_json("some prompt", LetterEdit)
 
-    assert isinstance(result, CVSummaryEdit)
-    assert result.edited_summary == "new text"
-    assert result.changes_made == ["changed foo"]
+    assert isinstance(result, LetterEdit)
+    assert result.edited_paragraph == "new text"
+    assert result.company_name == "ACME"
 
 
 async def test_invalid_json_raises_gemini_error():
@@ -33,7 +33,7 @@ async def test_invalid_json_raises_gemini_error():
 
     with patch.object(client, "generate_text", new=AsyncMock(return_value="this is not json")):
         with pytest.raises(GeminiJSONError):
-            await client.generate_json("some prompt", CVSummaryEdit)
+            await client.generate_json("some prompt", LetterEdit)
 
 
 async def test_rate_limiter_tracks_calls():

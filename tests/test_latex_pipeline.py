@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.latex.pipeline import CVPipeline, generate_diff
+from backend.latex.pipeline import CVPipeline
 from backend.models.schemas import JobDetails
 from backend.llm.validators import CVReplacement, CVModifierOutput
 from backend.llm.job_context import JobContext
@@ -166,27 +166,3 @@ def test_cv_pipeline_modifier_failure_falls_back(tmp_path: Path):
     assert result.pdf_path.exists()
 
 
-# ─── generate_diff helper (kept for LetterPipeline compatibility) ─────────────
-
-def test_generate_diff_returns_entries():
-    """generate_diff still works for LetterPipeline compatibility."""
-    from backend.llm.validators import CVSummaryEdit, CVExperienceEdit, BulletEdit
-    from backend.latex.parser import LaTeXSections
-
-    original = LaTeXSections(
-        summary="Original summary text.",
-        experience_bullets=["Built something cool"],
-        has_markers=True,
-    )
-    summary_edit = CVSummaryEdit(
-        edited_summary="Updated summary for Python roles.",
-        changes_made=["Emphasised Python skills"],
-    )
-    exp_edit = CVExperienceEdit(
-        edits=[BulletEdit(index=0, original="Built something cool",
-                          edited="Built a distributed data pipeline in Python",
-                          reason="More relevant to job")]
-    )
-    diff = generate_diff(original, (summary_edit, exp_edit, None))
-    assert len(diff) == 2
-    assert diff[0].section == "summary"

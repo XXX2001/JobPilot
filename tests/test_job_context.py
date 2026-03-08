@@ -38,3 +38,34 @@ def test_job_context_to_markdown_empty_gaps():
     md = ctx.to_markdown(job_title="Analyst", company="Acme")
     # When no gaps, should say "none" rather than an empty list
     assert "none" in md.lower()
+
+
+def test_cv_modifier_output_caps_at_three_replacements():
+    """CVModifierOutput.top_three() returns at most 3 items sorted by confidence."""
+    from backend.llm.validators import CVModifierOutput, CVReplacement
+    output = CVModifierOutput(replacements=[
+        CVReplacement(section="Profile", original_text=f"text{i}",
+                      replacement_text=f"new{i}", reason=f"r{i}",
+                      job_requirement_matched="x", confidence=0.9 - i * 0.05)
+        for i in range(4)
+    ])
+    top = output.top_three()
+    assert len(top) == 3
+    # Should be sorted by confidence descending
+    assert top[0].confidence > top[1].confidence > top[2].confidence
+
+
+def test_cv_replacement_confidence_threshold():
+    """is_applicable() returns True only at confidence >= 0.7."""
+    from backend.llm.validators import CVReplacement
+    low = CVReplacement(section="Profile", original_text="x", replacement_text="y",
+                        reason="test", job_requirement_matched="req", confidence=0.65)
+    assert not low.is_applicable()
+
+    exact = CVReplacement(section="Profile", original_text="x", replacement_text="y",
+                          reason="test", job_requirement_matched="req", confidence=0.7)
+    assert exact.is_applicable()
+
+    high = CVReplacement(section="Profile", original_text="x", replacement_text="y",
+                         reason="test", job_requirement_matched="req", confidence=0.95)
+    assert high.is_applicable()

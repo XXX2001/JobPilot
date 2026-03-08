@@ -107,12 +107,12 @@
 	<div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
 		<div class="text-4xl">📋</div>
 		<p class="text-muted-foreground text-sm font-medium">No applications yet.</p>
-		<p class="text-muted-foreground text-xs">Apply to jobs from the Morning Queue to see them here.</p>
+		<p class="text-muted-foreground text-xs">Apply to jobs from the Job Queue to see them here.</p>
 		<a
 			href="/"
 			class="mt-2 text-xs px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
 		>
-			Go to Morning Queue
+			Go to Job Queue
 		</a>
 	</div>
 {:else}

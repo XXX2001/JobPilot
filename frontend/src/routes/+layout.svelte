@@ -27,7 +27,7 @@
 	});
 
 	const navLinks = [
-		{ href: '/', label: 'Morning Queue', icon: LayoutDashboard },
+		{ href: '/', label: 'Job Queue', icon: LayoutDashboard },
 		{ href: '/tracker', label: 'Tracker', icon: KanbanSquare },
 		{ href: '/cv', label: 'CV Manager', icon: FileText },
 		{ href: '/settings', label: 'Settings', icon: Settings },

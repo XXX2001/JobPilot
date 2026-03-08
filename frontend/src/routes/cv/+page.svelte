@@ -263,7 +263,7 @@ Job description bullets
 			<div class="flex flex-col items-center justify-center py-12 gap-3 bg-card border border-border rounded-lg">
 				<FileText size={28} class="text-muted-foreground/40" />
 				<p class="text-sm text-muted-foreground font-medium">No tailored CVs yet</p>
-				<p class="text-xs text-muted-foreground">CVs are generated during the morning batch when jobs are matched.</p>
+				<p class="text-xs text-muted-foreground">CVs are generated during the job scan when jobs are matched.</p>
 			</div>
 		{:else}
 			<div class="space-y-2">

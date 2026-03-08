@@ -125,7 +125,7 @@
 <div class="flex items-center gap-2 text-xs text-muted-foreground mb-5">
 	<a href="/" class="flex items-center gap-1 hover:text-foreground transition-colors">
 		<ArrowLeft size={13} />
-		Morning Queue
+		Job Queue
 	</a>
 	{#if job}
 		<span>/</span>
@@ -266,7 +266,7 @@
 				<div class="flex flex-col items-center justify-center py-16 gap-3 bg-card border border-border rounded-lg">
 					<FileText size={32} class="text-muted-foreground/40" />
 					<p class="text-sm text-muted-foreground font-medium">No CV changes yet</p>
-					<p class="text-xs text-muted-foreground">CV tailoring runs during the morning batch. Check back after it completes.</p>
+					<p class="text-xs text-muted-foreground">CV tailoring runs during the job scan. Check back after it completes.</p>
 				</div>
 			{:else}
 				<div class="space-y-3">

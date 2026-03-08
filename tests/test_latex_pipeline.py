@@ -8,8 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.latex.compiler import LaTeXCompiler, LaTeXCompilationError
-from backend.latex.pipeline import CVPipeline, TailoredCV, generate_diff, DiffEntry
+from backend.latex.pipeline import CVPipeline, generate_diff
 from backend.models.schemas import JobDetails
 from backend.llm.validators import CVReplacement, CVModifierOutput
 from backend.llm.job_context import JobContext

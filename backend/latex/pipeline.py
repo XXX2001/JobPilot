@@ -5,7 +5,6 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from backend.latex.applicator import CVApplicator
 from backend.latex.compiler import LaTeXCompiler
 from backend.latex.injector import LaTeXInjector
 from backend.latex.parser import LaTeXParser

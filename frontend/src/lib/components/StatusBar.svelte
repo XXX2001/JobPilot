@@ -31,6 +31,17 @@
 			<span class="text-yellow-400">Waiting for manual login: {$lastMessage.site}</span>
 		{:else if $lastMessage.type === 'error'}
 			<span class="text-red-400">Error: {$lastMessage.data?.message ?? 'Unknown error'}</span>
+		{:else if $lastMessage.type === 'status'}
+			<span class="flex-1 truncate">{$lastMessage.message}</span>
+			{#if $lastMessage.progress > 0 && $lastMessage.progress < 1}
+				<div class="w-32 h-1 bg-muted rounded-full overflow-hidden">
+					<div
+						class="h-full bg-primary transition-all duration-300"
+						style="width: {$lastMessage.progress * 100}%"
+					></div>
+				</div>
+				<span class="tabular-nums">{Math.round($lastMessage.progress * 100)}%</span>
+			{/if}
 		{:else}
 			<span>{$wsStatus === 'connected' ? 'Ready' : 'Offline'}</span>
 		{/if}

@@ -58,6 +58,11 @@
 				screenshot: lastMsg.screenshot_base64
 			};
 		}
+		if (lastMsg.type === 'status' && lastMsg.progress >= 1.0) {
+			refreshing = false;
+			if (refreshTimeout) { clearTimeout(refreshTimeout); refreshTimeout = null; }
+			loadQueue();  // fire-and-forget (no await — we're inside $effect)
+		}
 	});
 
 	async function loadQueue() {
@@ -79,15 +84,19 @@
 		}
 	}
 
+	let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+
 	async function refreshQueue() {
 		refreshing = true;
+		// Safety timeout: clear spinner after 5 minutes if no WS completion arrives
+		if (refreshTimeout) clearTimeout(refreshTimeout);
+		refreshTimeout = setTimeout(() => { refreshing = false; }, 5 * 60 * 1000);
 		try {
 			await apiFetch('/api/queue/refresh', { method: 'POST' });
-			await loadQueue();
 		} catch (e: any) {
 			error = e.message ?? 'Refresh failed';
-		} finally {
 			refreshing = false;
+			if (refreshTimeout) { clearTimeout(refreshTimeout); refreshTimeout = null; }
 		}
 	}
 

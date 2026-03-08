@@ -5,6 +5,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.latex.applicator import CVApplicator
 from backend.latex.compiler import LaTeXCompiler
 from backend.latex.injector import LaTeXInjector
 from backend.latex.parser import LaTeXParser
@@ -34,19 +35,29 @@ class TailoredLetter:
 
 
 class CVPipeline:
-    """Generates a tailored CV PDF for a job from a base LaTeX template."""
+    """Generates a tailored CV PDF for a job from a base LaTeX template.
+
+    New architecture (marker-free):
+    1. Copy base CV .tex to output_dir/cv.tex
+    2. Run JobAnalyzer → JobContext (cached per job_id)
+    3. Run CVModifier (whole CV text + context) → CVModifierOutput
+    4. Run CVApplicator → apply validated replacements
+    5. Compile with Tectonic
+    6. Return TailoredCV with paths and diff
+    """
 
     def __init__(
         self,
         compiler: LaTeXCompiler | None = None,
-        parser: LaTeXParser | None = None,
-        injector: LaTeXInjector | None = None,
-        cv_editor=None,
+        job_analyzer=None,
+        cv_modifier=None,
+        cv_applicator=None,
     ) -> None:
         self._compiler = compiler or LaTeXCompiler()
-        self._parser = parser or LaTeXParser()
-        self._injector = injector or LaTeXInjector()
-        self._cv_editor = cv_editor  # backend.llm.cv_editor.CVEditor (injected)
+        self._job_analyzer = job_analyzer   # backend.llm.job_analyzer.JobAnalyzer
+        self._cv_modifier = cv_modifier     # backend.llm.cv_modifier.CVModifier
+        self._cv_applicator = cv_applicator # backend.latex.applicator.CVApplicator
+        self._context_cache: dict[int, object] = {}  # job_id → JobContext
 
     async def generate_tailored_cv(
         self,
@@ -54,68 +65,61 @@ class CVPipeline:
         job: JobDetails,
         output_dir: Path,
     ) -> TailoredCV:
-        """Produce a tailored CV PDF.
-
-        Steps:
-        1. Copy base CV .tex to output_dir / cv.tex
-        2. Parse sections from the copy
-        3. Ask Gemini to produce edits (if cv_editor provided)
-        4. Inject edits back
-        5. Compile with Tectonic
-        6. Return TailoredCV with paths and diff
-        """
         output_dir.mkdir(parents=True, exist_ok=True)
         dest_tex = output_dir / "cv.tex"
 
         # 1. Copy — never mutate the base file
         shutil.copy2(base_cv_path, dest_tex)
-
-        # 2. Parse
-        tex_content = dest_tex.read_text(encoding="utf-8")
-        sections = self._parser.extract_sections(tex_content)
+        cv_tex = dest_tex.read_text(encoding="utf-8")
 
         diff: list[DiffEntry] = []
         cv_tailored = False
 
-        # 3 + 4. Edit & inject (only when cv_editor is wired up)
-        if self._cv_editor is not None and sections.has_markers:
+        # 2–4. Analyze + modify (only when all three components are wired up)
+        if (
+            self._job_analyzer is not None
+            and self._cv_modifier is not None
+            and self._cv_applicator is not None
+        ):
             try:
-                summary_edit = await self._cv_editor.edit_summary(job, sections)
-                if summary_edit and summary_edit.edited_summary:
-                    original = sections.summary or ""
-                    tex_content = self._injector.inject_summary_edit(
-                        tex_content, summary_edit.edited_summary
-                    )
-                    diff.append(
-                        DiffEntry(
-                            section="summary",
-                            original_text=original,
-                            edited_text=summary_edit.edited_summary,
-                            change_description="; ".join(summary_edit.changes_made),
-                        )
-                    )
+                # 2. JobAnalyzer (cached per job_id)
+                job_id = job.id
+                if job_id is not None and job_id in self._context_cache:
+                    context = self._context_cache[job_id]
+                    logger.debug("Using cached JobContext for job_id=%s", job_id)
+                else:
+                    context = await self._job_analyzer.analyze(job)
+                    if job_id is not None:
+                        self._context_cache[job_id] = context
+                        logger.debug("Cached JobContext for job_id=%s", job_id)
 
-                exp_edit = await self._cv_editor.edit_experience(job, sections)
-                if exp_edit and exp_edit.edits:
-                    tex_content = self._injector.inject_experience_edits(
-                        tex_content, exp_edit.edits
+                # 3. CVModifier
+                modifier_output = await self._cv_modifier.modify(job, cv_tex, context)
+
+                # 4. CVApplicator
+                cv_tex, applied = self._cv_applicator.apply(
+                    cv_tex, modifier_output.replacements
+                )
+
+                diff = [
+                    DiffEntry(
+                        section=r.section,
+                        original_text=r.original_text,
+                        edited_text=r.replacement_text,
+                        change_description=r.reason,
                     )
-                    for e in exp_edit.edits:
-                        diff.append(
-                            DiffEntry(
-                                section="experience",
-                                original_text=e.original,
-                                edited_text=e.edited,
-                                change_description=e.reason,
-                            )
-                        )
+                    for r in applied
+                ]
+                cv_tailored = bool(diff)
+
             except Exception as exc:
-                logger.warning("CV editor failed (%s); using base CV unchanged.", exc)
-                diff = []  # no partial diff on failure
-        if diff:
-            cv_tailored = True
-        # Write possibly-edited tex back
-        dest_tex.write_text(tex_content, encoding="utf-8")
+                logger.warning("CV modifier failed (%s); using base CV unchanged.", exc)
+                # Reset to the unmodified copy
+                cv_tex = dest_tex.read_text(encoding="utf-8")
+                diff = []
+
+        # Write (possibly edited) tex back
+        dest_tex.write_text(cv_tex, encoding="utf-8")
 
         # 5. Compile
         pdf_path = await self._compiler.compile(dest_tex, output_dir)

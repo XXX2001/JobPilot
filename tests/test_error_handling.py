@@ -125,7 +125,7 @@ async def test_cv_pipeline_fallback_when_gemini_fails(tmp_path):
     fake_pdf = tmp_path / "out" / "cv.pdf"
     fake_compiler = MagicMock()
 
-    async def _fake_compile(tex_path, out_dir):
+    async def _fake_compile(tex_path, out_dir):  # noqa: ARG001
         out_dir.mkdir(parents=True, exist_ok=True)
         fake_pdf.parent.mkdir(parents=True, exist_ok=True)
         fake_pdf.write_bytes(b"%PDF-1.4 fake")

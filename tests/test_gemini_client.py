@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 import pytest
 
 from backend.llm.gemini_client import GeminiClient, GeminiJSONError

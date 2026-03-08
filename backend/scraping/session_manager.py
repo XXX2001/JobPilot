@@ -286,7 +286,10 @@ class BrowserSessionManager:
             f = Fernet(settings.CREDENTIAL_KEY.encode())
             email = f.decrypt(row.encrypted_email.encode()).decode()
             password = f.decrypt(row.encrypted_password.encode()).decode()
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Credential decryption failed for site=%s: %s", site, type(exc).__name__
+            )
             return None
 
         # Open browser + page/context via compatibility helper

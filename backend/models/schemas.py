@@ -10,17 +10,17 @@ class RawJob(BaseModel):
     """Raw job data from any source before DB storage."""
 
     external_id: str = ""
-    title: str
-    company: str
-    location: str = ""
-    salary_text: str = ""
+    title: str = Field(max_length=300)
+    company: str = Field(max_length=200)
+    location: str = Field(default="", max_length=200)
+    salary_text: str = Field(default="", max_length=100)
     salary_min: Optional[int] = None
     salary_max: Optional[int] = None
-    description: str = ""
+    description: str = Field(default="", max_length=5000)
     requirements: list[str] = Field(default_factory=list)
     benefits: list[str] = Field(default_factory=list)
-    url: str
-    apply_url: str = ""
+    url: str = Field(default="", max_length=2048)
+    apply_url: str = Field(default="", max_length=2048)
     apply_method: str = ""
     posted_at: Optional[datetime] = None
     source_name: str = ""

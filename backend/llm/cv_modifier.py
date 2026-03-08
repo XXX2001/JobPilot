@@ -8,6 +8,7 @@ from backend.llm.job_context import JobContext
 from backend.llm.prompts import CV_MODIFIER_SKILL
 from backend.llm.validators import CVModifierOutput
 from backend.models.schemas import JobDetails
+from backend.security.sanitizer import sanitize_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,9 @@ class CVModifier:
         cv_tex: str,
         context: JobContext,
     ) -> CVModifierOutput:
+        if len(cv_tex) > 50_000:
+            logger.warning("CV text exceeds 50KB (%d chars), truncating", len(cv_tex))
+            cv_tex = cv_tex[:50_000]
         context_md = context.to_markdown(job.title, job.company)
         prompt = CV_MODIFIER_SKILL.format(
             job_context_md=context_md,

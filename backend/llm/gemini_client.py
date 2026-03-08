@@ -43,7 +43,7 @@ class GeminiClient:
                 window = 60.0 - (now - oldest)
                 if window > 0:
                     logger.info("Rate limit: sleeping %.1fs", window)
-                    await asyncio.sleep(window)
+                    await asyncio.sleep(min(window, 120.0))  # Never sleep more than 2 minutes
             self._call_times.append(time.monotonic())
 
     async def generate_text(self, prompt: str) -> str:

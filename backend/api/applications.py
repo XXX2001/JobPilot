@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
@@ -58,8 +58,8 @@ class ApplicationListOut(BaseModel):
 
 class CreateApplicationRequest(BaseModel):
     job_match_id: Optional[int] = None
-    method: str = "manual"
-    status: str = "pending"
+    method: Literal["auto", "assisted", "manual"] = "manual"
+    status: Literal["pending", "applied", "cancelled", "failed", "interview", "offer", "rejected"] = "pending"
     notes: Optional[str] = None
 
 
@@ -71,7 +71,7 @@ class UpdateApplicationRequest(BaseModel):
 
 
 class CreateEventRequest(BaseModel):
-    event_type: str
+    event_type: Literal["pending", "applied", "cancelled", "failed", "interview", "offer", "rejected", "viewed", "follow_up"]
     details: Optional[str] = None
 
 
@@ -107,36 +107,36 @@ async def list_applications(
         select(Application, Job)
         .outerjoin(JobMatch, Application.job_match_id == JobMatch.id)
         .outerjoin(Job, JobMatch.job_id == Job.id)
-        .order_by(Application.created_at.desc())
-        .offset(skip)
-        .limit(limit)
     )
     if status:
-        stmt = (
-            select(Application, Job)
-            .outerjoin(JobMatch, Application.job_match_id == JobMatch.id)
-            .outerjoin(Job, JobMatch.job_id == Job.id)
-            .where(Application.status == status)
-            .order_by(Application.created_at.desc())
-            .offset(skip)
-            .limit(limit)
-        )
+        stmt = stmt.where(Application.status == status)
+    stmt = stmt.order_by(Application.created_at.desc()).offset(skip).limit(limit)
 
     result = await db.execute(stmt)
     rows = result.all()
 
-    # Fetch events for each application and build response
-    app_outs: list[ApplicationOut] = []
-    for app, job in rows:
+    # Batch-fetch events (avoids N+1)
+    app_ids = [app.id for app, _ in rows]
+    if app_ids:
         events_stmt = (
             select(ApplicationEvent)
-            .where(ApplicationEvent.application_id == app.id)
-            .order_by(ApplicationEvent.event_date.asc())
+            .where(ApplicationEvent.application_id.in_(app_ids))
+            .order_by(ApplicationEvent.application_id, ApplicationEvent.event_date.asc())
         )
         events_result = await db.execute(events_stmt)
-        events = events_result.scalars().all()
+        all_events = events_result.scalars().all()
+
+        from collections import defaultdict
+        events_by_app: dict[int, list] = defaultdict(list)
+        for event in all_events:
+            events_by_app[event.application_id].append(event)
+    else:
+        events_by_app = {}
+
+    app_outs: list[ApplicationOut] = []
+    for app, job in rows:
         out = ApplicationOut.model_validate(app)
-        out.events = [ApplicationEventOut.model_validate(e) for e in events]
+        out.events = [ApplicationEventOut.model_validate(e) for e in events_by_app.get(app.id, [])]
         if job is not None:
             out.job_title = job.title
             out.company = job.company
@@ -147,9 +147,7 @@ async def list_applications(
     # Total count (with same filter)
     count_stmt = select(func.count()).select_from(Application)
     if status:
-        count_stmt = (
-            select(func.count()).select_from(Application).where(Application.status == status)
-        )
+        count_stmt = count_stmt.where(Application.status == status)
     total = (await db.execute(count_stmt)).scalar_one()
 
     return ApplicationListOut(applications=app_outs, total=total)
@@ -270,13 +268,33 @@ async def add_application_event(application_id: int, body: CreateEventRequest, d
 
 
 class ApplyRequest(BaseModel):
-    method: str = "manual"  # "auto" | "assisted" | "manual"
+    method: Literal["auto", "assisted", "manual"] = "manual"
     apply_url: str = ""
     full_name: str = ""
     email: str = ""
     phone: str = ""
     location: str = ""
     additional_answers_json: str = ""
+
+    @field_validator("apply_url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        if v and not v.startswith(("http://", "https://")):
+            raise ValueError("apply_url must be http or https")
+        if len(v) > 2048:
+            raise ValueError("apply_url too long")
+        return v
+
+    @field_validator("additional_answers_json")
+    @classmethod
+    def validate_json(cls, v: str) -> str:
+        if v:
+            import json
+            try:
+                json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("additional_answers_json must be valid JSON")
+        return v[:5000]
 
 
 @router.post("/{match_id}/apply", status_code=200)

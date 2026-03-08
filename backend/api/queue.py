@@ -26,6 +26,7 @@ class JobOut(BaseModel):
     title: str
     company: str
     location: Optional[str] = None
+    country: Optional[str] = None
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
     url: str
@@ -79,6 +80,7 @@ async def get_queue(db: DBSession):
                     title=job.title,
                     company=job.company,
                     location=job.location,
+                    country=job.country,
                     salary_min=job.salary_min,
                     salary_max=job.salary_max,
                     url=job.url,

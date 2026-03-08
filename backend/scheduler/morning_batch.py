@@ -214,24 +214,34 @@ class MorningBatchScheduler:
         )
 
         if cv_path and cv_path.exists():
-            for i, (match_id, jd) in enumerate(
-                (mid, jd) for mid, (jd, _) in zip(top_ids, ranked[: len(top_ids)])
-            ):
-                try:
-                    output_dir = Path(settings.jobpilot_data_dir) / "cvs" / str(match_id)
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    tailored = await self._cv_pipeline.generate_tailored_cv(
+            pairs = list(zip(top_ids, [jd for jd, _ in ranked[: len(top_ids)]]))
+            sem = asyncio.Semaphore(3)  # cap concurrent Gemini calls
+
+            async def _gen_one(mid: int, jd: Any) -> tuple[int, Any]:
+                async with sem:
+                    out_dir = Path(settings.jobpilot_data_dir) / "cvs" / str(mid)
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    result = await self._cv_pipeline.generate_tailored_cv(
                         base_cv_path=cv_path,
                         job=jd,
-                        output_dir=output_dir,
+                        output_dir=out_dir,
                     )
-                    await self._store_tailored_doc(db, match_id, tailored, doc_type="cv")
-                    progress = 0.65 + 0.30 * ((i + 1) / max(len(top_ids), 1))
-                    await broadcast_status(
-                        f"CV {i + 1}/{len(top_ids)} generated", progress=progress
-                    )
-                except Exception as exc:
-                    logger.error("CV generation failed for match_id=%d: %s", match_id, exc)
+                    return mid, result
+
+            raw_results = await asyncio.gather(
+                *[_gen_one(mid, jd) for mid, jd in pairs],
+                return_exceptions=True,
+            )
+            done = 0
+            for i, outcome in enumerate(raw_results):
+                if isinstance(outcome, BaseException):
+                    logger.error("CV generation failed for match_id=%d: %s", pairs[i][0], outcome)
+                    continue
+                mid, tailored = outcome
+                await self._store_tailored_doc(db, mid, tailored, doc_type="cv")
+                done += 1
+                progress = 0.65 + 0.30 * (done / max(len(top_ids), 1))
+                await broadcast_status(f"CV {done}/{len(top_ids)} generated", progress=progress)
         else:
             logger.warning("No base CV path configured — skipping CV pre-generation")
 
@@ -283,11 +293,12 @@ class MorningBatchScheduler:
                 title=jd.title,
                 company=jd.company,
                 location=jd.location or "",
+                country=jd.country or "",
                 description=jd.description or "",
                 salary_min=jd.salary_min,
                 salary_max=jd.salary_max,
                 url=jd.url or "",
-                apply_url=jd.apply_url or "",
+                apply_url=jd.apply_url or jd.url or "",
                 apply_method=jd.apply_method or "",
                 posted_at=jd.posted_at,
             )
@@ -340,6 +351,7 @@ class MorningBatchScheduler:
             title=raw.title,
             company=raw.company,
             location=getattr(raw, "location", ""),
+            country=getattr(raw, "country", ""),
             description=getattr(raw, "description", ""),
             salary_min=getattr(raw, "salary_min", None),
             salary_max=getattr(raw, "salary_max", None),

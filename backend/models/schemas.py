@@ -24,6 +24,7 @@ class RawJob(BaseModel):
     apply_method: str = ""
     posted_at: Optional[datetime] = None
     source_name: str = ""
+    country: str = ""
     raw_data: Optional[dict] = None
 
 
@@ -43,3 +44,4 @@ class JobDetails(BaseModel):
     score: Optional[float] = None
     apply_url: str = ""
     apply_method: str = ""
+    country: str = ""

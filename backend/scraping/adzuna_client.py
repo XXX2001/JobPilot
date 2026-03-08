@@ -39,12 +39,13 @@ class AdzunaClient:
             "what": " ".join(keywords),
             "where": filters.locations[0] if filters.locations else "",
             "salary_min": filters.salary_min,
-            "full_time": 1 if "full-time" in (filters.job_types or []) else 0,
             "results_per_page": results_per_page,
-            "page": page,
         }
+        if "full-time" in (filters.job_types or []):
+            params["full_time"] = 1
         params = {k: v for k, v in params.items() if v is not None and v != ""}
         url = f"{self.BASE_URL}/{country}/search/{page}"
+        logger.debug("Adzuna request: url=%s params=%s", url, {k: v for k, v in params.items() if k != 'app_key'})
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, params=params)
             if response.status_code != 200:
@@ -52,7 +53,10 @@ class AdzunaClient:
                     f"Adzuna returned {response.status_code}: {response.text[:200]}"
                 )
             data = response.json()
-        return [self._parse_job(j) for j in data.get("results", [])]
+        jobs = [self._parse_job(j) for j in data.get("results", [])]
+        for job in jobs:
+            job.country = country
+        return jobs
 
     def _parse_job(self, data: dict) -> RawJob:
         return RawJob(

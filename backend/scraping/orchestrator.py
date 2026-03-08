@@ -12,8 +12,8 @@ import logging
 import random
 from typing import TYPE_CHECKING
 
-from backend.models.schemas import JobDetails, RawJob
-from backend.scraping.site_prompts import SITE_PROMPTS
+from backend.models.schemas import RawJob
+from backend.scraping.site_prompts import SITE_CONFIGS, SITE_PROMPTS
 
 if TYPE_CHECKING:
     from backend.matching.filters import JobFilters
@@ -24,6 +24,35 @@ if TYPE_CHECKING:
     from backend.scraping.session_manager import BrowserSessionManager
 
 logger = logging.getLogger(__name__)
+
+# Common location names → Adzuna 2-letter country codes
+LOCATION_TO_COUNTRY: dict[str, str] = {
+    "france": "fr", "paris": "fr", "lyon": "fr", "marseille": "fr",
+    "toulouse": "fr", "bordeaux": "fr", "strasbourg": "fr", "nantes": "fr",
+    "united kingdom": "gb", "uk": "gb", "london": "gb", "manchester": "gb",
+    "germany": "de", "berlin": "de", "munich": "de", "frankfurt": "de",
+    "deutschland": "de", "hamburg": "de",
+    "united states": "us", "usa": "us", "new york": "us",
+    "netherlands": "nl", "amsterdam": "nl",
+    "spain": "es", "madrid": "es", "barcelona": "es",
+    "italy": "it", "milan": "it", "rome": "it",
+    "belgium": "be", "brussels": "be", "bruxelles": "be",
+    "switzerland": "ch", "zurich": "ch", "geneva": "ch", "gen\u00e8ve": "ch",
+    "canada": "ca", "toronto": "ca", "montreal": "ca",
+    "australia": "au", "sydney": "au", "melbourne": "au",
+    "austria": "at", "vienna": "at", "wien": "at",
+    "poland": "pl", "warsaw": "pl",
+    "india": "in", "singapore": "sg", "brazil": "br",
+}
+
+
+def _normalize_country(raw: str) -> str:
+    """Normalise a country/location string to a 2-letter Adzuna code."""
+    key = raw.strip().lower()
+    # Already a valid 2-letter code?
+    if len(key) == 2 and key.isalpha():
+        return key
+    return LOCATION_TO_COUNTRY.get(key, "fr")  # default to fr for this user
 
 
 def _flatten_results(results: list) -> list[RawJob]:
@@ -36,22 +65,6 @@ def _flatten_results(results: list) -> list[RawJob]:
             flat.extend(r)
     return flat
 
-
-def _raw_job_to_details(job: RawJob) -> JobDetails:
-    """Convert a RawJob to JobDetails for matching."""
-    return JobDetails(
-        title=job.title,
-        company=job.company,
-        location=job.location,
-        description=job.description,
-        salary_min=job.salary_min,
-        salary_max=job.salary_max,
-        posted_at=job.posted_at,
-        posted_date=job.posted_at,
-        url=job.url,
-        apply_url=job.apply_url,
-        apply_method=job.apply_method,
-    )
 
 
 class ScrapingOrchestrator:
@@ -78,6 +91,8 @@ class ScrapingOrchestrator:
         keywords: list[str] | None = None,
         filters: "JobFilters | None" = None,
         sources: "list[JobSource] | None" = None,
+        location: str = "",
+        countries: list[str] | None = None,
     ) -> list[RawJob]:
         """Run the full morning scraping pipeline.
 
@@ -85,6 +100,8 @@ class ScrapingOrchestrator:
             keywords: Search keywords. Loaded from DB settings if None.
             filters:  JobFilters instance. Loaded from DB settings if None.
             sources:  List of JobSource ORM records. Loaded from DB if None.
+            location: User's target location string (e.g. "France", "Paris").
+            countries: List of 2-letter country codes (e.g. ["fr", "gb"]).
 
         Returns:
             Deduplicated list of RawJob records.
@@ -98,6 +115,11 @@ class ScrapingOrchestrator:
 
         all_jobs: list[RawJob] = []
 
+        logger.info(
+            "run_morning_batch: %d sources, %d keywords, location=%r, countries=%r",
+            len(sources), len(keywords), location, countries,
+        )
+
         # ------------------------------------------------------------------
         # Phase 1 — API sources (fast, parallel)
         # ------------------------------------------------------------------
@@ -107,7 +129,7 @@ class ScrapingOrchestrator:
             api_tasks = []
             for src in api_sources:
                 src_config = src.config or {}
-                country = src_config.get("country", "gb")
+                country = _normalize_country(src_config.get("country", "fr"))
                 task = asyncio.create_task(
                     self.adzuna.search(keywords=keywords, filters=filters, country=country)
                     if filters
@@ -127,11 +149,12 @@ class ScrapingOrchestrator:
             await broadcast_status("Phase 1: Fetching from Adzuna (default)…", progress=0.1)
             try:
                 f = filters if filters is not None else _empty_filters()
-                jobs = await self.adzuna.search(keywords=keywords, filters=f)
+                country = _normalize_country(countries[0]) if countries else _normalize_country(location) if location else "fr"
+                jobs = await self.adzuna.search(keywords=keywords, filters=f, country=country)
                 all_jobs.extend(jobs)
-                await broadcast_status(f"Phase 1 done: {len(jobs)} jobs from Adzuna", progress=0.3)
+                logger.info("Phase 1 (default Adzuna): %d jobs, country=%s, keywords=%s", len(jobs), country, keywords)
             except Exception as exc:
-                logger.warning("Default Adzuna search failed: %s", exc)
+                logger.warning("Default Adzuna search failed: %s", exc, exc_info=True)
 
         # ------------------------------------------------------------------
         # Phase 2 — Browser sources (sequential, human-like delay)
@@ -144,7 +167,9 @@ class ScrapingOrchestrator:
             for source in browser_sources:
                 try:
                     # Get or create persistent login session if available
-                    if self.session_mgr:
+                    # Only request login for sites that actually need it
+                    site_cfg = SITE_CONFIGS.get(source.name, {})
+                    if self.session_mgr and site_cfg.get("requires_login", False):
                         try:
                             await self.session_mgr.get_or_create_session(source.name)
                         except Exception as exc:
@@ -158,7 +183,13 @@ class ScrapingOrchestrator:
                         url=source.url or "",
                         keywords=keywords,
                         prompt_template=prompt_template,
+                        site=source.name,
+                        location=location,
                     )
+                    src_country = (source.config or {}).get("country", "")
+                    for job in jobs:
+                        if not job.country:
+                            job.country = src_country or _normalize_country(location)
                     all_jobs.extend(jobs)
                     logger.info("Phase 2: %d jobs from %s", len(jobs), source.name)
                     await broadcast_status(
@@ -167,9 +198,9 @@ class ScrapingOrchestrator:
                 except Exception as exc:
                     logger.warning("Phase 2: scraping %s failed (continuing): %s", source.name, exc)
 
-                # Human-like delay between sites
+                # Brief delay between sites to avoid hammering servers
                 if browser_sources.index(source) < len(browser_sources) - 1:
-                    delay = random.uniform(3, 8)
+                    delay = random.uniform(1, 3)
                     logger.debug("Sleeping %.1fs before next browser source", delay)
                     await asyncio.sleep(delay)
 
@@ -185,12 +216,16 @@ class ScrapingOrchestrator:
                         url=s.url or "",
                         keywords=keywords,
                         prompt_template=s.prompt_template or SITE_PROMPTS["lab_website"],
+                        location=location,
                     )
                 )
                 for s in lab_sources
             ]
             lab_results = await asyncio.gather(*lab_tasks, return_exceptions=True)
             phase3_jobs = _flatten_results(list(lab_results))
+            for job in phase3_jobs:
+                if not job.country:
+                    job.country = _normalize_country(location)
             all_jobs.extend(phase3_jobs)
             logger.info("Phase 3 done: %d jobs from lab URLs", len(phase3_jobs))
             await broadcast_status(

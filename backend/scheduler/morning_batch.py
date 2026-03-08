@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
+from backend.config import settings
 from backend.matching.filters import JobFilters
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
@@ -37,6 +38,45 @@ except ImportError:
     _APSCHEDULER_AVAILABLE = False
     AsyncIOScheduler = None  # type: ignore
     CronTrigger = None  # type: ignore
+
+def _extract_json_list(value: Any, key: str) -> list[str]:
+    """Extract a list from a JSON column that may be a list or a dict.
+
+    The frontend stores these as ``{"include": [...]}`` or ``{"items": [...]}``.
+    This helper handles both shapes safely.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return list(value.get(key, []))
+    return []
+
+
+def _resolve_cv_path(profile_row: Any, data_dir: Path) -> Path | None:
+    """Return the CV path to use for this batch run.
+
+    Resolution order:
+    1. ``profile_row.base_cv_path`` — if set *and* the file exists, use it.
+    2. Auto-detect: scan ``<data_dir>/templates/`` for ``*.tex`` files and pick
+       the alphabetically first one (deterministic across runs).
+    3. Return ``None`` if no CV can be found.
+
+    A warning is logged whenever we fall back to auto-detection.
+    """
+    if profile_row and profile_row.base_cv_path:
+        candidate = Path(profile_row.base_cv_path)
+        if candidate.exists():
+            return candidate
+
+    # Fallback: scan the templates directory
+    templates_dir = data_dir / "templates"
+    candidates = sorted(templates_dir.glob("*.tex")) if templates_dir.is_dir() else []
+    if candidates:
+        cv_path = candidates[0]
+        logger.warning("No base_cv_path in profile — using auto-detected CV: %s", cv_path)
+        return cv_path
+
+    return None
 
 
 class MorningBatchScheduler:
@@ -121,32 +161,32 @@ class MorningBatchScheduler:
         profile_row = await self._load_profile(db)
         sources = await self._load_sources(db)
 
-        keywords: list[str] = (
-            settings_row.keywords
-            if isinstance(settings_row.keywords, list)
-            else list(settings_row.keywords or [])
-        )
+        keywords: list[str] = _extract_json_list(settings_row.keywords, "include")
         daily_limit: int = settings_row.daily_limit or 10
-        cv_path = (
-            Path(profile_row.base_cv_path) if (profile_row and profile_row.base_cv_path) else None
+        cv_path = _resolve_cv_path(
+            profile_row, data_dir=Path(settings.jobpilot_data_dir)
         )
 
         filters = JobFilters(
             keywords=keywords,
-            locations=list(settings_row.locations or []),
+            locations=_extract_json_list(settings_row.locations, "items"),
             salary_min=settings_row.salary_min,
             remote_only=bool(settings_row.remote_only),
-            excluded_keywords=list(settings_row.excluded_keywords or []),
-            excluded_companies=list(settings_row.excluded_companies or []),
+            excluded_keywords=_extract_json_list(settings_row.excluded_keywords, "items"),
+            excluded_companies=_extract_json_list(settings_row.excluded_companies, "items"),
             min_score=float(settings_row.min_match_score),
         )
 
         # ── Step 1: Scrape ───────────────────────────────────────────────
         await broadcast_status("Searching for jobs…", progress=0.05)
+        location = filters.locations[0] if filters.locations else ""
+        countries = _extract_json_list(settings_row.countries, "items") if settings_row.countries else []
         raw_jobs = await self._scraper.run_morning_batch(
             keywords=keywords,
             filters=filters,
             sources=sources,
+            location=location,
+            countries=countries,
         )
         logger.info("Scraped %d raw jobs", len(raw_jobs))
         await broadcast_status(f"Found {len(raw_jobs)} raw jobs — ranking…", progress=0.35)
@@ -178,9 +218,7 @@ class MorningBatchScheduler:
                 (mid, jd) for mid, (jd, _) in zip(top_ids, ranked[: len(top_ids)])
             ):
                 try:
-                    from backend.config import settings as _settings
-
-                    output_dir = Path(_settings.jobpilot_data_dir) / "cvs" / str(match_id)
+                    output_dir = Path(settings.jobpilot_data_dir) / "cvs" / str(match_id)
                     output_dir.mkdir(parents=True, exist_ok=True)
                     tailored = await self._cv_pipeline.generate_tailored_cv(
                         base_cv_path=cv_path,

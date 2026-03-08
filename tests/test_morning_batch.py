@@ -29,7 +29,7 @@ class MockScraper:
     def __init__(self, jobs=None):
         self._jobs = jobs or []
 
-    async def run_morning_batch(self, keywords, filters, sources):
+    async def run_morning_batch(self, keywords, filters, sources, **kwargs):
         return self._jobs
 
 

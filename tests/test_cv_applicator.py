@@ -1,6 +1,5 @@
 """Tests for CVApplicator — applies CVReplacement items with safety checks."""
 from __future__ import annotations
-import pytest
 from backend.latex.applicator import CVApplicator
 from backend.llm.validators import CVReplacement
 

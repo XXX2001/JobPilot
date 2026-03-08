@@ -67,8 +67,13 @@ class CVPipeline:
         output_dir.mkdir(parents=True, exist_ok=True)
         dest_tex = output_dir / "cv.tex"
 
-        # 1. Copy — never mutate the base file
+        # 1. Copy — never mutate the base file.
+        # Also copy any .cls/.sty support files from the same directory so
+        # tectonic can resolve \documentclass and \usepackage references.
         shutil.copy2(base_cv_path, dest_tex)
+        for support_file in base_cv_path.parent.iterdir():
+            if support_file.suffix.lower() in {".cls", ".sty", ".jpg", ".jpeg", ".png", ".pdf", ".eps"}:
+                shutil.copy2(support_file, output_dir / support_file.name)
         cv_tex = dest_tex.read_text(encoding="utf-8")
 
         diff: list[DiffEntry] = []
@@ -158,6 +163,9 @@ class LetterPipeline:
         dest_tex = output_dir / "letter.tex"
 
         shutil.copy2(base_letter_path, dest_tex)
+        for support_file in base_letter_path.parent.iterdir():
+            if support_file.suffix.lower() in {".cls", ".sty", ".jpg", ".jpeg", ".png", ".pdf", ".eps"}:
+                shutil.copy2(support_file, output_dir / support_file.name)
         tex_content = dest_tex.read_text(encoding="utf-8")
         sections = self._parser.extract_sections(tex_content)
 

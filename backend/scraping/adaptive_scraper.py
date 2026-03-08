@@ -164,9 +164,9 @@ class AdaptiveScraper:
                     task=prompt,
                     llm=llm,
                     browser=browser,
-                    max_steps=10,
+                    max_steps=20,
                 )
-                result = await asyncio.wait_for(agent.run(), timeout=120)
+                result = await asyncio.wait_for(agent.run(), timeout=180)
                 return self._parse_agent_result(result, source_url=url)
             except Exception as exc:
                 last_exc = exc

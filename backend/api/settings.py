@@ -67,6 +67,7 @@ class SearchSettingsOut(BaseModel):
     daily_limit: int
     batch_time: str
     min_match_score: float
+    countries: Optional[dict] = None
 
 
 class SearchSettingsUpdate(BaseModel):
@@ -83,6 +84,7 @@ class SearchSettingsUpdate(BaseModel):
     daily_limit: Optional[int] = None
     batch_time: Optional[str] = None
     min_match_score: Optional[float] = None
+    countries: Optional[dict] = None
 
 
 class SourcesUpdate(BaseModel):
@@ -203,6 +205,7 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             daily_limit=body.daily_limit if body.daily_limit is not None else 10,
             batch_time=body.batch_time or "08:00",
             min_match_score=body.min_match_score if body.min_match_score is not None else 30.0,
+            countries=body.countries,
         )
         db.add(ss)
     else:
@@ -232,6 +235,8 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             ss.batch_time = body.batch_time
         if body.min_match_score is not None:
             ss.min_match_score = body.min_match_score
+        if body.countries is not None:
+            ss.countries = body.countries
 
     await db.commit()
     await db.refresh(ss)
@@ -293,6 +298,10 @@ async def get_setup_status(db: DBSession):
     base_cv_uploaded = False
     if profile and profile.base_cv_path:
         base_cv_uploaded = Path(profile.base_cv_path).exists()
+
+    if not base_cv_uploaded:
+        templates_dir = Path(settings.jobpilot_data_dir) / "templates"
+        base_cv_uploaded = any(templates_dir.glob("*.tex"))
 
     setup_complete = gemini_key_set and adzuna_key_set and base_cv_uploaded
 

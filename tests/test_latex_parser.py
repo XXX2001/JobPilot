@@ -1,16 +1,37 @@
 from __future__ import annotations
-from pathlib import Path
-import pytest
 
 from backend.latex.parser import LaTeXParser
 from backend.latex.injector import LaTeXInjector
 
 
-FIXTURE = Path(__file__).parent / "fixtures" / "sample_cv.tex"
+# Inline fixture with JOBPILOT markers — used by LaTeXParser / LaTeXInjector tests.
+# sample_cv.tex no longer has markers (new pipeline is marker-free), so we keep
+# a self-contained marker string here for the LetterPipeline-compatible parser tests.
+MARKER_TEX = """\
+\\documentclass{article}
+\\begin{document}
+
+% --- JOBPILOT:SUMMARY:START ---
+Experienced software engineer with 5 years in distributed systems.
+% --- JOBPILOT:SUMMARY:END ---
+
+\\section{Experience}
+% --- JOBPILOT:EXPERIENCE:START ---
+\\textbf{Software Engineer} \\hfill 2022--Present \\\\
+\\textit{TechCorp}
+\\begin{itemize}
+    \\item Designed distributed data pipeline processing 10TB/day
+    \\item Led migration to microservices, reducing deploy time by 80\\%
+    \\item Mentored 3 junior engineers on system design
+\\end{itemize}
+% --- JOBPILOT:EXPERIENCE:END ---
+
+\\end{document}
+"""
 
 
 def read_fixture() -> str:
-    return FIXTURE.read_text(encoding="utf8")
+    return MARKER_TEX
 
 
 def test_extract_with_markers():

@@ -69,3 +69,10 @@ def test_cv_replacement_confidence_threshold():
     high = CVReplacement(section="Profile", original_text="x", replacement_text="y",
                          reason="test", job_requirement_matched="req", confidence=0.95)
     assert high.is_applicable()
+
+
+def test_cv_modifier_output_empty_replacements():
+    """top_three() on an empty CVModifierOutput returns empty list."""
+    from backend.llm.validators import CVModifierOutput
+    output = CVModifierOutput()
+    assert output.top_three() == []

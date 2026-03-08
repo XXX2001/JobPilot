@@ -12,6 +12,7 @@
 		location: string;
 		salary_min?: number;
 		salary_max?: number;
+		description?: string;
 		url: string;
 		apply_url: string;
 		apply_method: string;

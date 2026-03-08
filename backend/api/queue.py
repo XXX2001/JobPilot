@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from backend.api.deps import DBSession
@@ -29,10 +29,13 @@ class JobOut(BaseModel):
     country: Optional[str] = None
     salary_min: Optional[float] = None
     salary_max: Optional[float] = None
+    description: Optional[str] = None
     url: str
     apply_url: str
     apply_method: str
     posted_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class QueueMatchOut(BaseModel):
@@ -83,6 +86,7 @@ async def get_queue(db: DBSession):
                     country=job.country,
                     salary_min=job.salary_min,
                     salary_max=job.salary_max,
+                    description=job.description,
                     url=job.url,
                     apply_url=job.apply_url,
                     apply_method=job.apply_method,

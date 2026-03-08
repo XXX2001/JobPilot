@@ -8,6 +8,7 @@
 		SkipForward,
 		ExternalLink
 	} from 'lucide-svelte';
+	import DiffBlock from './DiffBlock.svelte';
 
 	interface Job {
 		id: number;
@@ -19,6 +20,7 @@
 		apply_method: string;
 		salary_min?: number;
 		salary_max?: number;
+		description?: string;
 	}
 	interface QueueMatch {
 		id: number;
@@ -59,6 +61,8 @@
 	let running = $state(false);
 	let runResults = $state<{ matchId: number; ok: boolean; msg: string }[]>([]);
 	let panelPhase = $state<PanelPhase>('review');
+	let cvTab = $state<'diff' | 'pdf'>('diff');
+	let letterTab = $state<'diff' | 'pdf'>('diff');
 
 	const current = $derived(matches[cursor]);
 
@@ -80,7 +84,11 @@
 	}
 
 	$effect(() => {
-		if (current) loadDiff(current.id);
+		if (current) {
+			loadDiff(current.id);
+			cvTab = 'diff';
+			letterTab = 'diff';
+		}
 	});
 
 	function decide(decision: Decision) {
@@ -204,50 +212,75 @@
 					{current.job.salary_max ? `£${current.job.salary_max.toLocaleString()}` : '?'}
 				</p>
 			{/if}
+
+			{#if current.job.description}
+				<div class="mt-4">
+					<h4 class="text-muted-foreground mb-2 text-xs font-semibold uppercase">Description</h4>
+					<div class="max-h-[400px] overflow-y-auto text-sm leading-relaxed text-zinc-300">
+						{current.job.description}
+					</div>
+				</div>
+			{/if}
 		</div>
 
-		<!-- RIGHT: CV diff -->
-		<div class="border-border overflow-y-auto rounded-lg border p-4">
-			<p class="text-muted-foreground mb-3 text-xs font-medium uppercase tracking-wide">
-				Proposed CV changes
-			</p>
+		<!-- RIGHT: CV diff / PDF -->
+		<div class="border-border flex flex-col overflow-hidden rounded-lg border">
+			<!-- Tab bar -->
+			<div class="flex border-b border-zinc-700">
+				<button
+					class="px-4 py-2 text-sm font-medium {cvTab === 'diff'
+						? 'border-b-2 border-blue-500 text-blue-400'
+						: 'text-zinc-400 hover:text-zinc-200'}"
+					onclick={() => (cvTab = 'diff')}
+				>
+					Diff View
+				</button>
+				<button
+					class="px-4 py-2 text-sm font-medium {cvTab === 'pdf'
+						? 'border-b-2 border-blue-500 text-blue-400'
+						: 'text-zinc-400 hover:text-zinc-200'}"
+					onclick={() => (cvTab = 'pdf')}
+				>
+					PDF Preview
+				</button>
+			</div>
 
-			{#if diffLoading}
-				<div class="space-y-3">
-					{#each Array(3) as _}
-						<div class="bg-muted/30 h-20 animate-pulse rounded-lg"></div>
-					{/each}
+			{#if cvTab === 'diff'}
+				<div class="flex-1 overflow-y-auto p-4">
+					{#if diffLoading}
+						<div class="space-y-3">
+							{#each Array(3) as _}
+								<div class="bg-muted/30 h-20 animate-pulse rounded-lg"></div>
+							{/each}
+						</div>
+					{:else}
+						{@const currentDiffs = diffs.get(current.id) ?? []}
+						{#if currentDiffs.length === 0}
+							<div class="flex flex-col items-center justify-center gap-2 py-12 text-center">
+								<p class="text-muted-foreground text-sm">No changes — base CV will be used as-is.</p>
+							</div>
+						{:else}
+							<div class="space-y-4">
+								{#each currentDiffs as entry}
+									<DiffBlock
+										section={entry.section}
+										originalText={entry.original_text}
+										editedText={entry.edited_text}
+										reason={entry.change_description}
+									/>
+								{/each}
+							</div>
+						{/if}
+					{/if}
 				</div>
 			{:else}
-				{@const currentDiffs = diffs.get(current.id) ?? []}
-				{#if currentDiffs.length === 0}
-					<div class="flex flex-col items-center justify-center gap-2 py-12 text-center">
-						<p class="text-muted-foreground text-sm">No changes — base CV will be used as-is.</p>
-					</div>
-				{:else}
-					<div class="space-y-4">
-						{#each currentDiffs as entry}
-							<div class="border-border overflow-hidden rounded-lg border">
-								<div class="border-border bg-muted/30 border-b px-3 py-1.5">
-									<span class="text-xs font-medium">{entry.section}</span>
-									{#if entry.change_description}
-										<span class="text-muted-foreground ml-2 text-xs">— {entry.change_description}</span>
-									{/if}
-								</div>
-								<div class="space-y-2 p-3">
-									<p class="text-muted-foreground text-xs leading-relaxed line-through">
-										{entry.original_text}
-									</p>
-									<p
-										class="rounded border border-green-500/20 bg-green-500/10 px-2 py-1 text-xs leading-relaxed text-green-300"
-									>
-										{entry.edited_text}
-									</p>
-								</div>
-							</div>
-						{/each}
-					</div>
-				{/if}
+				<iframe
+					src="/api/documents/{current.id}/cv/pdf"
+					class="flex-1 rounded-b border-0"
+					style="height: calc(100% - 48px)"
+					title="Tailored CV PDF"
+					onerror={() => (cvTab = 'diff')}
+				></iframe>
 			{/if}
 		</div>
 	</div>

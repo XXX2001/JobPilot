@@ -2,7 +2,7 @@
 	import { apiFetch } from '$lib/api';
 	import ScoreIndicator from './ScoreIndicator.svelte';
 	import { send } from '$lib/stores/websocket';
-	import { Briefcase, MapPin, DollarSign, Clock, ExternalLink, Eye, FileText, ChevronDown } from 'lucide-svelte';
+	import { Briefcase, MapPin, DollarSign, Clock, ExternalLink, Eye, FileText, ChevronDown, ChevronUp } from 'lucide-svelte';
 	import { createEventDispatcher } from 'svelte';
 
 	interface JobMatch {
@@ -18,6 +18,7 @@
 			location: string;
 			salary_min?: number;
 			salary_max?: number;
+			description?: string;
 			url: string;
 			apply_url: string;
 			apply_method: string;
@@ -30,6 +31,7 @@
 
 	let showMethodMenu = $state(false);
 	let applying = $state(false);
+	let expanded = $state(false);
 
 	const timeAgo = (dateStr?: string) => {
 		if (!dateStr) return '';
@@ -96,6 +98,40 @@
 				</span>
 			</div>
 		</div>
+	</div>
+
+	<!-- Apply URL + expandable description -->
+	<div class="mt-2 ml-[52px]">
+		{#if match.job.apply_url}
+			{@const applyHost = (() => { try { return new URL(match.job.apply_url).hostname; } catch { return match.job.apply_url; } })()}
+			<a
+				href={match.job.apply_url}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="inline-flex items-center gap-1 text-xs text-blue-400/70 hover:text-blue-400 truncate max-w-[200px]"
+			>
+				<ExternalLink size={12} />{applyHost}
+			</a>
+		{/if}
+
+		{#if match.job.description}
+			<button
+				class="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300 mt-1"
+				onclick={() => (expanded = !expanded)}
+			>
+				{#if expanded}
+					<ChevronUp size={14} /> Hide description
+				{:else}
+					<ChevronDown size={14} /> Show description
+				{/if}
+			</button>
+
+			{#if expanded}
+				<div class="mt-2 text-xs text-zinc-400 leading-relaxed bg-zinc-800/30 rounded p-3 max-h-[300px] overflow-y-auto">
+					{match.job.description}
+				</div>
+			{/if}
+		{/if}
 	</div>
 
 	<!-- Actions -->

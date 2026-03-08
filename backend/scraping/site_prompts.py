@@ -133,14 +133,21 @@ SITE_PROMPTS: dict[str, str] = {
 
     "google_jobs": """
 
-        Go to Google and search: {keywords} jobs {location}
+        Navigate DIRECTLY to this URL (do not use the search box):
+        https://{google_domain}/search?q={keywords}+emplois+{location}&ibp=htl;jobs
 
-        Click on the "Jobs" tab or section in Google results if it appears.
+        If the page shows a location/cookie consent popup, dismiss it by clicking "Reject all",
+        "No thanks", or pressing Escape — then continue.
 
-        Extract job listings from the Google Jobs panel/section.
-        Do NOT click on individual job cards to open them — read data from the panel list only.
+        Wait for the Google Jobs panel to appear in the search results.
+        If the "Jobs" tab/section is not visible, try:
+        https://{google_domain}/search?q={keywords}+jobs+{location}
+        and look for the Jobs section.
 
-        For each job (up to {max_jobs}), extract:
+        Extract job listings from the Google Jobs panel.
+        Do NOT click on individual job cards — read all data from the panel list without clicking.
+
+        For each job visible in the panel (up to {max_jobs}), extract:
 
         - title: The full job title
 
@@ -152,11 +159,11 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted (null if not shown)
 
-        - description_preview: First 200 chars of any description visible in the panel
+        - description_preview: Any description snippet visible in the panel (null if not shown)
 
-        - apply_url: The link to the original job posting (found in the job card href or "Apply" link)
+        - apply_url: The href/link of the job card or "Apply" button pointing to the original posting
 
-        If there is no Jobs panel, extract from the regular search results instead.
+        If there is no Jobs panel at all, extract job listings from the regular search results.
 
         Return the results as a JSON array.
 
@@ -499,6 +506,15 @@ def format_prompt(site: str, **kwargs) -> str:
     }
     _country_domain = _INDEED_DOMAINS.get(_country_code, f"{_country_code}.indeed.com")
 
+    _GOOGLE_DOMAINS = {
+        "fr": "www.google.fr", "gb": "www.google.co.uk", "de": "www.google.de",
+        "es": "www.google.es", "it": "www.google.it", "nl": "www.google.nl",
+        "be": "www.google.be", "ca": "www.google.ca", "au": "www.google.com.au",
+        "us": "www.google.com", "in": "www.google.co.in", "br": "www.google.com.br",
+        "sg": "www.google.com.sg",
+    }
+    _google_domain = _GOOGLE_DOMAINS.get(_country_code, "www.google.com")
+
     defaults: dict[str, str] = {
 
         "keywords": "",
@@ -512,6 +528,8 @@ def format_prompt(site: str, **kwargs) -> str:
         "country_code": _country_code,
 
         "country_domain": _country_domain,
+
+        "google_domain": _google_domain,
 
         "apply_url": "",
 

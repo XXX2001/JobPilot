@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.assisted_apply import AssistedApplyStrategy
@@ -27,11 +27,11 @@ class ApplyMode(str, Enum):
 
 
 class ApplicantInfo(BaseModel):
-    full_name: str = ""
-    email: str = ""
-    phone: str = ""
-    location: str = ""
-    additional_answers_json: str = ""
+    full_name: str = Field("", max_length=200)
+    email: str = Field("", max_length=254)
+    phone: str = Field("", max_length=30)
+    location: str = Field("", max_length=200)
+    additional_answers_json: str = Field("", max_length=5000)
 
 
 class ApplicationEngine:
@@ -104,7 +104,13 @@ class ApplicationEngine:
                     message=str(exc),
                 )
 
-        # Set up per-job events
+        # Set up per-job events — guard against concurrent apply for same job
+        if job_match_id in self._confirm_events:
+            return ApplicationResult(
+                status="cancelled",
+                method=mode.value,
+                message=f"Job {job_match_id} already has an application in progress.",
+            )
         self._confirm_events[job_match_id] = asyncio.Event()
         self._cancel_events[job_match_id] = asyncio.Event()
 

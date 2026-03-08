@@ -11,6 +11,7 @@ from backend.llm.gemini_client import GeminiClient, GeminiJSONError
 from backend.llm.prompts import MOTIVATION_LETTER_PROMPT
 from backend.llm.validators import LetterEdit
 from backend.models.schemas import JobDetails
+from backend.security.sanitizer import sanitize_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +61,11 @@ class CVEditor:
         )
 
         prompt = MOTIVATION_LETTER_PROMPT.format(
-            job_title=job.title,
-            company=job.company,
-            job_description_excerpt=self._excerpt(job.description),
+            job_title=sanitize_for_prompt(job.title, 300, "title"),
+            company=sanitize_for_prompt(job.company, 200, "company"),
+            job_description_excerpt=sanitize_for_prompt(
+                self._excerpt(job.description), 500, "description"
+            ),
             letter_content=letter_content,
         )
 

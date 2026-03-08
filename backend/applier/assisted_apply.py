@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 
 from backend.applier.manual_apply import ApplicationResult
+from backend.security.sanitizer import sanitize_url
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,12 @@ class AssistedApplyStrategy:
         cv_pdf: Path | None = None,
         letter_pdf: Path | None = None,
     ) -> ApplicationResult:
+        apply_url = sanitize_url(apply_url)
+        if not apply_url:
+            return ApplicationResult(
+                status="cancelled", method="assisted", message="Invalid apply URL"
+            )
+
         if not _BROWSER_USE_AVAILABLE or Agent is None:
             logger.warning("browser-use not available — falling back to manual open")
             import webbrowser

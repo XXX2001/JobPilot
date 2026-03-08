@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from backend.applier.manual_apply import ApplicationResult
+from backend.security.sanitizer import sanitize_url
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,12 @@ class AutoApplyStrategy:
     ) -> ApplicationResult:
         """Run the fill-out phase, broadcast for review, then submit or cancel."""
 
+        apply_url = sanitize_url(apply_url)
+        if not apply_url:
+            return ApplicationResult(
+                status="cancelled", method="auto", message="Invalid apply URL"
+            )
+
         if not _BROWSER_USE_AVAILABLE or Agent is None:
             logger.warning("browser-use not available — falling back to manual open")
             import webbrowser
@@ -85,12 +92,12 @@ class AutoApplyStrategy:
         filled_fields: dict[str, str] = {}
         screenshot_b64: str | None = None
 
+        browser = Browser(headless=False)
         try:
             llm = ChatGoogleGenerativeAI(
                 model=self._model,
                 google_api_key=self._api_key,
             )
-            browser = Browser(headless=False)
             agent = Agent(task=fill_task, llm=llm, browser=browser)
             result = await agent.run()
 
@@ -105,12 +112,20 @@ class AutoApplyStrategy:
                 except Exception:
                     pass
 
-            # Grab screenshot if available
+            # Grab screenshot if available (validate size)
             if hasattr(result, "screenshot_base64"):
-                screenshot_b64 = result.screenshot_base64
+                ss = result.screenshot_base64
+                if isinstance(ss, str) and len(ss) < 5_000_000:  # 5MB max
+                    screenshot_b64 = ss
+                else:
+                    logger.warning("Screenshot data invalid or too large, skipping")
 
         except Exception as exc:
             logger.error("Auto-apply fill phase failed for job_id=%d: %s", job_id, exc)
+            try:
+                await browser.stop()
+            except Exception:
+                pass
             return ApplicationResult(
                 status="cancelled",
                 method="auto",
@@ -160,6 +175,10 @@ class AutoApplyStrategy:
 
         if not confirmed:
             logger.info("User cancelled auto-apply for job_id=%d", job_id)
+            try:
+                await browser.stop()
+            except Exception:
+                pass
             return ApplicationResult(
                 status="cancelled", method="auto", message="Cancelled by user."
             )
@@ -185,6 +204,11 @@ class AutoApplyStrategy:
                 method="auto",
                 message=f"Submit phase failed: {exc}",
             )
+        finally:
+            try:
+                await browser.stop()
+            except Exception:
+                pass
 
 
 __all__ = ["AutoApplyStrategy"]

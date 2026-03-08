@@ -15,6 +15,7 @@ from typing import Any
 from backend.config import settings
 from backend.models.schemas import JobDetails, RawJob
 from backend.scraping.site_prompts import SITE_PROMPTS, format_prompt
+from backend.security.sanitizer import sanitize_for_prompt, sanitize_url
 
 logger = logging.getLogger(__name__)
 
@@ -315,16 +316,29 @@ Do NOT click the apply button. Just extract and return JSON.
             if not isinstance(item, dict):
                 continue
             try:
+                raw_url = str(item.get("apply_url") or item.get("url") or source_url)
+                clean_url = sanitize_url(raw_url) or sanitize_url(source_url)
                 job = RawJob(
-                    title=str(item.get("title") or "Unknown Title"),
-                    company=str(item.get("company") or "Unknown Company"),
-                    location=str(item.get("location") or ""),
-                    salary_text=str(item.get("salary") or ""),
-                    description=str(
-                        item.get("description_preview") or item.get("description") or ""
+                    title=sanitize_for_prompt(
+                        str(item.get("title") or "Unknown Title"), 300, "title"
                     ),
-                    url=str(item.get("apply_url") or item.get("url") or source_url),
-                    apply_url=str(item.get("apply_url") or item.get("url") or source_url),
+                    company=sanitize_for_prompt(
+                        str(item.get("company") or "Unknown Company"), 200, "company"
+                    ),
+                    location=sanitize_for_prompt(
+                        str(item.get("location") or ""), 200, "location"
+                    ),
+                    salary_text=sanitize_for_prompt(
+                        str(item.get("salary") or ""), 100, "salary"
+                    ),
+                    description=sanitize_for_prompt(
+                        str(
+                            item.get("description_preview") or item.get("description") or ""
+                        ),
+                        2000, "description",
+                    ),
+                    url=clean_url,
+                    apply_url=clean_url,
                     apply_method=str(item.get("apply_method") or ""),
                     source_name="browser",
                     raw_data=item,

@@ -4,10 +4,12 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 from backend.latex.compiler import LaTeXCompiler
 from backend.latex.injector import LaTeXInjector
 from backend.latex.parser import LaTeXParser
+from backend.llm.gemini_client import GeminiJSONError, GeminiRateLimitError
 from backend.models.schemas import JobDetails
 
 logger = logging.getLogger(__name__)
@@ -56,7 +58,7 @@ class CVPipeline:
         self._job_analyzer = job_analyzer   # backend.llm.job_analyzer.JobAnalyzer
         self._cv_modifier = cv_modifier     # backend.llm.cv_modifier.CVModifier
         self._cv_applicator = cv_applicator # backend.latex.applicator.CVApplicator
-        self._context_cache: dict[int, object] = {}  # job_id → JobContext
+        self._context_cache: dict[int, tuple[float, object]] = {}  # job_id → (timestamp, context)
 
     async def generate_tailored_cv(
         self,
@@ -81,15 +83,24 @@ class CVPipeline:
             and self._cv_applicator is not None
         ):
             try:
-                # 2. JobAnalyzer (cached per job_id)
+                # 2. JobAnalyzer (cached per job_id with 1-hour TTL)
                 job_id = job.id
+                context = None
                 if job_id is not None and job_id in self._context_cache:
-                    context = self._context_cache[job_id]
-                    logger.debug("Using cached JobContext for job_id=%s", job_id)
-                else:
+                    ts, cached = self._context_cache[job_id]
+                    if monotonic() - ts < 3600:  # 1 hour TTL
+                        context = cached
+                        logger.debug("Using cached JobContext for job_id=%s", job_id)
+                    else:
+                        del self._context_cache[job_id]
+                if context is None:
                     context = await self._job_analyzer.analyze(job)
                     if job_id is not None:
-                        self._context_cache[job_id] = context
+                        # Evict oldest entry if cache exceeds 100 items
+                        if len(self._context_cache) >= 100:
+                            oldest_key = next(iter(self._context_cache))
+                            del self._context_cache[oldest_key]
+                        self._context_cache[job_id] = (monotonic(), context)
                         logger.debug("Cached JobContext for job_id=%s", job_id)
 
                 # 3. CVModifier
@@ -111,9 +122,15 @@ class CVPipeline:
                 ]
                 cv_tailored = bool(diff)
 
+            except (GeminiRateLimitError, GeminiJSONError) as exc:
+                logger.warning("CV modifier LLM error (%s); using base CV unchanged.", exc)
+                cv_tex = dest_tex.read_text(encoding="utf-8")
+                diff = []
             except Exception as exc:
-                logger.warning("CV modifier failed (%s); using base CV unchanged.", exc)
-                # Reset to the unmodified copy
+                logger.error(
+                    "CV modifier unexpected failure (%s: %s); using base CV unchanged.",
+                    type(exc).__name__, exc, exc_info=True,
+                )
                 cv_tex = dest_tex.read_text(encoding="utf-8")
                 diff = []
 
@@ -170,8 +187,13 @@ class LetterPipeline:
                         letter_edit.edited_paragraph,
                         letter_edit.company_name,
                     )
+            except (GeminiRateLimitError, GeminiJSONError) as exc:
+                logger.warning("Letter editor LLM error (%s); using base letter.", exc)
             except Exception as exc:
-                logger.warning("Letter editor failed (%s); using base letter.", exc)
+                logger.error(
+                    "Letter editor unexpected failure (%s: %s); using base letter.",
+                    type(exc).__name__, exc, exc_info=True,
+                )
 
         dest_tex.write_text(tex_content, encoding="utf-8")
         pdf_path = await self._compiler.compile(dest_tex, output_dir)

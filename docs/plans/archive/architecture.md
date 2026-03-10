@@ -216,11 +216,41 @@ Internal Alembic migration tracking.
 ```
 MorningBatchScheduler.run_batch()
     │
-    ├─ ScrapingOrchestrator.run_morning_batch()
-    │      ├─ AdzunaClient.search() → List[RawJob]
-    │      ├─ AdaptiveScraper.scrape(site) → List[RawJob]  (per configured site)
-    │      └─ JobDeduplicator.deduplicate() → List[RawJob]
-    │                → INSERT INTO jobs (new only)
+    ├─ _load_settings(db)
+    │      │
+    │      │  ⚠ keywords are stored as JSON dicts, not plain lists:
+    │      │    keywords:          {"include": ["python", "ml"]}
+    │      │    excluded_keywords:  {"items": ["intern"]}
+    │      │    locations:          {"items": ["Paris"]}
+    │      │    excluded_companies: {"items": ["ACME"]}
+    │      │
+    │      │  _extract_json_list() handles all four:
+    │      │    - If dict with 'include' key → returns value
+    │      │    - If dict with 'items' key → returns value
+    │      │    - If already a list → returns as-is
+    │      │    - Otherwise → returns []
+    │      │
+    │      └─▶ keywords: List[str], filters: dict
+    │
+    ├─ _load_sources(db)
+    │      └─ SELECT * FROM job_sources WHERE enabled=True
+    │         Returns List[JobSource] — each has .type: "api" | "browser" | "lab_url"
+    │
+    ├─ ScrapingOrchestrator.run_morning_batch(keywords, filters, sources)
+    │      │
+    │      ├─ Phase 1: API sources
+    │      │    api_sources = [s for s in sources if s.type == "api"]
+    │      │    IF api_sources exist → AdzunaClient.search(keywords) per source
+    │      │    ELSE IF no api_sources AND adzuna configured AND keywords →
+    │      │         AdzunaClient.search(keywords)  ← fallback, always runs
+    │      │
+    │      ├─ Phase 2: Browser sources
+    │      │    browser_sources = [s for s in sources if s.type == "browser"]
+    │      │    FOR each → session_manager.get_or_create_session(site)
+    │      │             → adaptive_scraper.scrape_job_listings()
+    │      │
+    │      └─ Phase 3: Deduplicate + store
+    │           JobDeduplicator.deduplicate() → INSERT INTO jobs (new only)
     │
     ├─ JobMatcher.score_all(jobs, settings)
     │      → INSERT INTO job_matches (score ≥ min_score)
@@ -228,6 +258,16 @@ MorningBatchScheduler.run_batch()
     └─ CVPipeline.prepare_for_queue(matches, db)
            → INSERT INTO tailored_documents (pre-tailor top N)
 ```
+
+### Where to modify
+
+| Change | File | Function |
+|---|---|---|
+| Add a new JSON settings field | `morning_batch.py` | `_extract_json_list()` + `_load_settings()` |
+| Change how keywords are parsed | `morning_batch.py` | `_extract_json_list()` |
+| Add a new source type | `orchestrator.py` | `run_morning_batch()` — add a new phase block |
+| Change Adzuna fallback logic | `orchestrator.py` | Phase 1 block (~line 120) |
+| Add a new scraping site | `site_prompts.py` | `SITE_CONFIGS` dict + add credentials |
 
 ---
 
@@ -265,6 +305,35 @@ Frontend: user clicks "Apply" on a queue match
 
 The `/ws` endpoint uses a persistent connection for live UI updates.
 
+### Handler Registry Pattern
+
+Client → Server messages are dispatched via a **handler registry** in `ConnectionManager` (`ws.py`):
+
+```python
+# Registration (in main.py lifespan):
+manager.register_handler("login_done", handler_fn)
+manager.register_handler("confirm_submit", handler_fn)
+manager.register_handler("cancel_apply", handler_fn)
+
+# Dispatch (in ws.py websocket_endpoint):
+handler = manager._message_handlers.get(msg_type)
+if handler:
+    await handler(data, db)
+```
+
+**Why this pattern**: The previous approach patched `ws_module.router.routes` during
+`lifespan`, but `app.include_router(ws.router)` copies routes at import time, so
+patched handlers never ran. The registry avoids this by dispatching inside the already-
+registered WebSocket endpoint.
+
+### Where to modify
+
+| Change | File | Location |
+|---|---|---|
+| Add a new WS message type | `main.py` | `lifespan()` — add `manager.register_handler(...)` |
+| Change dispatch logic | `ws.py` | `websocket_endpoint()` message loop |
+| Change connection management | `ws.py` | `ConnectionManager` class |
+
 ### Server → Client messages
 | type | Payload | When |
 |---|---|---|
@@ -276,6 +345,7 @@ The `/ws` endpoint uses a persistent connection for live UI updates.
 | `applied` | `{job_id, application_id}` | Application submitted |
 | `batch_start` | `{batch_date}` | Morning batch starting |
 | `batch_complete` | `{new_jobs, new_matches}` | Morning batch done |
+| `login_required` | `{site}` | Browser needs manual login |
 | `error` | `{message, code}` | Error notification |
 
 ### Client → Server messages
@@ -284,8 +354,8 @@ The `/ws` endpoint uses a persistent connection for live UI updates.
 | `ping` | `{}` | Server responds with pong |
 | `confirm_submit` | `{job_id}` | Unblocks AutoApplier submit |
 | `cancel_apply` | `{job_id}` | Cancels pending application |
-| `login_done` | `{site}` | Confirms browser login complete |
-
+| `cancel` | `{job_id}` | General cancel |
+| `login_done` | `{site}` | Confirms browser login → unblocks `session_manager.confirm_login()` |
 ---
 
 ## Singleton Architecture
@@ -315,3 +385,138 @@ app.state.session_manager    # BrowserSessionManager
 
 ### Daily apply limit
 `DailyLimitGuard` counts `applications` rows for today and raises `DailyLimitReachedError` if `count ≥ daily_limit` (default: 10).
+
+---
+
+## Browser Session Management (`session_manager.py`)
+
+### browser_use API (NOT raw Playwright)
+
+`BrowserSessionManager` uses the `browser_use` package. **This is NOT Playwright's**
+**native API** — it's a CDP-based wrapper with its own object model:
+
+```
+browser_use.Browser  =  alias for BrowserSession (Pydantic model, CDP wrapper)
+
+Lifecycle:
+  Browser(headless=False)          → config only, NO browser launch
+  await browser.start()            → launches Chromium via CDP (idempotent)
+  await browser.new_page(url)      → returns Page (CDP-based, NOT Playwright Page)
+  await browser.stop()             → graceful shutdown + saves storage state
+  await browser.kill()             → force shutdown, no state save
+
+Page API:
+  page.goto(url)                   → navigate
+  page.get_url()                   → current URL (async, not a property)
+  page.get_elements_by_css_selector(sel) → List[Element]
+  page.evaluate(js_expr)           → run JS
+  page.press(key)                  → keyboard input
+
+Element API:
+  element.fill(text)               → type into input
+  element.click()                  → click
+  element.hover()                  → hover
+  element.focus()                  → focus
+
+⚠ These DO NOT exist on browser_use objects:
+  browser.close()                  → use browser.stop() or browser.kill()
+  page.fill(selector, value)       → use get_elements_by_css_selector() then element.fill()
+  page.click(selector)             → use get_elements_by_css_selector() then element.click()
+  page.url                         → use await page.get_url()
+  page.wait_for_timeout(ms)        → use await asyncio.sleep(seconds)
+  page.keyboard.press(key)         → use await page.press(key)
+```
+
+### Storage State (Cookies / Session Persistence)
+
+```
+Storage state persistence via watchdog:
+
+  Browser(storage_state="data/sessions/linkedin.json")
+    → on start(): loads cookies/localStorage from file (if exists)
+    → during session: auto-saves every 30 seconds
+    → on stop(): dispatches SaveStorageStateEvent → watchdog saves to file
+
+  kill() does NOT save state — only stop() triggers the save.
+```
+
+### Manual Login Flow
+
+```
+session_manager.get_or_create_session(site="linkedin")
+    │
+    ├─ Check for saved session file at data/sessions/linkedin.json
+    │
+    ├─ IF exists → Browser(storage_state=path) → start() → validate session
+    │    └─ IF valid → return browser (reuse session)
+    │    └─ IF invalid → stop() → fall through to manual login
+    │
+    └─ No valid session → _request_login(site)
+           │
+           ├─ Browser(headless=False, storage_state=path)
+           ├─ await browser.start()          ← VISIBLE browser window opens
+           ├─ page = await browser.new_page(login_url)
+           │
+           ├─ Try auto-fill credentials (if stored in DB):
+           │    get_elements_by_css_selector → element.fill(email)
+           │    get_elements_by_css_selector → element.fill(password)
+           │    (continues even if auto-fill fails)
+           │
+           ├─ WS broadcast: {"type": "login_required", "site": "linkedin"}
+           │    → Frontend shows LoginRequiredModal
+           │
+           ├─ WAIT on asyncio.Event (blocks until user action)
+           │    ← User logs in manually in visible browser
+           │    ← User clicks "Done" in frontend modal
+           │
+           ├─ Frontend sends WS: {"type": "login_done", "site": "linkedin"}
+           │    → ws.py dispatches to registered handler
+           │    → handler calls session_manager.confirm_login(site)
+           │    → sets asyncio.Event → unblocks _request_login()
+           │
+           ├─ Validate: check URL changed from login page
+           ├─ await browser.stop()            ← saves cookies via watchdog
+           └─ return new browser with saved storage_state
+```
+
+### Where to modify
+
+| Change | File | Location |
+|---|---|---|
+| Add a new site for login | `site_prompts.py` | `SITE_CONFIGS` dict (add login_url, selectors) |
+| Change browser launch options | `session_manager.py` | `Browser()` constructor call |
+| Change credential auto-fill | `session_manager.py` | `_request_login()` — element selectors |
+| Change session storage path | `session_manager.py` | `_session_path()` |
+| Change login validation logic | `session_manager.py` | `_validate_session()` |
+| Handle new WS message from frontend | `main.py` | `lifespan()` — `manager.register_handler()` |
+
+---
+
+## Common Pitfalls
+
+These are real bugs encountered during development. Check here before modifying:
+
+### 1. JSON settings fields are dicts, not lists
+The frontend sends `keywords` as `{"include": ["python", ...]}` — a dict.
+`list(settings.keywords)` iterates dict **keys**, giving `["include"]` instead of
+the actual keywords. Always use `_extract_json_list()` in `morning_batch.py`.
+
+### 2. browser_use is NOT Playwright
+`from browser_use import Browser` imports `BrowserSession`, not Playwright's `Browser`.
+Calling Playwright methods (`page.fill()`, `browser.close()`) will silently fail or
+raise `AttributeError`. See the API table above.
+
+### 3. browser.start() is required
+`Browser(headless=False)` only creates configuration — it does NOT launch a browser.
+`await browser.start()` must be called before any page interaction. Without it,
+no browser window appears.
+
+### 4. browser.stop() vs browser.kill()
+`stop()` is graceful — it triggers `SaveStorageStateEvent` which saves cookies.
+`kill()` is forceful — no state is saved. Use `stop()` for normal cleanup,
+`kill()` only in error handlers.
+
+### 5. WebSocket handler registration timing
+`app.include_router(ws.router)` copies routes at import time. Patching
+`ws_module.router.routes` in `lifespan()` has no effect on the already-registered
+endpoint. Use `manager.register_handler()` instead.

@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
 from backend.models.application import Application, ApplicationEvent
+from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch
 
 logger = logging.getLogger(__name__)
@@ -267,6 +268,49 @@ async def add_application_event(application_id: int, body: CreateEventRequest, d
 # ─── Apply endpoint ───────────────────────────────────────────────────────────
 
 
+async def _resolve_documents(
+    match_id: int, db
+) -> "tuple[Path | None, Path | None]":
+    """Return (cv_pdf, letter_pdf) Paths for the latest tailored docs for match_id.
+
+    Returns (None, None) if no documents have been generated yet.
+    Note: engine.apply() already accepts cv_pdf/letter_pdf — no changes to engine.py needed.
+    """
+    from pathlib import Path
+    from sqlalchemy import select
+
+    cv_path: "Path | None" = None
+    letter_path: "Path | None" = None
+
+    cv_stmt = (
+        select(TailoredDocument)
+        .where(
+            TailoredDocument.job_match_id == match_id,
+            TailoredDocument.doc_type == "cv",
+        )
+        .order_by(TailoredDocument.created_at.desc())
+        .limit(1)
+    )
+    cv_row = (await db.execute(cv_stmt)).scalar_one_or_none()
+    if cv_row and cv_row.pdf_path:
+        cv_path = Path(cv_row.pdf_path)
+
+    letter_stmt = (
+        select(TailoredDocument)
+        .where(
+            TailoredDocument.job_match_id == match_id,
+            TailoredDocument.doc_type == "letter",
+        )
+        .order_by(TailoredDocument.created_at.desc())
+        .limit(1)
+    )
+    letter_row = (await db.execute(letter_stmt)).scalar_one_or_none()
+    if letter_row and letter_row.pdf_path:
+        letter_path = Path(letter_row.pdf_path)
+
+    return cv_path, letter_path
+
+
 class ApplyRequest(BaseModel):
     method: Literal["auto", "assisted", "manual"] = "manual"
     apply_url: str = ""
@@ -318,6 +362,20 @@ async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid apply method: {body.method!r}")
 
+    # Resolve apply_url from the job if not provided in the request body
+    apply_url = body.apply_url
+    if not apply_url:
+        job_stmt = (
+            select(Job)
+            .join(JobMatch, JobMatch.job_id == Job.id)
+            .where(JobMatch.id == match_id)
+        )
+        job_row = (await db.execute(job_stmt)).scalar_one_or_none()
+        if job_row:
+            apply_url = job_row.apply_url or job_row.url or ""
+        if not apply_url:
+            logger.warning("No apply_url found for match_id=%d", match_id)
+
     applicant = ApplicantInfo(
         full_name=body.full_name,
         email=body.email,
@@ -326,11 +384,20 @@ async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request
         additional_answers_json=body.additional_answers_json,
     )
 
+    # Resolve tailored CV and cover letter for this job match
+    cv_pdf, letter_pdf = await _resolve_documents(match_id=match_id, db=db)
+    if cv_pdf:
+        logger.info("Resolved cv_pdf=%s for match_id=%d", cv_pdf, match_id)
+    if letter_pdf:
+        logger.info("Resolved letter_pdf=%s for match_id=%d", letter_pdf, match_id)
+
     result = await engine.apply(
         job_match_id=match_id,
         mode=mode,
         db=db,
-        apply_url=body.apply_url,
+        apply_url=apply_url,
         applicant=applicant,
+        cv_pdf=cv_pdf,
+        letter_pdf=letter_pdf,
     )
     return result.model_dump()

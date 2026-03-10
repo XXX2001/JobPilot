@@ -387,3 +387,39 @@ async def test_assisted_apply_tier1_failure_falls_back():
         result = await strategy.apply(apply_url="https://example.com/job")
 
     assert result.status == "assisted"
+
+
+@pytest.mark.asyncio
+async def test_resolve_documents_returns_cv_and_letter_paths():
+    """_resolve_documents queries tailored_documents and returns Path objects."""
+    from backend.api.applications import _resolve_documents
+    from backend.models.document import TailoredDocument
+    from unittest.mock import AsyncMock, MagicMock
+    from pathlib import Path
+
+    cv_doc = MagicMock(spec=TailoredDocument)
+    cv_doc.pdf_path = "/data/cvs/cv.pdf"
+    letter_doc = MagicMock(spec=TailoredDocument)
+    letter_doc.pdf_path = "/data/letters/letter.pdf"
+
+    db = AsyncMock()
+    # Each .execute() call returns an object whose .scalar_one_or_none() gives the doc
+    db.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[cv_doc, letter_doc])
+
+    cv_path, letter_path = await _resolve_documents(match_id=42, db=db)
+    assert cv_path == Path("/data/cvs/cv.pdf")
+    assert letter_path == Path("/data/letters/letter.pdf")
+
+
+@pytest.mark.asyncio
+async def test_resolve_documents_returns_none_when_no_docs():
+    """_resolve_documents returns (None, None) when no tailored docs exist."""
+    from backend.api.applications import _resolve_documents
+    from unittest.mock import AsyncMock, MagicMock
+
+    db = AsyncMock()
+    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+
+    cv_path, letter_path = await _resolve_documents(match_id=99, db=db)
+    assert cv_path is None
+    assert letter_path is None

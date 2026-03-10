@@ -71,14 +71,9 @@ class PlaywrightFormFiller:
         from playwright.async_api import async_playwright
 
         from backend.applier.captcha_handler import (
-            preflight_check_url,
             _domain_key,
+            check_and_handle_captcha,
         )
-
-        # Phase 1: preflight CAPTCHA check
-        accessible = await preflight_check_url(apply_url, job_id=job_id)
-        if not accessible:
-            raise RuntimeError(f"Preflight check failed for {apply_url} (CAPTCHA not resolved)")
 
         site_key = _domain_key(apply_url)
         profile_dir = Path(settings.jobpilot_data_dir) / "browser_profiles" / site_key
@@ -109,6 +104,14 @@ class PlaywrightFormFiller:
                 page = await context.new_page()
 
             await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
+
+            # Phase 1: inline CAPTCHA check within this browser (no separate window)
+            captcha_handled = await check_and_handle_captcha(page, job_id=job_id)
+            if captcha_handled:
+                # Re-check after resolution — if still blocked, give up
+                from backend.applier.captcha_handler import detect_any_block
+                if await detect_any_block(page):
+                    raise RuntimeError(f"CAPTCHA on {apply_url} could not be resolved")
 
             # Phase 2: extract form structure + single Gemini call
             html = await page.content()

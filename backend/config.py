@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     GOOGLE_MODEL: str = Field("gemini-3-flash-preview", env="GOOGLE_MODEL")
     # Comma-separated fallback model names (empty => no fallbacks)
     GOOGLE_MODEL_FALLBACKS: str = Field("", env="GOOGLE_MODEL_FALLBACKS")
+    # Feature flag: enable Tier 1 Scrapling fetcher (HTTP + single LLM call)
+    SCRAPLING_ENABLED: bool = Field(True, env="SCRAPLING_ENABLED")
+    # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
+    APPLY_TIER1_ENABLED: bool = Field(True, env="APPLY_TIER1_ENABLED")
 
 
 settings = Settings()

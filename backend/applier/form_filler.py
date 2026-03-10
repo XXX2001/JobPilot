@@ -71,7 +71,6 @@ class PlaywrightFormFiller:
         from playwright.async_api import async_playwright
 
         from backend.applier.captcha_handler import (
-            get_session_path,
             preflight_check_url,
             _domain_key,
         )

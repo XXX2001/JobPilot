@@ -1,7 +1,6 @@
 """Tests for PlaywrightFormFiller pure helper functions."""
 from __future__ import annotations
 
-import pytest
 from backend.applier.form_filler import PlaywrightFormFiller
 
 

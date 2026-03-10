@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -270,17 +271,14 @@ async def add_application_event(application_id: int, body: CreateEventRequest, d
 
 async def _resolve_documents(
     match_id: int, db
-) -> "tuple[Path | None, Path | None]":
+) -> tuple[Path | None, Path | None]:
     """Return (cv_pdf, letter_pdf) Paths for the latest tailored docs for match_id.
 
     Returns (None, None) if no documents have been generated yet.
     Note: engine.apply() already accepts cv_pdf/letter_pdf — no changes to engine.py needed.
     """
-    from pathlib import Path
-    from sqlalchemy import select
-
-    cv_path: "Path | None" = None
-    letter_path: "Path | None" = None
+    cv_path: Path | None = None
+    letter_path: Path | None = None
 
     cv_stmt = (
         select(TailoredDocument)

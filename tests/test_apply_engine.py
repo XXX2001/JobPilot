@@ -205,7 +205,7 @@ async def test_engine_cancel_apply_returns_cancelled(monkeypatch):
     monkeypatch.setattr(auto_mod, "Agent", MagicMock())
     monkeypatch.setattr(auto_mod, "ChatGoogleGenerativeAI", MagicMock())
     monkeypatch.setattr(auto_mod, "Browser", MagicMock())
-    monkeypatch.setattr(auto_mod, "BrowserConfig", MagicMock())
+    monkeypatch.setattr(auto_mod, "BrowserConfig", MagicMock(), raising=False)
 
     engine = _make_engine()
     db = AsyncMock(spec=AsyncSession)
@@ -228,3 +228,126 @@ async def test_engine_cancel_apply_returns_cancelled(monkeypatch):
         apply_url="https://jobs.example.com/10",
     )
     assert result.status == "cancelled"
+
+
+# ── Tier routing ──────────────────────────────────────────────────────────────
+
+_SANITIZE = "backend.security.sanitizer.sanitize_url"
+
+@pytest.mark.asyncio
+async def test_auto_apply_tier1_success_no_tier2():
+    """If Tier 1 succeeds, Tier 2 (browser-use) should NOT be called."""
+    from backend.applier.auto_apply import AutoApplyStrategy
+    from unittest.mock import AsyncMock, patch
+
+    strategy = AutoApplyStrategy(api_key="key")
+    fake_result = {"status": "applied", "filled_fields": {}, "screenshot_b64": None}
+
+    with patch(_SANITIZE, side_effect=lambda u: u), \
+         patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock(return_value=fake_result)) as mock_t1, \
+         patch.object(strategy, "_browser_use_apply", new=AsyncMock()) as mock_t2:
+        result = await strategy.apply(job_id=1, apply_url="https://example.com/job")
+
+    mock_t1.assert_awaited_once()
+    mock_t2.assert_not_awaited()
+    assert result.status == "applied"
+
+
+@pytest.mark.asyncio
+async def test_auto_apply_tier1_failure_falls_back_to_tier2():
+    """If Tier 1 raises, Tier 2 (browser-use) should be called."""
+    from backend.applier.auto_apply import AutoApplyStrategy
+    from backend.applier.manual_apply import ApplicationResult
+    from unittest.mock import AsyncMock, patch
+
+    strategy = AutoApplyStrategy(api_key="key")
+
+    with patch(_SANITIZE, side_effect=lambda u: u), \
+         patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock(side_effect=RuntimeError("preflight failed"))) as mock_t1, \
+         patch.object(strategy, "_browser_use_apply", new=AsyncMock(return_value=ApplicationResult(status="applied", method="auto"))) as mock_t2:
+        result = await strategy.apply(job_id=2, apply_url="https://example.com/job")
+
+    mock_t1.assert_awaited_once()
+    mock_t2.assert_awaited_once()
+    assert result.status == "applied"
+
+
+@pytest.mark.asyncio
+async def test_auto_apply_tier1_cancelled_does_not_fall_back():
+    """If Tier 1 returns cancelled (user cancelled), do NOT fall back to Tier 2."""
+    from backend.applier.auto_apply import AutoApplyStrategy
+    from unittest.mock import AsyncMock, patch
+
+    strategy = AutoApplyStrategy(api_key="key")
+    fake_result = {"status": "cancelled", "filled_fields": {}, "screenshot_b64": None}
+
+    with patch(_SANITIZE, side_effect=lambda u: u), \
+         patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock(return_value=fake_result)) as mock_t1, \
+         patch.object(strategy, "_browser_use_apply", new=AsyncMock()) as mock_t2:
+        result = await strategy.apply(job_id=3, apply_url="https://example.com/job")
+
+    mock_t1.assert_awaited_once()
+    mock_t2.assert_not_awaited()
+    assert result.status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_auto_apply_tier1_disabled_goes_straight_to_tier2(monkeypatch):
+    """When APPLY_TIER1_ENABLED=False, skip Tier 1 entirely."""
+    from backend.applier.auto_apply import AutoApplyStrategy
+    from backend.applier.manual_apply import ApplicationResult
+    from unittest.mock import AsyncMock, patch
+
+    monkeypatch.setattr("backend.config.settings.APPLY_TIER1_ENABLED", False)
+    strategy = AutoApplyStrategy(api_key="key")
+
+    with patch(_SANITIZE, side_effect=lambda u: u), \
+         patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock()) as mock_t1, \
+         patch.object(strategy, "_browser_use_apply", new=AsyncMock(return_value=ApplicationResult(status="applied", method="auto"))) as mock_t2:
+        result = await strategy.apply(job_id=4, apply_url="https://example.com/job")
+
+    mock_t1.assert_not_awaited()
+    mock_t2.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_browser_use_apply_parses_additional_answers_json(monkeypatch):
+    """Tier 2 _browser_use_apply formats additional_answers as key-value pairs, not raw JSON."""
+    import backend.applier.auto_apply as mod
+    from backend.applier.auto_apply import AutoApplyStrategy
+    from unittest.mock import AsyncMock, MagicMock
+    import json
+
+    monkeypatch.setattr(mod, "_BROWSER_USE_AVAILABLE", True)
+    monkeypatch.setattr(mod, "ChatGoogleGenerativeAI", MagicMock())
+    monkeypatch.setattr(mod, "Browser", MagicMock())
+
+    captured_task: list[str] = []
+
+    def fake_agent(task, llm, browser):
+        captured_task.append(task)
+        m = MagicMock()
+        m.run = AsyncMock(return_value=MagicMock(final_result=MagicMock(return_value="")))
+        return m
+
+    monkeypatch.setattr(mod, "Agent", fake_agent)
+
+    strategy = AutoApplyStrategy(api_key="key")
+    answers = json.dumps({"years_experience": "3", "visa_required": "no"})
+
+    cancel = asyncio.Event()
+    cancel.set()
+
+    await strategy._browser_use_apply(
+        job_id=99,
+        apply_url="https://example.com/job",
+        additional_answers=answers,
+        cancel_event=cancel,
+        confirm_event=asyncio.Event(),
+    )
+
+    assert captured_task, "Agent was never called"
+    task_str = captured_task[0]
+    assert "years_experience" in task_str
+    assert "visa_required" in task_str
+    assert '{"years_experience"' not in task_str  # raw JSON must not appear

@@ -351,3 +351,39 @@ async def test_browser_use_apply_parses_additional_answers_json(monkeypatch):
     assert "years_experience" in task_str
     assert "visa_required" in task_str
     assert '{"years_experience"' not in task_str  # raw JSON must not appear
+
+
+@pytest.mark.asyncio
+async def test_assisted_apply_tier1_success():
+    """AssistedApplyStrategy uses fill_only() when Tier 1 available."""
+    from backend.applier.assisted_apply import AssistedApplyStrategy
+    from unittest.mock import AsyncMock, patch
+
+    strategy = AssistedApplyStrategy(api_key="key")
+    fake_result = {"status": "assisted", "filled_fields": {"#name": "Alice"}}
+
+    with patch.object(strategy._form_filler, "fill_only", new=AsyncMock(return_value=fake_result)) as mock_t1:
+        result = await strategy.apply(apply_url="https://example.com/job", full_name="Alice")
+
+    mock_t1.assert_awaited_once()
+    assert result.status == "assisted"
+    assert "pre-filled" in result.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_assisted_apply_tier1_failure_falls_back():
+    """AssistedApplyStrategy falls back to browser-use when fill_only() raises."""
+    import backend.applier.assisted_apply as mod
+    from backend.applier.assisted_apply import AssistedApplyStrategy
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    strategy = AssistedApplyStrategy(api_key="key")
+
+    with patch.object(strategy._form_filler, "fill_only", new=AsyncMock(side_effect=RuntimeError("page crash"))), \
+         patch.object(mod, "_BROWSER_USE_AVAILABLE", True), \
+         patch.object(mod, "Agent", MagicMock(return_value=MagicMock(run=AsyncMock()))), \
+         patch.object(mod, "ChatGoogleGenerativeAI", MagicMock()), \
+         patch.object(mod, "Browser", MagicMock()):
+        result = await strategy.apply(apply_url="https://example.com/job")
+
+    assert result.status == "assisted"

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { messages, wsStatus } from '$lib/stores/websocket';
 	import { derived } from 'svelte/store';
+	import { getBatchMessage } from '$lib/utils/easterEggs';
 
 	// Show the most recent meaningful status message
 	const lastMessage = derived(messages, ($msgs) => {
@@ -22,7 +23,7 @@
 
 	{#if $lastMessage}
 		{#if $lastMessage.type === 'scraping_progress'}
-			<span>Scraping: {$lastMessage.data?.source ?? ''} — {$lastMessage.data?.found ?? 0} jobs found</span>
+			<span>🔍 Scraping: {$lastMessage.data?.source ?? ''} — {$lastMessage.data?.found ?? 0} jobs found</span>
 		{:else if $lastMessage.type === 'matching_progress'}
 			<span>Matching: {$lastMessage.data?.matched ?? 0} matched</span>
 		{:else if $lastMessage.type === 'tailoring_progress'}
@@ -32,13 +33,18 @@
 		{:else if $lastMessage.type === 'error'}
 			<span class="text-red-400">Error: {$lastMessage.data?.message ?? 'Unknown error'}</span>
 		{:else if $lastMessage.type === 'status'}
-			<span class="flex-1 truncate">{$lastMessage.message}</span>
+			{#if $lastMessage.progress >= 1}
+				<span class="flex-1 truncate text-green-400">✨ {getBatchMessage('success')}</span>
+			{:else}
+				<span class="flex-1 truncate">{$lastMessage.message}</span>
+			{/if}
 			{#if $lastMessage.progress > 0 && $lastMessage.progress < 1}
-				<div class="w-32 h-1 bg-muted rounded-full overflow-hidden">
+				<div class="relative w-32 h-1 bg-muted rounded-full overflow-hidden">
 					<div
 						class="h-full bg-primary transition-all duration-300"
 						style="width: {$lastMessage.progress * 100}%"
 					></div>
+					<div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-progress-shimmer"></div>
 				</div>
 				<span class="tabular-nums">{Math.round($lastMessage.progress * 100)}%</span>
 			{/if}

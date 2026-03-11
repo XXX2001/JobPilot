@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import { apiFetch } from '$lib/api';
+	import { getApplyConfirmation } from '$lib/utils/easterEggs';
 	import ScoreIndicator from '$lib/components/ScoreIndicator.svelte';
 	import {
 		ArrowLeft,
@@ -23,23 +24,30 @@
 		title: string;
 		company: string;
 		location?: string;
-		salary_text?: string;
 		salary_min?: number;
 		salary_max?: number;
 		description?: string;
 		url: string;
 		apply_url?: string;
 		posted_at?: string;
-		scraped_at: string;
-		score?: number;
 		apply_method?: string;
 	}
 
+	interface QueueMatch {
+		id: number;
+		job_id: number;
+		score: number;
+		status: string;
+		batch_date?: string;
+		matched_at: string;
+		job: Job;
+	}
+
 	interface DiffEntry {
-		marker: string;
-		original: string;
-		replacement: string;
-		section?: string;
+		section: string;
+		original_text: string;
+		edited_text: string;
+		change_description: string;
 	}
 
 	interface DiffResponse {
@@ -48,19 +56,22 @@
 		generated_at?: string;
 	}
 
-	const matchId = $derived(parseInt($page.params.id));
+	const matchId = $derived(parseInt($page.params.id ?? '0'));
 
-	let job = $state<Job | null>(null);
+	let matchData = $state<QueueMatch | null>(null);
+	const job = $derived(matchData?.job ?? null);
+	const score = $derived(matchData?.score ?? 0);
 	let diff = $state<DiffEntry[]>([]);
 	let loading = $state(true);
 	let applyLoading = $state('');
 	let error = $state('');
 	let successMsg = $state('');
 	let activeTab = $state<'description' | 'diff'>('description');
+	let enriching = $state(false);
 
 	const salary = $derived(() => {
 		if (!job) return null;
-		if (!job.salary_min && !job.salary_max) return job.salary_text || null;
+		if (!job.salary_min && !job.salary_max) return null;
 		if (job.salary_min && job.salary_max)
 			return `£${Math.round(job.salary_min / 1000)}k – £${Math.round(job.salary_max / 1000)}k`;
 		if (job.salary_min) return `£${Math.round(job.salary_min / 1000)}k+`;
@@ -81,7 +92,7 @@
 		loading = true;
 		error = '';
 		try {
-			job = await apiFetch<Job>(`/api/jobs/${matchId}`);
+			matchData = await apiFetch<QueueMatch>(`/api/queue/${matchId}`);
 			try {
 				const diffData = await apiFetch<DiffResponse>(`/api/documents/${matchId}/diff`);
 				diff = diffData.diff ?? [];
@@ -100,12 +111,12 @@
 		error = '';
 		successMsg = '';
 		try {
-			await apiFetch(`/api/applications/${matchId}/apply`, {
+			const res = await apiFetch<{ status: string; method: string; message: string }>(`/api/applications/${matchId}/apply`, {
 				method: 'POST',
 				body: JSON.stringify({ method })
 			});
 			successMsg = method === 'manual'
-				? 'Job opened — apply manually in the tab that opened.'
+				? (res.message || 'Job opened — apply manually. Tailored CV copied to ~/Downloads.')
 				: method === 'assisted'
 				? 'Assisted apply started — follow the browser instructions.'
 				: 'Auto-apply queued — confirm in the pop-up when ready.';
@@ -117,6 +128,7 @@
 	}
 
 	const isEasyApply = $derived(job?.apply_method === 'easy_apply' || job?.apply_method === 'auto');
+	let applyQuote = $state(getApplyConfirmation());
 
 	onMount(load);
 </script>
@@ -148,7 +160,7 @@
 {:else if job}
 	<!-- Header -->
 	<div class="flex items-start gap-4 mb-6">
-		<ScoreIndicator score={Math.round(job.score ?? 0)} />
+		<ScoreIndicator score={Math.round(score)} />
 		<div class="flex-1 min-w-0">
 			<h1 class="text-xl font-semibold tracking-tight">{job.title}</h1>
 			<div class="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
@@ -192,19 +204,18 @@
 	{/if}
 
 	<!-- Apply section -->
+	<p class="text-xs italic text-muted-foreground/60 mb-2 animate-fade-in-up">{applyQuote}</p>
 	<div class="flex items-center gap-2 mb-6 p-4 bg-card border border-border rounded-lg">
 		<span class="text-xs text-muted-foreground mr-2">Apply via:</span>
 
-		{#if isEasyApply}
-			<button
-				onclick={() => applyWith('auto')}
-				disabled={!!applyLoading}
-				class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
-			>
-				<Zap size={12} />
-				{applyLoading === 'auto' ? 'Starting…' : 'Auto Apply'}
-			</button>
-		{/if}
+		<button
+			onclick={() => applyWith('auto')}
+			disabled={!!applyLoading}
+			class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
+		>
+			<Zap size={12} />
+			{applyLoading === 'auto' ? 'Starting…' : 'Auto Apply'}
+		</button>
 
 		<button
 			onclick={() => applyWith('assisted')}
@@ -258,6 +269,29 @@
 			{:else}
 				<p class="text-muted-foreground text-sm">No description available for this listing.</p>
 			{/if}
+			{#if !job.description || job.description.length < 300}
+				<button
+					onclick={async () => {
+						enriching = true;
+						error = '';
+						try {
+							const res = await apiFetch<{ status: string; description: string }>(`/api/queue/${matchId}/enrich-description`, { method: 'POST' });
+							if (res.description && matchData?.job) {
+								matchData = { ...matchData, job: { ...matchData.job, description: res.description } };
+							}
+						} catch (e: any) {
+							error = e.message ?? 'Failed to fetch full description';
+						} finally {
+							enriching = false;
+						}
+					}}
+					disabled={enriching}
+					class="mt-3 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors disabled:opacity-50"
+				>
+					<Globe size={12} />
+					{enriching ? 'Fetching full description…' : 'Fetch Full Description'}
+				</button>
+			{/if}
 		</div>
 	{:else}
 		<!-- CV Diff view -->
@@ -270,25 +304,25 @@
 				</div>
 			{:else}
 				<div class="space-y-3">
-					{#each diff as entry (entry.marker)}
+					{#each diff as entry, i (i)}
 						<div class="bg-card border border-border rounded-lg overflow-hidden">
 							<div class="px-4 py-2 bg-muted/50 border-b border-border flex items-center gap-2">
-								<span class="text-xs font-mono text-muted-foreground">{entry.marker}</span>
-								{#if entry.section}
-									<span class="text-xs text-muted-foreground">· {entry.section}</span>
+								<span class="text-xs font-medium text-muted-foreground">{entry.section}</span>
+								{#if entry.change_description}
+									<span class="text-xs text-muted-foreground/70">· {entry.change_description}</span>
 								{/if}
 							</div>
 							<div class="p-4 space-y-2">
-								{#if entry.original}
+								{#if entry.original_text}
 									<div class="flex gap-2">
 										<span class="text-red-500 text-xs font-mono mt-0.5 flex-shrink-0">−</span>
-										<p class="text-xs line-through text-muted-foreground leading-relaxed">{entry.original}</p>
+										<p class="text-xs line-through text-muted-foreground leading-relaxed">{entry.original_text}</p>
 									</div>
 								{/if}
-								{#if entry.replacement}
+								{#if entry.edited_text}
 									<div class="flex gap-2">
 										<span class="text-green-500 text-xs font-mono mt-0.5 flex-shrink-0">+</span>
-										<p class="text-xs text-green-400 leading-relaxed">{entry.replacement}</p>
+										<p class="text-xs text-green-400 leading-relaxed">{entry.edited_text}</p>
 									</div>
 								{/if}
 							</div>

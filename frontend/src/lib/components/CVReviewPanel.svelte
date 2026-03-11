@@ -9,6 +9,8 @@
 		ExternalLink
 	} from 'lucide-svelte';
 	import DiffBlock from './DiffBlock.svelte';
+	import EasterEggToast from './EasterEggToast.svelte';
+	import { getApplyConfirmation, getCvToast } from '$lib/utils/easterEggs';
 
 	interface Job {
 		id: number;
@@ -55,6 +57,7 @@
 	} = $props();
 
 	let cursor = $state(0);
+	let cvToastMessage = $state<string | null>(null);
 	let diffs = $state<Map<number, DiffEntry[]>>(new Map());
 	let diffLoading = $state(false);
 	let decisions = $state<Map<number, Decision>>(new Map());
@@ -65,6 +68,7 @@
 	let letterTab = $state<'diff' | 'pdf'>('diff');
 
 	const current = $derived(matches[cursor]);
+	const applyQuote = $derived(panelPhase === 'confirm' ? getApplyConfirmation() : '');
 
 	async function loadDiff(matchId: number) {
 		if (diffs.has(matchId)) return;
@@ -74,6 +78,8 @@
 			const d = new Map(diffs);
 			d.set(matchId, data.diff ?? []);
 			diffs = d;
+			cvToastMessage = getCvToast();
+			setTimeout(() => (cvToastMessage = null), 4000);
 		} catch {
 			const d = new Map(diffs);
 			d.set(matchId, []);
@@ -118,6 +124,16 @@
 		panelPhase = 'done';
 		const results: { matchId: number; ok: boolean; msg: string }[] = [];
 
+		// Skip jobs that were declined in the review
+		const skippedMatches = matches.filter((m) => decisions.get(m.id) === 'skip');
+		for (const match of skippedMatches) {
+			try {
+				await apiFetch(`/api/queue/${match.id}/skip`, { method: 'PATCH' });
+			} catch {
+				// non-critical — continue
+			}
+		}
+
 		for (const match of approvedMatches) {
 			const method = modes.get(match.id) ?? 'manual';
 			try {
@@ -132,13 +148,17 @@
 				});
 			} catch (e: any) {
 				results.push({ matchId: match.id, ok: false, msg: e.message ?? 'Failed' });
-		}
+			}
 		}
 
 		runResults = results;
 		running = false;
 	}
 </script>
+
+{#if cvToastMessage}
+	<EasterEggToast message={cvToastMessage} emoji="📜" type="info" duration={4000} onclose={() => (cvToastMessage = null)} />
+{/if}
 
 {#if panelPhase === 'review'}
 	<!-- Navigation header -->
@@ -342,6 +362,9 @@
 			{/each}
 		</div>
 
+		<p class="text-xs text-muted-foreground italic text-center mb-4 animate-fade-in-up">
+			{applyQuote}
+		</p>
 		<div class="flex gap-2">
 			<button
 				onclick={() => {

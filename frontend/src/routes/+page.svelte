@@ -4,6 +4,9 @@
 	import { messages, send } from '$lib/stores/websocket';
 	import { RefreshCw, AlertCircle, Zap, MousePointer, X } from 'lucide-svelte';
 	import CVReviewPanel from '$lib/components/CVReviewPanel.svelte';
+	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
+	import TypewriterText from '$lib/components/TypewriterText.svelte';
+	import { getEmptyState } from '$lib/utils/easterEggs';
 
 	interface Job {
 		id: number;
@@ -104,11 +107,37 @@
 		}
 	}
 
-	function setMode(matchId: number, mode: ApplyMode) {
+	async function setMode(matchId: number, mode: ApplyMode) {
+		const prev = modes.get(matchId);
 		const m = new Map(modes);
 		m.set(matchId, mode);
 		modes = m;
+
+		// Persist skip to backend immediately so it survives refresh
+		if (mode === 'skip' && prev !== 'skip') {
+			try {
+				await apiFetch(`/api/queue/${matchId}/skip`, { method: 'PATCH' });
+				// Remove from local list
+				matches = matches.filter((mt) => mt.id !== matchId);
+			} catch {
+				// revert on failure
+				m.set(matchId, prev ?? 'manual');
+				modes = new Map(m);
+			}
+		} else if (prev === 'skip' && mode !== 'skip') {
+			// Un-skip: restore to new
+			try {
+				await apiFetch(`/api/queue/${matchId}/status`, {
+					method: 'PATCH',
+					body: JSON.stringify({ status: 'new' })
+				});
+			} catch {
+				// ignore
+			}
+		}
 	}
+
+	const queueEmptyMessage = $derived(matches.length === 0 ? getEmptyState('queue') : '');
 
 	const activeMatches = $derived(matches.filter((m) => modes.get(m.id) !== 'skip'));
 
@@ -172,15 +201,26 @@
 {#if phase === 'review'}
 	<CVReviewPanel matches={activeMatches} {modes} onback={backToSelect} oncomplete={onRunComplete} />
 {:else if loading}
-	<div class="space-y-2">
-		{#each Array(3) as _}
-			<div class="border-border bg-muted/30 h-16 animate-pulse rounded-lg border p-4"></div>
-		{/each}
+	<div class="flex flex-col items-center justify-center gap-4 py-20">
+		<div class="relative">
+			<div class="h-10 w-10 rounded-full border-2 border-primary/20 border-t-primary animate-spin"></div>
+		</div>
+		<TypewriterText
+			messages={[
+				'Scanning the internet for your dream job...',
+				'Negotiating with job boards on your behalf...',
+				'Teaching robots to read job descriptions...',
+				"Convincing LinkedIn you're not a bot...",
+				'Translating recruiter-speak into English...',
+				'Bribing the algorithm with good vibes...'
+			]}
+			class="text-muted-foreground text-sm"
+		/>
 	</div>
 {:else if matches.length === 0}
 	<div class="flex flex-col items-center justify-center gap-3 py-20 text-center">
-		<div class="text-4xl">📭</div>
-		<p class="text-muted-foreground text-sm font-medium">No pending jobs.</p>
+		<FloatingEmoji emoji="📭" />
+		<p class="text-muted-foreground text-sm font-medium">{queueEmptyMessage}</p>
 		<p class="text-muted-foreground text-xs">Click "Scan for Jobs" to search for new opportunities.</p>
 		<button
 			onclick={refreshQueue}

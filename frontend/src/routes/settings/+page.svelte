@@ -1,6 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import { apiFetch } from '$lib/api';
+import { getProfileStatus } from '$lib/utils/easterEggs';
 	import { AlertCircle, CheckCircle2, Key, Info, Globe, Trash2, User, Search, Code, Cpu, X, Plus, Save } from 'lucide-svelte';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -11,6 +12,9 @@ import { apiFetch } from '$lib/api';
 		email: string;
 		phone?: string;
 		location?: string;
+		linkedin_url?: string;
+		driver_license?: string;
+		mobility?: string;
 		base_cv_path?: string;
 		additional_info?: Record<string, unknown>;
 	}
@@ -68,13 +72,24 @@ import { apiFetch } from '$lib/api';
 
 	// ─── State ───────────────────────────────────────────────────────────────────
 
-	let activeTab = $state<'profile' | 'search' | 'sites' | 'credentials' | 'sources' | 'system'>('profile');
+	type TabId = 'profile' | 'search' | 'sites' | 'credentials' | 'sources' | 'system';
+	const tabs: [TabId, string, typeof User][] = [
+		['profile', 'Profile', User],
+		['search', 'Search', Search],
+		['sites', 'Sites', Globe],
+		['credentials', 'Credentials', Key],
+		['sources', 'Sources', Code],
+		['system', 'System', Cpu]
+	];
+
+	let activeTab = $state<TabId>('profile');
 	let saving = $state(false);
 	let error = $state('');
 	let successMsg = $state('');
 
 	// Profile form
-	let profileForm = $state({ full_name: '', email: '', phone: '', location: '', additional_info_json: '' });
+	let profileForm = $state({ full_name: '', email: '', phone: '', location: '', linkedin_url: '', driver_license: '', mobility: '', additional_info_json: '' });
+	const profileEasterEgg = $derived(getProfileStatus(profileForm));
 	let profileLoading = $state(true);
 
 	// Search settings form
@@ -131,6 +146,9 @@ import { apiFetch } from '$lib/api';
 				email: p.email ?? '',
 				phone: p.phone ?? '',
 				location: p.location ?? '',
+				linkedin_url: p.linkedin_url ?? '',
+				driver_license: p.driver_license ?? '',
+				mobility: p.mobility ?? '',
 				additional_info_json: p.additional_info ? JSON.stringify(p.additional_info, null, 2) : ''
 			};
 		} catch {
@@ -239,6 +257,9 @@ import { apiFetch } from '$lib/api';
 					email: profileForm.email,
 					phone: profileForm.phone || null,
 					location: profileForm.location || null,
+					linkedin_url: profileForm.linkedin_url || null,
+					driver_license: profileForm.driver_license || null,
+					mobility: profileForm.mobility || null,
 					additional_info: additional_info ?? null
 				})
 			});
@@ -397,14 +418,7 @@ import { apiFetch } from '$lib/api';
 
 <!-- Tabs -->
 <div class="flex flex-wrap p-1.5 bg-muted/30 border border-border/40 rounded-xl mb-8 w-fit shadow-sm backdrop-blur-md">
-	{#each [
-		['profile', 'Profile', User],
-		['search', 'Search', Search],
-		['sites', 'Sites', Globe],
-		['credentials', 'Credentials', Key],
-		['sources', 'Sources', Code],
-		['system', 'System', Cpu]
-	] as [tab, label, Icon]}
+	{#each tabs as [tab, label, Icon]}
 		<button
 			onclick={() => { activeTab = tab; error = ''; successMsg = ''; }}
 			class="relative flex items-center gap-2 text-sm px-4 py-2 rounded-lg transition-all duration-300 {activeTab === tab
@@ -447,6 +461,9 @@ import { apiFetch } from '$lib/api';
 			<div class="space-y-1 mb-2">
 				<h2 class="text-xl font-semibold font-heading">Personal Information</h2>
 				<p class="text-xs text-muted-foreground">This information is used to automatically fill job application forms.</p>
+				<p class="text-xs italic text-muted-foreground/70 mt-1">
+					{profileEasterEgg.emoji} {profileEasterEgg.message}
+				</p>
 			</div>
 			
 			<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -468,6 +485,21 @@ import { apiFetch } from '$lib/api';
 				<div class="space-y-1.5">
 					<label class="text-sm font-medium text-foreground/90" for="location">Location</label>
 					<input id="location" type="text" bind:value={profileForm.location} placeholder="San Francisco, CA"
+						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
+				</div>
+				<div class="space-y-1.5">
+					<label class="text-sm font-medium text-foreground/90" for="linkedin_url">LinkedIn URL</label>
+					<input id="linkedin_url" type="url" bind:value={profileForm.linkedin_url} placeholder="https://www.linkedin.com/in/yourprofile"
+						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
+				</div>
+				<div class="space-y-1.5">
+					<label class="text-sm font-medium text-foreground/90" for="driver_license">Driver license</label>
+					<input id="driver_license" type="text" bind:value={profileForm.driver_license} placeholder="e.g. B (car), A (motorcycle)"
+						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
+				</div>
+				<div class="space-y-1.5">
+					<label class="text-sm font-medium text-foreground/90" for="mobility">Mobility / Relocation</label>
+					<input id="mobility" type="text" bind:value={profileForm.mobility} placeholder="e.g. Ile-de-France, willing to relocate"
 						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
 				</div>
 			</div>

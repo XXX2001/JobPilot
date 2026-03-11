@@ -2,6 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import { apiFetch } from '$lib/api';
 	import { Briefcase, Clock, GripVertical, MessageSquare, ChevronDown } from 'lucide-svelte';
+	import { getRejectionMilestone } from '$lib/utils/easterEggs';
 
 	export interface Application {
 		id: number;
@@ -56,6 +57,19 @@
 		}
 		return map;
 	});
+
+	let rejectedCount = $derived((byColumn()['rejected'] ?? []).length);
+	let rejectionMessage = $derived(
+		(() => {
+			const thresholds = [200, 150, 100, 75, 50, 25, 10];
+			for (const t of thresholds) {
+				if (rejectedCount >= t) {
+					return getRejectionMilestone(t);
+				}
+			}
+			return null;
+		})()
+	);
 
 	function onDragStart(e: DragEvent, id: number) {
 		draggedId = id;
@@ -135,6 +149,12 @@
 				<span class="text-xs px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">{items.length}</span>
 			</div>
 
+			{#if col.id === 'rejected' && rejectionMessage}
+				<div class="px-3 py-1.5 text-xs italic text-amber-400/70 border-b border-border bg-amber-500/5">
+					{rejectionMessage.emoji} {rejectionMessage.message}
+				</div>
+			{/if}
+
 			<!-- Cards -->
 			<div class="flex-1 overflow-y-auto p-2 space-y-2">
 				{#each items as app (app.id)}
@@ -149,7 +169,11 @@
 						<div class="flex items-start gap-1.5">
 							<GripVertical size={12} class="text-muted-foreground/40 mt-0.5 flex-shrink-0 group-hover:text-muted-foreground transition-colors" />
 							<div class="flex-1 min-w-0">
-								<p class="text-xs font-medium line-clamp-1">{app.job_title ?? 'Unknown Position'}</p>
+								{#if app.job_match_id}
+									<a href="/jobs/{app.job_match_id}" class="text-xs font-medium line-clamp-1 hover:text-primary hover:underline transition-colors">{app.job_title ?? 'Unknown Position'}</a>
+								{:else}
+									<p class="text-xs font-medium line-clamp-1">{app.job_title ?? 'Unknown Position'}</p>
+								{/if}
 								<div class="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
 									<Briefcase size={10} />
 									<span class="truncate">{app.company ?? '—'}</span>

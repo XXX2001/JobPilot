@@ -2,6 +2,8 @@
 	import { onMount } from 'svelte';
 	import { apiFetch } from '$lib/api';
 	import { Upload, FileText, CheckCircle2, AlertCircle, Eye, GitCompare, Clock } from 'lucide-svelte';
+	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
+	import { getEmptyState } from '$lib/utils/easterEggs';
 
 	interface Document {
 		id: number;
@@ -15,11 +17,10 @@
 
 	let documents = $state<Document[]>([]);
 	let docsLoading = $state(true);
+	const cvEmptyMessage = $derived(documents.length === 0 ? getEmptyState('cv') : '');
 	let uploading = $state(false);
-	let validating = $state(false);
 	let error = $state('');
 	let successMsg = $state('');
-	let markerStatus = $state<{ has_markers: boolean; warnings: string[] } | null>(null);
 	let dragOver = $state(false);
 	let currentCvPath = $state('');
 	let profileLoading = $state(true);
@@ -56,11 +57,8 @@
 		uploading = true;
 		error = '';
 		successMsg = '';
-		markerStatus = null;
 
 		try {
-			// Read the file content
-			const text = await file.text();
 			const fileName = file.name;
 
 			// Save profile with a placeholder path (real upload path is server-side)
@@ -71,31 +69,10 @@
 
 			currentCvPath = `uploads/${fileName}`;
 			successMsg = `CV template "${fileName}" registered.`;
-
-			// Validate markers
-			await validateMarkers(text);
 		} catch (e: any) {
 			error = e.message ?? 'Upload failed';
 		} finally {
 			uploading = false;
-		}
-	}
-
-	async function validateMarkers(texContent: string) {
-		validating = true;
-		try {
-			const result = await apiFetch<{ has_markers: boolean; warnings: string[] }>(
-				'/api/documents/validate-template',
-				{
-					method: 'POST',
-					body: JSON.stringify({ tex_content: texContent })
-				}
-			);
-			markerStatus = result;
-		} catch {
-			// Validate endpoint may not exist yet — skip silently
-		} finally {
-			validating = false;
 		}
 	}
 
@@ -128,22 +105,6 @@
 		if (days === 1) return 'yesterday';
 		return `${days}d ago`;
 	};
-
-	const markerSnippet = `% Add these markers to your CV .tex file:
-% --- Skills section ---
-%%JOBPILOT:skills%%
-Your skills content here
-%%/JOBPILOT:skills%%
-
-% --- Summary section ---
-%%JOBPILOT:summary%%
-Your summary here
-%%/JOBPILOT:summary%%
-
-% --- Experience (per entry) ---
-%%JOBPILOT:experience_0%%
-Job description bullets
-%%/JOBPILOT:experience_0%%`;
 
 	onMount(() => {
 		loadProfile();
@@ -217,38 +178,6 @@ Job description bullets
 				{/if}
 			</div>
 		</div>
-
-		<!-- Marker status banner -->
-		{#if validating}
-			<div class="flex items-center gap-2 p-3 bg-muted/50 border border-border rounded-lg text-xs text-muted-foreground animate-pulse">
-				Checking for JOBPILOT markers…
-			</div>
-		{:else if markerStatus !== null}
-			{#if markerStatus.has_markers}
-				<div class="flex items-center gap-2 p-3 bg-green-500/10 border border-green-500/20 rounded-lg text-xs text-green-400">
-					<CheckCircle2 size={13} />
-					JOBPILOT markers detected ✓ — CV tailoring will work optimally.
-				</div>
-			{:else}
-				<div class="space-y-2">
-					<div class="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-xs text-yellow-400">
-						<AlertCircle size={13} />
-						No JOBPILOT markers found — add them for better tailoring.
-					</div>
-					<details class="border border-border rounded-lg overflow-hidden">
-						<summary class="text-xs px-3 py-2 bg-muted/50 cursor-pointer hover:bg-muted transition-colors select-none">
-							How to add markers
-						</summary>
-						<pre class="text-xs font-mono p-3 bg-background overflow-x-auto text-muted-foreground leading-relaxed whitespace-pre-wrap">{markerSnippet}</pre>
-					</details>
-				</div>
-			{/if}
-			{#if markerStatus.warnings?.length > 0}
-				{#each markerStatus.warnings as warning}
-					<p class="text-xs text-yellow-400">⚠ {warning}</p>
-				{/each}
-			{/if}
-		{/if}
 	</div>
 
 	<!-- Right: Edit history -->
@@ -261,8 +190,8 @@ Job description bullets
 			</div>
 		{:else if documents.length === 0}
 			<div class="flex flex-col items-center justify-center py-12 gap-3 bg-card border border-border rounded-lg">
-				<FileText size={28} class="text-muted-foreground/40" />
-				<p class="text-sm text-muted-foreground font-medium">No tailored CVs yet</p>
+				<FloatingEmoji emoji="📄" size="sm" />
+				<p class="text-sm text-muted-foreground font-medium">{cvEmptyMessage}</p>
 				<p class="text-xs text-muted-foreground">CVs are generated during the job scan when jobs are matched.</p>
 			</div>
 		{:else}

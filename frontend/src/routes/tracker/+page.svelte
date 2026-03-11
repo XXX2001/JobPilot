@@ -4,10 +4,16 @@
 	import KanbanBoard from '$lib/components/KanbanBoard.svelte';
 	import { AlertCircle, RefreshCw } from 'lucide-svelte';
 	import type { Application } from '$lib/components/KanbanBoard.svelte';
+	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
+	import EasterEggToast from '$lib/components/EasterEggToast.svelte';
+	import { getEmptyState, getRejectionMilestone } from '$lib/utils/easterEggs';
 
 	let applications = $state<Application[]>([]);
 	let loading = $state(true);
 	let error = $state('');
+
+	const appEmptyMessage = $derived(applications.length === 0 ? getEmptyState('applications') : '');
+	let milestoneToast = $state<{ message: string; emoji: string; isSpecial: boolean } | null>(null);
 
 	async function load() {
 		loading = true;
@@ -33,6 +39,14 @@
 				method: 'PATCH',
 				body: JSON.stringify({ status })
 			});
+			// Check rejection milestone
+			if (status === 'rejected') {
+				const rejectedCount = applications.filter((a) => a.status === 'rejected').length;
+				const milestone = getRejectionMilestone(rejectedCount);
+				if (milestone) {
+					milestoneToast = milestone;
+				}
+			}
 		} catch (err: any) {
 			error = err.message ?? 'Failed to update status';
 			load(); // revert by reloading
@@ -71,6 +85,15 @@
 	onMount(load);
 </script>
 
+{#if milestoneToast}
+	<EasterEggToast
+		message={milestoneToast.message}
+		emoji={milestoneToast.emoji}
+		type={milestoneToast.isSpecial ? 'celebration' : 'milestone'}
+		onclose={() => (milestoneToast = null)}
+	/>
+{/if}
+
 <!-- Header -->
 <div class="flex items-center justify-between mb-5">
 	<div>
@@ -105,8 +128,8 @@
 	</div>
 {:else if applications.length === 0}
 	<div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
-		<div class="text-4xl">📋</div>
-		<p class="text-muted-foreground text-sm font-medium">No applications yet.</p>
+		<FloatingEmoji emoji="📋" />
+		<p class="text-muted-foreground text-sm font-medium">{appEmptyMessage}</p>
 		<p class="text-muted-foreground text-xs">Apply to jobs from the Job Queue to see them here.</p>
 		<a
 			href="/"

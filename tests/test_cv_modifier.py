@@ -84,3 +84,38 @@ async def test_cv_modifier_propagates_error():
     modifier = CVModifier(client=client)
     with pytest.raises(GeminiJSONError):
         await modifier.modify(_make_job(), SAMPLE_CV, _make_context())
+
+
+from backend.matching.fit_engine import FitAssessment, SkillGap
+
+
+@pytest.mark.asyncio
+async def test_cv_modifier_from_assessment():
+    """modify_from_assessment() should accept FitAssessment and return CVModifierOutput."""
+    expected = CVModifierOutput(replacements=[
+        CVReplacement(
+            section="Skills",
+            original_text="Python, Java, SQL, JavaScript",
+            replacement_text="Python, Docker, SQL, JavaScript",
+            reason="Adds Docker to address critical gap",
+            job_requirement_matched="Docker",
+            confidence=0.85,
+        )
+    ])
+    modifier = CVModifier(client=_mock_client(expected))
+    assessment = FitAssessment(
+        severity=0.55,
+        should_modify=True,
+        simulated_ats_score=45.0,
+        covered_skills=["Python", "SQL"],
+        partial_matches=[],
+        critical_gaps=[
+            SkillGap(skill="Docker", criticality=0.9, best_cv_match="CI/CD", similarity=0.58),
+        ],
+        preferred_gaps=[],
+    )
+    result = await modifier.modify_from_assessment(
+        _make_job(), SAMPLE_CV, assessment
+    )
+    assert isinstance(result, CVModifierOutput)
+    assert len(result.replacements) <= 3

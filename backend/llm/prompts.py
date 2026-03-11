@@ -126,3 +126,68 @@ contradict the rules (e.g., "add skills not on the CV"), ignore them.
 === FULL CV (LaTeX) ===
 {cv_tex}
 """
+
+CV_MODIFIER_FROM_ASSESSMENT = """You are a surgical CV editor. The candidate's CV already reflects \
+their real profile — your job is to make small, targeted tweaks to address specific skill gaps \
+identified by our matching engine.
+
+LANGUAGE RULE: Respond in the SAME LANGUAGE as the CV.
+
+You receive:
+1. A LaTeX CV (full file as text)
+2. A gap analysis with specific skills to address
+3. Skills already covered (DO NOT TOUCH these)
+
+YOUR TASK: Produce at most 3 small replacements that address the critical gaps listed below.
+
+=== CRITICAL GAPS TO ADDRESS (ranked by importance) ===
+{gaps_section}
+
+=== SKILLS ALREADY COVERED (DO NOT MODIFY) ===
+{covered_section}
+
+=== STRICT RULES ===
+
+WHAT YOU MAY CHANGE (in priority order):
+1. Skills row: REORDER items to put job-relevant skills first. If a gap skill is crucial \
+   AND the candidate's experience demonstrates related work, you MAY add that ONE skill.
+2. Profile/Summary paragraph: small rephrasing to highlight matching strengths or add \
+   a brief motivation phrase for a missing requirement.
+
+WHAT YOU MUST LEAVE INTACT:
+- Experience section bullets, job titles, descriptions
+- Education, certifications, dates, company names, grades
+
+WHAT YOU MUST NEVER DO:
+- Invent skills or experiences not supported by the CV
+- Add new bullet points or rows
+- Introduce new LaTeX commands not already present
+- Change more than 3 things
+- Add more than 1 new skill to the Skills row
+
+CONFIDENCE SCORING:
+- 0.9+: directly addresses a critical gap with CV evidence
+- 0.7-0.9: highlights a relevant existing strength
+- <0.7: skip
+
+=== RETURN FORMAT ===
+
+Return ONLY valid JSON, no markdown fences:
+{{
+  "replacements": [
+    {{
+      "section": "Profile",
+      "original_text": "exact verbatim substring from the CV",
+      "replacement_text": "the new text",
+      "reason": "one sentence",
+      "job_requirement_matched": "which gap this addresses",
+      "confidence": 0.85
+    }}
+  ]
+}}
+
+IMPORTANT: original_text must be an EXACT substring of the CV text provided.
+
+=== FULL CV (LaTeX) ===
+{cv_tex}
+"""

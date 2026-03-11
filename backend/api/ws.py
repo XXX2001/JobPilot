@@ -121,4 +121,24 @@ async def broadcast_status(message: str, progress: float = 0.0) -> None:
         manager.disconnect(cid)
 
 
-__all__ = ["ConnectionManager", "manager", "router", "broadcast_status"]
+async def broadcast_job_assessment(
+    match_id: int,
+    ats_score: float,
+    gap_severity: float,
+    decision: str,
+    covered: list[str],
+    gaps: list[dict],
+) -> None:
+    """Broadcast per-job fit assessment to all connected WebSocket clients."""
+    await manager.broadcast({
+        "type": "job_progress",
+        "match_id": match_id,
+        "ats_score": round(ats_score, 1),
+        "gap_severity": round(gap_severity, 3),
+        "decision": decision,
+        "covered": covered,
+        "gaps": gaps,
+    })
+
+
+__all__ = ["ConnectionManager", "manager", "router", "broadcast_status", "broadcast_job_assessment"]

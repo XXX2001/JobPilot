@@ -13,7 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
 from backend.config import settings
+from backend.defaults import MIN_JOB_SKILLS_FOR_FIT_ENGINE
+from backend.matching.cv_parser import CVParser
+from backend.matching.embedder import Embedder
 from backend.matching.filters import JobFilters
+from backend.matching.fit_engine import FitEngine
+from backend.matching.job_skill_extractor import JobSkillExtractor
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails
@@ -22,10 +27,14 @@ from backend.models.user import SearchSettings, UserProfile
 logger = logging.getLogger(__name__)
 
 try:
-    from backend.api.ws import broadcast_status  # type: ignore
+    from backend.api.ws import broadcast_job_assessment, broadcast_status  # type: ignore
 except Exception:
 
     async def broadcast_status(_message: str, _progress: float = 0.0) -> None:  # type: ignore[misc]
+        pass
+
+    async def broadcast_job_assessment(_match_id: int, _ats_score: float, _gap_severity: float,
+                                        _decision: str, _covered: list, _gaps: list) -> None:  # type: ignore[misc]
         pass
 
 
@@ -96,12 +105,18 @@ class MorningBatchScheduler:
         matcher: Any,  # JobMatcher
         cv_pipeline: Any,  # CVPipeline
         db_factory: Callable[[], AsyncSession],
+        fit_engine: FitEngine | None = None,
+        embedder: Embedder | None = None,
     ) -> None:
         self._scraper = scraper
         self._matcher = matcher
         self._cv_pipeline = cv_pipeline
         self._db_factory = db_factory
         self._scheduler = AsyncIOScheduler() if _APSCHEDULER_AVAILABLE else None
+        self._fit_engine = fit_engine or FitEngine()
+        self._embedder = embedder
+        self._cv_parser = CVParser()
+        self._job_extractor = JobSkillExtractor()
 
     # ------------------------------------------------------------------ #
     #  Lifecycle                                                           #
@@ -205,6 +220,64 @@ class MorningBatchScheduler:
         new_match_ids = await self._store_matches(db, ranked)
         logger.info("Stored %d new job matches", len(new_match_ids))
 
+        # ── Step 3.5: Fit Assessment ─────────────────────────────────────
+        await broadcast_status("Analyzing job fit…", progress=0.58)
+        sensitivity = getattr(settings_row, "cv_modification_sensitivity", "balanced")
+
+        # Parse and embed CV profile (cached by hash)
+        cv_profile = None
+        if cv_path and cv_path.exists() and self._embedder:
+            cv_tex = cv_path.read_text(encoding="utf-8")
+            cv_profile = self._cv_parser.build_profile(cv_tex)
+            cv_profile = await self._embedder.embed_cv_profile(cv_profile)
+
+        # Build match_id -> JobDetails mapping
+        match_to_jd: dict[int, Any] = {}
+        _ranked_iter = iter(ranked)
+        for mid in new_match_ids:
+            jd_pair = next(_ranked_iter, None)
+            if jd_pair:
+                match_to_jd[mid] = jd_pair[0]
+
+        assessments: dict[int, Any] = {}  # match_id -> FitAssessment or None
+        if cv_profile and self._embedder:
+            for mid in new_match_ids:
+                jd = match_to_jd.get(mid)
+                if jd is None:
+                    continue
+                try:
+                    job_profile = self._job_extractor.extract(jd.description or "")
+                    if len(job_profile.skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE:
+                        assessments[mid] = None  # fallback
+                        continue
+                    job_profile = await self._embedder.embed_job_profile(job_profile)
+                    assessment = self._fit_engine.assess(job_profile, cv_profile, sensitivity)
+                    assessments[mid] = assessment
+
+                    # Store assessment on JobMatch
+                    match_row = (await db.execute(
+                        select(JobMatch).where(JobMatch.id == mid)
+                    )).scalar_one_or_none()
+                    if match_row:
+                        match_row.gap_severity = assessment.severity
+                        match_row.ats_score = assessment.simulated_ats_score
+                        match_row.fit_assessment_json = assessment.to_dict()
+
+                    await broadcast_job_assessment(
+                        match_id=mid,
+                        ats_score=assessment.simulated_ats_score,
+                        gap_severity=assessment.severity,
+                        decision="modify" if assessment.should_modify else "base_cv",
+                        covered=assessment.covered_skills[:10],
+                        gaps=[{"skill": g.skill, "criticality": g.criticality}
+                              for g in assessment.critical_gaps[:5]],
+                    )
+                except Exception as exc:
+                    logger.warning("Fit assessment failed for match %d: %s", mid, exc)
+                    assessments[mid] = None
+
+            await db.commit()
+
         # ── Step 4: Pre-generate CVs for top N ──────────────────────────
         guard = DailyLimitGuard(db=db, limit=daily_limit)
         remaining = await guard.remaining_today()
@@ -221,11 +294,31 @@ class MorningBatchScheduler:
                 async with sem:
                     out_dir = Path(settings.jobpilot_data_dir) / "cvs" / str(mid)
                     out_dir.mkdir(parents=True, exist_ok=True)
-                    result = await self._cv_pipeline.generate_tailored_cv(
-                        base_cv_path=cv_path,
-                        job=jd,
-                        output_dir=out_dir,
-                    )
+                    assessment = assessments.get(mid)
+
+                    if assessment is not None and not assessment.should_modify:
+                        # Base CV path — no LLM calls
+                        result = await self._cv_pipeline.generate_base_cv(
+                            base_cv_path=cv_path,
+                            job=jd,
+                            output_dir=out_dir,
+                        )
+                    elif assessment is not None and assessment.should_modify:
+                        # Targeted modification using FitAssessment
+                        result = await self._cv_pipeline.generate_tailored_cv(
+                            base_cv_path=cv_path,
+                            job=jd,
+                            output_dir=out_dir,
+                            additional_context=_additional_context,
+                            fit_assessment=assessment,
+                        )
+                    else:
+                        # Fallback — use original pipeline (JobAnalyzer + CVModifier)
+                        result = await self._cv_pipeline.generate_tailored_cv(
+                            base_cv_path=cv_path,
+                            job=jd,
+                            output_dir=out_dir,
+                        )
                     return mid, result
 
             raw_results = await asyncio.gather(

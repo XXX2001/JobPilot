@@ -1,3 +1,8 @@
+# ── Scheduler / Batch ───────────────────────────────────────────────────────
+CONCURRENCY_GEMINI: int = 3       # max concurrent Gemini calls in morning batch
+DAILY_LIMIT: int = 10             # fallback daily application limit
+MIN_MATCH_SCORE: float = 30.0     # fallback minimum match score threshold
+
 # ── ATS Gap Severity Engine ─────────────────────────────────────────────────
 GAP_SEVERITY_THRESHOLD_CONSERVATIVE: float = 0.3
 GAP_SEVERITY_THRESHOLD_BALANCED: float = 0.5

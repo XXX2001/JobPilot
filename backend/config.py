@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import Field  # type: ignore
 from pydantic_settings import (
     BaseSettings,  # type: ignore
@@ -37,3 +39,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = Path(settings.jobpilot_data_dir)
+if not DATA_DIR.is_absolute():
+    DATA_DIR = (PROJECT_ROOT / DATA_DIR).resolve()

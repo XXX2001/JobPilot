@@ -1,5 +1,6 @@
 import json
 import logging
+import platform
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,7 +13,7 @@ from fastapi.staticfiles import StaticFiles  # type: ignore
 from starlette.responses import FileResponse  # type: ignore
 from starlette.staticfiles import NotModifiedResponse  # type: ignore
 
-from backend.config import settings
+from backend.config import DATA_DIR, PROJECT_ROOT, settings
 
 logger = logging.getLogger("jobpilot")
 
@@ -24,12 +25,12 @@ async def lifespan(app: FastAPI):
 
     # Ensure data subdirectories exist
     data_dirs = [
-        Path(settings.jobpilot_data_dir) / "cvs",
-        Path(settings.jobpilot_data_dir) / "letters",
-        Path(settings.jobpilot_data_dir) / "templates",
-        Path(settings.jobpilot_data_dir) / "browser_sessions",
-        Path(settings.jobpilot_data_dir) / "browser_profiles",
-        Path(settings.jobpilot_data_dir) / "logs",
+        DATA_DIR / "cvs",
+        DATA_DIR / "letters",
+        DATA_DIR / "templates",
+        DATA_DIR / "browser_sessions",
+        DATA_DIR / "browser_profiles",
+        DATA_DIR / "logs",
     ]
     for d in data_dirs:
         d.mkdir(parents=True, exist_ok=True)
@@ -194,7 +195,8 @@ except Exception as e:
 
 @app.get("/api/health")
 async def health():
-    tectonic_bin = Path("bin/tectonic")
+    tectonic_name = "tectonic.exe" if platform.system() == "Windows" else "tectonic"
+    tectonic_bin = PROJECT_ROOT / "bin" / tectonic_name
     tectonic = tectonic_bin.exists() or shutil.which("tectonic") is not None
     gemini_key_set = getattr(settings, "GOOGLE_API_KEY", "") not in (None, "", "placeholder")
     result: dict[str, Any] = {
@@ -298,7 +300,7 @@ class SPAStaticFiles(StaticFiles):
 
 # Serve frontend static files if built (don't crash if missing)
 try:
-    static_dir = Path("frontend/build")
+    static_dir = PROJECT_ROOT / "frontend" / "build"
     if static_dir.exists():
         app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="static")
     else:

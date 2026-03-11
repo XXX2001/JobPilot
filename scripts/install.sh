@@ -90,7 +90,11 @@ step "5/9  Installing Playwright Chromium"
 if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" &>/dev/null 2>&1; then
     success "Playwright Chromium already installed"
 else
-    uv run playwright install chromium --with-deps
+    if [ "$(uname -s)" = "Linux" ]; then
+        uv run playwright install chromium --with-deps
+    else
+        uv run playwright install chromium
+    fi
     success "Playwright Chromium installed"
 fi
 
@@ -129,7 +133,16 @@ fi
 
 # ── Step 8: Data directories ──────────────────────────────────────────────────
 step "8/9  Creating data directories"
-mkdir -p data/cvs data/letters data/templates data/sessions data/pdfs data/logs
+mkdir -p data/cvs data/letters data/templates data/sessions data/browser_sessions data/browser_profiles data/pdfs data/logs
+
+# Seed templates with the bundled example if the directory is still empty
+DEFAULTS_TEMPLATES="$REPO_ROOT/scripts/defaults/templates"
+if [ -d "$DEFAULTS_TEMPLATES" ] && [ -z "$(ls -A data/templates 2>/dev/null)" ]; then
+    cp "$DEFAULTS_TEMPLATES"/* data/templates/
+    info "Seeded data/templates/ with example CV template"
+    info "Replace data/templates/example_cv.tex (and add Photo.jpeg) with your own CV."
+fi
+
 success "Data directories ready"
 
 # ── Step 9: Environment file ──────────────────────────────────────────────────
@@ -146,6 +159,52 @@ else
     success ".env already exists"
 fi
 
+step "10/10  Creating launcher shortcuts"
+
+LAUNCHER_SH="$REPO_ROOT/start-jobpilot.sh"
+cat > "$LAUNCHER_SH" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$REPO_ROOT"
+uv run python start.py
+EOF
+chmod +x "$LAUNCHER_SH"
+success "Created launcher: $LAUNCHER_SH"
+
+OS_NAME="$(uname -s)"
+DESKTOP_DIR="$HOME/Desktop"
+
+if [ -d "$DESKTOP_DIR" ]; then
+    if [ "$OS_NAME" = "Darwin" ]; then
+        MAC_LAUNCHER="$DESKTOP_DIR/JobPilot.command"
+        cat > "$MAC_LAUNCHER" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$REPO_ROOT"
+uv run python start.py
+EOF
+        chmod +x "$MAC_LAUNCHER"
+        success "Created desktop launcher: $MAC_LAUNCHER"
+    else
+        LINUX_DESKTOP_FILE="$DESKTOP_DIR/JobPilot.desktop"
+        cat > "$LINUX_DESKTOP_FILE" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=JobPilot
+Comment=Start JobPilot local server
+Exec=bash -lc 'cd "$REPO_ROOT" && uv run python start.py'
+Path=$REPO_ROOT
+Terminal=true
+Categories=Utility;
+EOF
+        chmod +x "$LINUX_DESKTOP_FILE"
+        success "Created desktop shortcut: $LINUX_DESKTOP_FILE"
+    fi
+else
+    warn "Desktop folder not found at $DESKTOP_DIR — launcher created in repo root only."
+fi
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}╔═════════════════════════════════════════════╗${NC}"
@@ -153,7 +212,15 @@ echo -e "${GREEN}${BOLD}║   ✅  JobPilot installed successfully!       ║${N
 echo -e "${GREEN}${BOLD}╚═════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "  ${BOLD}To start JobPilot:${NC}"
-echo -e "    ${CYAN}uv run python start.py${NC}"
+echo -e "    ${CYAN}$LAUNCHER_SH${NC}"
+echo ""
+if [ -d "$DESKTOP_DIR" ]; then
+    if [ "$OS_NAME" = "Darwin" ]; then
+        echo -e "  Desktop shortcut: ${CYAN}$DESKTOP_DIR/JobPilot.command${NC}"
+    else
+        echo -e "  Desktop shortcut: ${CYAN}$DESKTOP_DIR/JobPilot.desktop${NC}"
+    fi
+fi
 echo ""
 echo -e "  Then open: ${CYAN}http://localhost:8000${NC}"
 echo ""

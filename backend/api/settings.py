@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import platform
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from backend.api.deps import DBSession
-from backend.config import settings
+from backend.config import DATA_DIR, PROJECT_ROOT, settings
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.scraping.site_prompts import SITE_CONFIGS
@@ -300,7 +301,10 @@ async def get_setup_status(db: DBSession):
         getattr(settings, "ADZUNA_APP_ID", "") not in (None, "", "placeholder")
         and getattr(settings, "ADZUNA_APP_KEY", "") not in (None, "", "placeholder")
     )
-    tectonic_found = Path("bin/tectonic").exists() or shutil.which("tectonic") is not None
+    tectonic_name = "tectonic.exe" if platform.system() == "Windows" else "tectonic"
+    tectonic_found = (PROJECT_ROOT / "bin" / tectonic_name).exists() or shutil.which(
+        "tectonic"
+    ) is not None
 
     # Check if user has uploaded a base CV
     stmt = select(UserProfile).where(UserProfile.id == 1)
@@ -312,7 +316,7 @@ async def get_setup_status(db: DBSession):
         base_cv_uploaded = Path(profile.base_cv_path).exists()
 
     if not base_cv_uploaded:
-        templates_dir = Path(settings.jobpilot_data_dir) / "templates"
+        templates_dir = DATA_DIR / "templates"
         base_cv_uploaded = any(templates_dir.glob("*.tex"))
 
     setup_complete = gemini_key_set and adzuna_key_set and base_cv_uploaded
@@ -337,7 +341,7 @@ def _mask_email(email: str) -> str:
 
 
 def _has_session(site: str) -> bool:
-    base = Path(settings.jobpilot_data_dir)
+    base = DATA_DIR
     new_path = base / "browser_profiles" / site / "state.json"
     old_path = base / "browser_sessions" / f"{site}_state.json"
     return new_path.exists() or old_path.exists()

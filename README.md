@@ -6,6 +6,8 @@ JobPilot is a local-first job application assistant with a FastAPI backend and a
 
 - FastAPI backend for scraping, matching, CV generation, and application workflows
 - Svelte frontend for queue review, settings, analytics, and document inspection
+- Two-tier scraping: fast Scrapling HTTP fetch for known boards, full browser-agent fallback for others
+- FitEngine: semantic gap-severity scoring combining skill extraction, embedding similarity, and ATS analysis
 - Local SQLite-backed runtime data under `data/`
 - Installer scripts for Linux/macOS (`scripts/install.sh`) and Windows (`scripts/install.ps1`)
 
@@ -27,36 +29,122 @@ git clone <your-repository-url>
 cd Web-automation
 ```
 
-### 2. Install dependencies
+### 2. Install dependencies (by OS)
 
-#### Linux / macOS
+<details>
+<summary><strong>Linux</strong></summary>
 
 ```bash
+# from repository root
 bash scripts/install.sh
 ```
 
-#### Windows (PowerShell)
+What this does:
+
+- checks Python and Node versions
+- installs Python deps with `uv sync`
+- installs Playwright Chromium with Linux deps
+- downloads Tectonic into `bin/tectonic`
+- builds frontend static assets
+- creates runtime folders under `data/`
+- initializes `.env` from `.env.example` if missing
+
+</details>
+
+<details>
+<summary><strong>macOS</strong></summary>
+
+```bash
+# from repository root
+bash scripts/install.sh
+```
+
+After install, validate Tectonic:
+
+```bash
+./bin/tectonic --version
+```
+
+If macOS blocks execution (Gatekeeper/quarantine), allow or unquarantine the binary, then re-check:
+
+```bash
+xattr -d com.apple.quarantine ./bin/tectonic
+./bin/tectonic --version
+```
+
+</details>
+
+<details>
+<summary><strong>Windows (PowerShell)</strong></summary>
 
 ```powershell
+# from repository root
 .\scripts\install.ps1
 ```
 
+After install, you can start JobPilot by double-clicking:
+
+- Desktop: `Start JobPilot.bat`
+- Or repo root: `Start JobPilot.bat` / `start-jobpilot.ps1`
+
+If your execution policy blocks scripts:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install.ps1
+```
+
+Validate Tectonic after install:
+
+```powershell
+.\bin\tectonic.exe --version
+```
+
+</details>
+
 The installer is safe to re-run. It checks Python and Node.js, installs Python dependencies with `uv`, installs Playwright Chromium, downloads Tectonic into `bin/`, builds the frontend, creates runtime directories, and initializes `.env` from `.env.example` when needed.
+
+It also creates launchers for non-technical users:
+
+- Linux: `start-jobpilot.sh` and desktop `JobPilot.desktop` (when Desktop folder exists)
+- macOS: `start-jobpilot.sh` and desktop `JobPilot.command`
+- Windows: `Start JobPilot.bat`, `start-jobpilot.ps1`, and desktop `Start JobPilot.bat`
+
+When users launch JobPilot from these shortcuts, they see a simple startup message in the terminal window and the app opens automatically in the browser at `http://localhost:8000`.
 
 ### 3. Configure environment variables
 
 Copy `.env.example` to `.env` if the installer did not already create it, then fill in your API keys.
 
 ```dotenv
+# Required API keys
 GOOGLE_API_KEY=your_gemini_api_key
 ADZUNA_APP_ID=your_adzuna_app_id
 ADZUNA_APP_KEY=your_adzuna_app_key
+# Credential encryption (generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+CREDENTIAL_KEY=
+
+# App settings
+JOBPILOT_HOST=127.0.0.1
+JOBPILOT_PORT=8000
+JOBPILOT_LOG_LEVEL=info
+JOBPILOT_DATA_DIR=./data
+JOBPILOT_SCRAPER_HEADLESS=true
+
+# Gemini model settings
+GOOGLE_MODEL=gemini-2.0-flash
+GOOGLE_MODEL_FALLBACKS=               # comma-separated fallback model IDs
+
+# Feature flags
+SCRAPLING_ENABLED=true                # fast HTTP-first scraping tier
+APPLY_TIER1_ENABLED=true              # two-tier application engine
 ```
 
 Required services:
 
 - `GOOGLE_API_KEY`: Gemini access for tailoring, extraction, and browser-agent prompts
 - `ADZUNA_APP_ID` and `ADZUNA_APP_KEY`: Adzuna search integration
+- `CREDENTIAL_KEY`: Fernet key for encrypting stored credentials (generate once per install)
 
 ### 4. Build the frontend manually if needed
 
@@ -80,6 +168,23 @@ Then open `http://localhost:8000`.
 3. Upload a LaTeX CV template (`.tex`).
 4. Configure search preferences and API keys.
 5. Run a batch or wait for the scheduled job search.
+
+## Architecture notes
+
+### Two-tier scraping
+
+The scraper tries a fast Scrapling HTTP fetch first (Tier 1) for known boards (LinkedIn, Indeed, Google Jobs, Welcome to the Jungle, Glassdoor). A single Gemini call extracts jobs from the cleaned HTML — roughly 20× fewer LLM calls than a full browser-agent loop. Unknown or complex sites fall back to the full AdaptiveScraper (Tier 2). Toggle with `SCRAPLING_ENABLED`.
+
+### FitEngine (ATS gap severity)
+
+`backend/matching/fit_engine.py` scores a candidate CV against a job using:
+
+1. Skill extraction from both documents (`JobSkillExtractor`, `CVParser`)
+2. Cosine similarity between sentence embeddings (`Embedder`)
+3. ATS gap severity: missing skills are rated critical / important / nice-to-have
+4. A weighted composite score that drives CV tailoring priority
+
+The morning batch generates a base CV once per day and then calls `modify_from_assessment()` to produce job-specific variants targeted at gap coverage. Sensitivity is configurable per user in Settings.
 
 ## Current limitations
 
@@ -110,6 +215,7 @@ Then open `http://localhost:8000`.
 - Re-run the installer or run `uv run python scripts/download_tectonic.py`.
 - Confirm the binary exists in `bin/` or that `tectonic` is available on `PATH`.
 - On macOS, a downloaded binary may require manual approval before first launch.
+- On Windows, security software may quarantine `tectonic.exe`; restore/allow it, then rerun the installer.
 
 ### Frontend build is missing
 
@@ -137,7 +243,15 @@ npm run build --prefix frontend
 ## Repository layout
 
 ```text
-backend/     FastAPI application code
+backend/
+  api/         FastAPI route handlers
+  applier/     Two-tier application engine (auto, assisted, manual)
+  latex/        CV generation pipeline (LaTeX → PDF via Tectonic)
+  llm/          Gemini client, CV modifier, job analyzer, prompts
+  matching/     FitEngine — skill extraction, embedding, gap scoring, ATS analysis
+  models/       SQLAlchemy models and Pydantic schemas
+  scraping/     Orchestrator, AdaptiveScraper (Tier 2), Scrapling fetcher (Tier 1)
+  scheduler/    Morning batch job
 frontend/    Svelte frontend
 scripts/     Setup and utility scripts
 tests/       Automated tests

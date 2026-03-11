@@ -43,6 +43,7 @@ Thumbs.db
 
 # ─── OpenCode / Sisyphus ─────────────────────────────────────────────────────
 .sisyphus/
+.claude/
 
 # ─── Temporary / Generated ───────────────────────────────────────────────────
 *.png

@@ -4,6 +4,7 @@
 import asyncio
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import webbrowser
@@ -11,12 +12,14 @@ from pathlib import Path
 
 import uvicorn  # type: ignore
 
+from backend.config import PROJECT_ROOT
+
 
 def check_prerequisites():
     """Verify all dependencies are available."""
     checks = {
-        "Database": Path("data/jobpilot.db").parent.exists(),
-        "Frontend build": Path("frontend/build").exists(),
+        "Database": (PROJECT_ROOT / "data").exists(),
+        "Frontend build": (PROJECT_ROOT / "frontend" / "build").exists(),
         "Tectonic": _find_binary("tectonic"),
     }
 
@@ -28,12 +31,10 @@ def check_prerequisites():
 
 def _find_binary(name: str) -> bool:
     """Check if a binary is available (PATH or bundled)."""
-    import shutil
-
     if shutil.which(name):
         return True
     ext = ".exe" if platform.system() == "Windows" else ""
-    return (Path("bin") / f"{name}{ext}").exists()
+    return (PROJECT_ROOT / "bin" / f"{name}{ext}").exists()
 
 
 def free_port(port: int) -> None:
@@ -51,10 +52,7 @@ def free_port(port: int) -> None:
 
     if platform.system() == "Windows":
         # netstat to find PID, then taskkill
-        result = subprocess.run(
-            ["netstat", "-ano"],
-            capture_output=True, text=True
-        )
+        result = subprocess.run(["netstat", "-ano"], capture_output=True, text=True)
         for line in result.stdout.splitlines():
             if f":{port}" in line and "LISTENING" in line:
                 parts = line.split()
@@ -62,12 +60,22 @@ def free_port(port: int) -> None:
                 subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True)
                 break
     else:
-        # lsof / fuser to find PID, then SIGTERM → SIGKILL
-        result = subprocess.run(
-            ["lsof", "-ti", f"tcp:{port}"],
-            capture_output=True, text=True
-        )
-        pids = result.stdout.strip().split()
+        pids: list[str] = []
+        if shutil.which("lsof"):
+            result = subprocess.run(
+                ["lsof", "-ti", f"tcp:{port}"],
+                capture_output=True,
+                text=True,
+            )
+            pids = result.stdout.strip().split()
+        elif shutil.which("fuser"):
+            result = subprocess.run(
+                ["fuser", "-n", "tcp", str(port)],
+                capture_output=True,
+                text=True,
+            )
+            pids = result.stdout.strip().split()
+
         for pid_str in pids:
             try:
                 pid = int(pid_str)
@@ -76,6 +84,7 @@ def free_port(port: int) -> None:
                 pass
         if pids:
             import time
+
             time.sleep(1.5)  # give process time to exit gracefully
             # Force-kill anything still alive
             for pid_str in pids:
@@ -92,9 +101,18 @@ def free_port(port: int) -> None:
 def main():
     check_prerequisites()
 
+    Path(PROJECT_ROOT).mkdir(parents=True, exist_ok=True)
+
     # Ensure data directories exist
-    for d in ["data/cvs", "data/letters", "data/templates", "data/browser_sessions", "data/logs"]:
-        Path(d).mkdir(parents=True, exist_ok=True)
+    for d in [
+        "data/cvs",
+        "data/letters",
+        "data/templates",
+        "data/browser_sessions",
+        "data/browser_profiles",
+        "data/logs",
+    ]:
+        (PROJECT_ROOT / d).mkdir(parents=True, exist_ok=True)
 
     host = "127.0.0.1"
     port = 8000
@@ -116,6 +134,7 @@ def main():
         reload=False,
         log_level="info",
     )
+
 
 if __name__ == "__main__":
     main()

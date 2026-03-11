@@ -114,7 +114,7 @@ try {
 if ($PlaywrightOk) {
     Write-Ok "Playwright Chromium already installed"
 } else {
-    & uv run playwright install chromium --with-deps
+    & uv run playwright install chromium
     Write-Ok "Playwright Chromium installed"
 }
 
@@ -169,7 +169,7 @@ if (-not $FrontendBuilt) {
 
 # ── Step 8: Data directories ──────────────────────────────────────────────────
 Write-Step "8/9  Creating data directories"
-$Dirs = @("data\cvs","data\letters","data\templates","data\sessions","data\pdfs","data\logs")
+$Dirs = @("data\cvs","data\letters","data\templates","data\sessions","data\browser_sessions","data\browser_profiles","data\pdfs","data\logs")
 foreach ($Dir in $Dirs) {
     $Full = Join-Path $RepoRoot $Dir
     if (-not (Test-Path $Full)) {
@@ -194,6 +194,38 @@ if (-not (Test-Path $EnvFile)) {
     Write-Ok ".env already exists"
 }
 
+Write-Step "10/10  Creating launcher shortcuts"
+
+$LauncherPs1 = Join-Path $RepoRoot "start-jobpilot.ps1"
+$LauncherBat = Join-Path $RepoRoot "Start JobPilot.bat"
+$DesktopDir = [Environment]::GetFolderPath("Desktop")
+$DesktopLauncher = if ($DesktopDir) { Join-Path $DesktopDir "Start JobPilot.bat" } else { $null }
+
+$Ps1Content = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = "Stop"
+Set-Location "$RepoRoot"
+uv run python start.py
+"@
+Set-Content -Path $LauncherPs1 -Value $Ps1Content -Encoding UTF8
+
+$BatContent = @"
+@echo off
+cd /d "$RepoRoot"
+uv run python start.py
+"@
+Set-Content -Path $LauncherBat -Value $BatContent -Encoding ASCII
+
+Write-Ok "Created launcher: $LauncherPs1"
+Write-Ok "Created launcher: $LauncherBat"
+
+if ($DesktopLauncher) {
+    Copy-Item -Path $LauncherBat -Destination $DesktopLauncher -Force
+    Write-Ok "Created desktop shortcut: $DesktopLauncher"
+} else {
+    Write-Warn "Desktop path not found — launcher created in repo root only."
+}
+
 # ── Done ──────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "╔═════════════════════════════════════════════╗" -ForegroundColor Green
@@ -201,7 +233,11 @@ Write-Host "║   ✅  JobPilot installed successfully!       ║" -ForegroundCo
 Write-Host "╚═════════════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
 Write-Host "  To start JobPilot:" -ForegroundColor White
-Write-Host "    uv run python start.py" -ForegroundColor Cyan
+Write-Host "    $LauncherBat" -ForegroundColor Cyan
 Write-Host ""
+if ($DesktopLauncher) {
+    Write-Host "  Desktop shortcut: $DesktopLauncher" -ForegroundColor Cyan
+    Write-Host ""
+}
 Write-Host "  Then open: http://localhost:8000" -ForegroundColor Cyan
 Write-Host ""

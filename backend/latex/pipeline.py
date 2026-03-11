@@ -60,18 +60,43 @@ class CVPipeline:
         self._cv_applicator = cv_applicator # backend.latex.applicator.CVApplicator
         self._context_cache: dict[int, tuple[float, object]] = {}  # job_id → (timestamp, context)
 
-    async def generate_tailored_cv(
+    async def generate_base_cv(
         self,
         base_cv_path: Path,
         job: JobDetails,
         output_dir: Path,
     ) -> TailoredCV:
+        """Copy base CV and compile PDF without any LLM modification."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        dest_tex = output_dir / "cv.tex"
+
+        shutil.copy2(base_cv_path, dest_tex)
+        for support_file in base_cv_path.parent.iterdir():
+            if support_file.suffix.lower() in {".cls", ".sty", ".jpg", ".jpeg", ".png", ".pdf", ".eps"}:
+                shutil.copy2(support_file, output_dir / support_file.name)
+
+        pdf_path = await self._compiler.compile(dest_tex, output_dir)
+
+        return TailoredCV(
+            job_id=job.id,
+            tex_path=dest_tex,
+            pdf_path=pdf_path,
+            diff=[],
+            cv_tailored=False,
+        )
+
+    async def generate_tailored_cv(
+        self,
+        base_cv_path: Path,
+        job: JobDetails,
+        output_dir: Path,
+        additional_context: str = "",
+        fit_assessment=None,  # Optional FitAssessment
+    ) -> TailoredCV:
         output_dir.mkdir(parents=True, exist_ok=True)
         dest_tex = output_dir / "cv.tex"
 
         # 1. Copy — never mutate the base file.
-        # Also copy any .cls/.sty support files from the same directory so
-        # tectonic can resolve \documentclass and \usepackage references.
         shutil.copy2(base_cv_path, dest_tex)
         for support_file in base_cv_path.parent.iterdir():
             if support_file.suffix.lower() in {".cls", ".sty", ".jpg", ".jpeg", ".png", ".pdf", ".eps"}:
@@ -81,51 +106,52 @@ class CVPipeline:
         diff: list[DiffEntry] = []
         cv_tailored = False
 
-        # 2–4. Analyze + modify (only when all three components are wired up)
-        if (
-            self._job_analyzer is not None
-            and self._cv_modifier is not None
-            and self._cv_applicator is not None
-        ):
+        # 2-4. Analyze + modify
+        if self._cv_modifier is not None and self._cv_applicator is not None:
             try:
-                # 2. JobAnalyzer (cached per job_id with 1-hour TTL)
-                job_id = job.id
-                context = None
-                if job_id is not None and job_id in self._context_cache:
-                    ts, cached = self._context_cache[job_id]
-                    if monotonic() - ts < 3600:  # 1 hour TTL
-                        context = cached
-                        logger.debug("Using cached JobContext for job_id=%s", job_id)
-                    else:
-                        del self._context_cache[job_id]
-                if context is None:
-                    context = await self._job_analyzer.analyze(job)
-                    if job_id is not None:
-                        # Evict oldest entry if cache exceeds 100 items
-                        if len(self._context_cache) >= 100:
-                            oldest_key = next(iter(self._context_cache))
-                            del self._context_cache[oldest_key]
-                        self._context_cache[job_id] = (monotonic(), context)
-                        logger.debug("Cached JobContext for job_id=%s", job_id)
-
-                # 3. CVModifier
-                modifier_output = await self._cv_modifier.modify(job, cv_tex, context)
-
-                # 4. CVApplicator
-                cv_tex, applied = self._cv_applicator.apply(
-                    cv_tex, modifier_output.replacements
-                )
-
-                diff = [
-                    DiffEntry(
-                        section=r.section,
-                        original_text=r.original_text,
-                        edited_text=r.replacement_text,
-                        change_description=r.reason,
+                if fit_assessment is not None and hasattr(self._cv_modifier, "modify_from_assessment"):
+                    # Assessment-driven path — skip JobAnalyzer entirely
+                    modifier_output = await self._cv_modifier.modify_from_assessment(
+                        job, cv_tex, fit_assessment
                     )
-                    for r in applied
-                ]
-                cv_tailored = bool(diff)
+                elif self._job_analyzer is not None:
+                    # Fallback path — original JobAnalyzer + CVModifier flow
+                    job_id = job.id
+                    context = None
+                    if job_id is not None and job_id in self._context_cache:
+                        ts, cached = self._context_cache[job_id]
+                        if monotonic() - ts < 3600:
+                            context = cached
+                        else:
+                            del self._context_cache[job_id]
+                    if context is None:
+                        context = await self._job_analyzer.analyze(job, cv_content=cv_tex)
+                        if job_id is not None:
+                            if len(self._context_cache) >= 100:
+                                oldest_key = next(iter(self._context_cache))
+                                del self._context_cache[oldest_key]
+                            self._context_cache[job_id] = (monotonic(), context)
+
+                    modifier_output = await self._cv_modifier.modify(
+                        job, cv_tex, context, additional_context=additional_context
+                    )
+                else:
+                    modifier_output = None
+
+                if modifier_output is not None:
+                    cv_tex, applied = self._cv_applicator.apply(
+                        cv_tex, modifier_output.replacements
+                    )
+                    diff = [
+                        DiffEntry(
+                            section=r.section,
+                            original_text=r.original_text,
+                            edited_text=r.replacement_text,
+                            change_description=r.reason,
+                        )
+                        for r in applied
+                    ]
+                    cv_tailored = bool(diff)
 
             except (GeminiRateLimitError, GeminiJSONError) as exc:
                 logger.warning("CV modifier LLM error (%s); using base CV unchanged.", exc)
@@ -139,10 +165,7 @@ class CVPipeline:
                 cv_tex = dest_tex.read_text(encoding="utf-8")
                 diff = []
 
-        # Write (possibly edited) tex back
         dest_tex.write_text(cv_tex, encoding="utf-8")
-
-        # 5. Compile
         pdf_path = await self._compiler.compile(dest_tex, output_dir)
 
         return TailoredCV(

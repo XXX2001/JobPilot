@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from backend.latex.pipeline import CVPipeline
+from backend.latex.pipeline import CVPipeline, TailoredCV
 from backend.models.schemas import JobDetails
 from backend.llm.validators import CVReplacement, CVModifierOutput
 from backend.llm.job_context import JobContext
@@ -24,6 +24,10 @@ def _make_job(job_id: int = 1) -> JobDetails:
         company="Acme Corp",
         description="We need a Python engineer with experience in distributed systems.",
     )
+
+
+def _make_test_job(job_id: int = 1) -> JobDetails:
+    return _make_job(job_id)
 
 
 def _make_context() -> JobContext:
@@ -166,3 +170,27 @@ def test_cv_pipeline_modifier_failure_falls_back(tmp_path: Path):
     assert result.pdf_path.exists()
 
 
+@pytest.mark.asyncio
+async def test_generate_base_cv(tmp_path):
+    """generate_base_cv should copy tex, compile, and set cv_tailored=False."""
+    base_cv = tmp_path / "templates" / "cv.tex"
+    base_cv.parent.mkdir(parents=True)
+    base_cv.write_text(r"\documentclass{article}\begin{document}Hello\end{document}")
+
+    out_dir = tmp_path / "output"
+
+    compiler = MagicMock()
+    compiler.compile = AsyncMock(return_value=out_dir / "cv.pdf")
+
+    pipeline = CVPipeline(compiler=compiler)
+    result = await pipeline.generate_base_cv(
+        base_cv_path=base_cv,
+        job=_make_test_job(),
+        output_dir=out_dir,
+    )
+
+    assert isinstance(result, TailoredCV)
+    assert result.cv_tailored is False
+    assert result.diff == []
+    assert (out_dir / "cv.tex").exists()
+    compiler.compile.assert_awaited_once()

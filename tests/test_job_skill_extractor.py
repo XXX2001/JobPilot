@@ -1,7 +1,7 @@
 """Tests for job description NLP skill extraction."""
 from __future__ import annotations
 
-from backend.matching.job_skill_extractor import JobSkillExtractor, JobProfile
+from backend.matching.job_skill_extractor import JobProfile, JobSkillExtractor
 
 JOB_DESCRIPTION = """
 About us:

@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.matching.embedder import Embedder
 from backend.matching.cv_parser import CVProfile, SkillEntry
+from backend.matching.embedder import Embedder
 from backend.matching.job_skill_extractor import JobProfile, JobSkill
 
 

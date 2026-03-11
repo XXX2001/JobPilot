@@ -126,14 +126,18 @@ class CVParser:
         text_lower = text.lower()
         for mw in _MULTI_WORD_SKILLS:
             if mw in text_lower:
-                skills.append(SkillEntry(text=mw, context="profile", weight=CONTEXT_WEIGHTS["profile"]))
+                skills.append(
+                    SkillEntry(text=mw, context="profile", weight=CONTEXT_WEIGHTS["profile"])
+                )
 
         # Then tech patterns
         for match in TECH_PATTERN.finditer(text):
             term = match.group(1).strip()
             if term.lower() not in _STOP_WORDS and len(term) >= 2:
                 if not any(s.text.lower() == term.lower() for s in skills):
-                    skills.append(SkillEntry(text=term, context="profile", weight=CONTEXT_WEIGHTS["profile"]))
+                    skills.append(
+                        SkillEntry(text=term, context="profile", weight=CONTEXT_WEIGHTS["profile"])
+                    )
 
         return skills
 

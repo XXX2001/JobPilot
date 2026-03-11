@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
+from backend.matching.cv_parser import CVProfile, SkillEntry
 from backend.matching.fit_engine import FitEngine, cosine_similarity
-from backend.matching.cv_parser import SkillEntry, CVProfile
-from backend.matching.job_skill_extractor import JobSkill, JobProfile
+from backend.matching.job_skill_extractor import JobProfile, JobSkill
 
 
 def test_cosine_similarity_identical():

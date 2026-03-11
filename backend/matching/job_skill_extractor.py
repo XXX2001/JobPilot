@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 
 from backend.matching.skill_patterns import (
     KNOCKOUT_PATTERN,
-    TECH_PATTERN,
     SKILL_PHRASE_PATTERNS,
+    TECH_PATTERN,
     classify_section,
     extract_linguistic_modifier,
 )

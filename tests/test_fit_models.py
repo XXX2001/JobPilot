@@ -1,6 +1,6 @@
 """Test that new DB columns exist on SearchSettings and JobMatch."""
-from backend.models.user import SearchSettings
 from backend.models.job import JobMatch
+from backend.models.user import SearchSettings
 
 
 def test_search_settings_has_sensitivity():

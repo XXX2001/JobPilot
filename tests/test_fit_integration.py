@@ -11,7 +11,6 @@ from backend.matching.embedder import Embedder
 from backend.matching.fit_engine import FitEngine
 from backend.matching.job_skill_extractor import JobSkillExtractor
 
-
 SAMPLE_CV = r"""
 \begin{rSection}{Profile}
 Experienced Python developer with expertise in backend systems and cloud infrastructure.
@@ -92,7 +91,9 @@ async def test_smoke_matching_job_pipeline():
 
     assert 0.0 <= assessment.severity <= 1.0
     assert isinstance(assessment.simulated_ats_score, float)
-    assert len(assessment.covered_skills) + len(assessment.critical_gaps) + len(assessment.preferred_gaps) >= 0
+    n_covered = len(assessment.covered_skills)
+    n_gaps = len(assessment.critical_gaps) + len(assessment.preferred_gaps)
+    assert n_covered + n_gaps >= 0
 
 
 @pytest.mark.asyncio

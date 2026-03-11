@@ -287,6 +287,18 @@ class MorningBatchScheduler:
         )
 
         if cv_path and cv_path.exists():
+            # Build additional context from user profile for the CV modifier
+            _additional_parts: list[str] = []
+            if profile_row:
+                if profile_row.driver_license:
+                    _additional_parts.append(f"Driver license: {profile_row.driver_license}")
+                if profile_row.mobility:
+                    _additional_parts.append(f"Mobility / relocation: {profile_row.mobility}")
+                if profile_row.additional_info and isinstance(profile_row.additional_info, dict):
+                    for k, v in profile_row.additional_info.items():
+                        _additional_parts.append(f"{k}: {v}")
+            _additional_context = "\n".join(_additional_parts)
+
             pairs = list(zip(top_ids, [jd for jd, _ in ranked[: len(top_ids)]]))
             sem = asyncio.Semaphore(3)  # cap concurrent Gemini calls
 

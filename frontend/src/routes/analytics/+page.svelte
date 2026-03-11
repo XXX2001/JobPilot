@@ -229,7 +229,7 @@
 					<p>This week: <span class="text-foreground font-medium">{summary.apps_this_week}</span> application{summary.apps_this_week !== 1 ? 's' : ''} sent.</p>
 				{/if}
 				{#if summary.avg_match_score != null}
-					<p>Average match score: <span class="text-foreground font-medium">{summary.avg_match_score}%</span>. {summary.avg_match_score >= 70 ? 'Great targeting!' : summary.avg_match_score >= 50 ? 'Consider refining your keywords.' : 'Try broader search terms.'}</p>
+					<p>Average match score: <span class="text-foreground font-medium">{summary.avg_match_score}%</span>. {summary.avg_match_score >= 70 ? 'Bon ciblage !' : summary.avg_match_score >= 50 ? 'Affine tes mots-clés.' : 'Essaie des termes plus larges.'}</p>
 				{/if}
 			</div>
 		</div>

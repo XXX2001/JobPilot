@@ -206,7 +206,7 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 							{/each}
 							<input
 								type="text"
-								placeholder="e.g. Software Engineer, Python…"
+								placeholder="ex. Ingénieur logiciel, Python…"
 								bind:value={keywordInput}
 								onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addKeyword(); } }}
 								class="flex-1 min-w-32 bg-transparent text-xs focus:outline-none placeholder:text-muted-foreground/60"

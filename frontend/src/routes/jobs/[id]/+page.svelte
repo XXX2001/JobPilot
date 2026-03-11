@@ -73,9 +73,9 @@
 		if (!job) return null;
 		if (!job.salary_min && !job.salary_max) return null;
 		if (job.salary_min && job.salary_max)
-			return `£${Math.round(job.salary_min / 1000)}k – £${Math.round(job.salary_max / 1000)}k`;
-		if (job.salary_min) return `£${Math.round(job.salary_min / 1000)}k+`;
-		return `up to £${Math.round((job.salary_max ?? 0) / 1000)}k`;
+			return `${Math.round(job.salary_min / 1000)}k€ – ${Math.round(job.salary_max / 1000)}k€`;
+		if (job.salary_min) return `${Math.round(job.salary_min / 1000)}k€+`;
+		return `jusqu'à ${Math.round((job.salary_max ?? 0) / 1000)}k€`;
 	});
 
 	const timeAgo = (dateStr?: string) => {

@@ -470,22 +470,22 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 			<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
 				<div class="space-y-1.5">
 					<label class="text-sm font-medium text-foreground/90" for="full_name">Full name</label>
-					<input id="full_name" type="text" bind:value={profileForm.full_name} placeholder="John Doe"
+					<input id="full_name" type="text" bind:value={profileForm.full_name} placeholder="Jean Dupont"
 						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
 				</div>
 				<div class="space-y-1.5">
 					<label class="text-sm font-medium text-foreground/90" for="email">Email address</label>
-					<input id="email" type="email" bind:value={profileForm.email} placeholder="john@example.com"
+					<input id="email" type="email" bind:value={profileForm.email} placeholder="jean@exemple.fr"
 						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
 				</div>
 				<div class="space-y-1.5">
 					<label class="text-sm font-medium text-foreground/90" for="phone">Phone number</label>
-					<input id="phone" type="tel" bind:value={profileForm.phone} placeholder="+1 (555) 000-0000"
+					<input id="phone" type="tel" bind:value={profileForm.phone} placeholder="+33 6 00 00 00 00"
 						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
 				</div>
 				<div class="space-y-1.5">
 					<label class="text-sm font-medium text-foreground/90" for="location">Location</label>
-					<input id="location" type="text" bind:value={profileForm.location} placeholder="San Francisco, CA"
+					<input id="location" type="text" bind:value={profileForm.location} placeholder="Paris, France"
 						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
 				</div>
 				<div class="space-y-1.5">
@@ -495,12 +495,12 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 				</div>
 				<div class="space-y-1.5">
 					<label class="text-sm font-medium text-foreground/90" for="driver_license">Driver license</label>
-					<input id="driver_license" type="text" bind:value={profileForm.driver_license} placeholder="e.g. B (car), A (motorcycle)"
+					<input id="driver_license" type="text" bind:value={profileForm.driver_license} placeholder="ex. B (voiture), A (moto)"
 						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
 				</div>
 				<div class="space-y-1.5">
 					<label class="text-sm font-medium text-foreground/90" for="mobility">Mobility / Relocation</label>
-					<input id="mobility" type="text" bind:value={profileForm.mobility} placeholder="e.g. Ile-de-France, willing to relocate"
+					<input id="mobility" type="text" bind:value={profileForm.mobility} placeholder="ex. Île-de-France, ouvert à la mobilité"
 						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all placeholder:text-muted-foreground/40 shadow-sm" />
 				</div>
 			</div>
@@ -621,9 +621,9 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 				<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
 					<!-- Salary min -->
 					<div class="space-y-1.5">
-						<label class="text-sm font-medium text-foreground/90" for="salary_min">Minimum salary (£)</label>
+						<label class="text-sm font-medium text-foreground/90" for="salary_min">Salaire minimum (€)</label>
 						<div class="relative">
-							<span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground">£</span>
+							<span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground">€</span>
 							<input id="salary_min" type="number" min="0" step="5000" bind:value={salaryMin}
 								class="w-full text-sm pl-8 pr-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm" />
 						</div>

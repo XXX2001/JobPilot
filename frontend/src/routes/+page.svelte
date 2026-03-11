@@ -207,12 +207,12 @@
 		</div>
 		<TypewriterText
 			messages={[
-				'Scanning the internet for your dream job...',
-				'Negotiating with job boards on your behalf...',
-				'Teaching robots to read job descriptions...',
-				"Convincing LinkedIn you're not a bot...",
-				'Translating recruiter-speak into English...',
-				'Bribing the algorithm with good vibes...'
+				"Scan de l'internet à la recherche de ton job de rêve...",
+				'Négociation avec les job boards en ton nom...',
+				'Apprentissage de la lecture de fiches de poste par les robots...',
+				"Convaincre LinkedIn que tu n'es pas un bot...",
+				'Traduction du jargon RH en français courant...',
+				"Soudoyer l'algorithme avec de bonnes ondes..."
 			]}
 			class="text-muted-foreground text-sm"
 		/>

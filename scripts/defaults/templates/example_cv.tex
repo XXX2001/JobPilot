@@ -1,0 +1,113 @@
+\documentclass{resume} % Use the custom resume.cls style
+
+\usepackage[left=0.4in,top=0.4in,right=0.4in,bottom=0.4in]{geometry}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{ifthen}
+
+\newcommand{\tab}[1]{\hspace{.2667\textwidth}\rlap{#1}}
+\newcommand{\itab}[1]{\hspace{0em}\rlap{#1}}
+
+%--- Store contact details for use inside our custom header ---%
+\newcommand{\contactdetails}{Paris, France \textbar\ \href{mailto:alex.dupont@example.com}{alex.dupont@example.com} \textbar\ +33 6 00 00 00 00 \textbar\ \href{https://linkedin.com/in/alexdupont}{linkedin.com/in/alexdupont}}
+
+%--- Storable uppercase name (set alongside \name{}) ---%
+\newcommand{\myname}{Alex Dupont}
+
+%--- Override the centered name block with a left+photo layout ---%
+\renewcommand{\printname}{%
+  \noindent
+  \begin{minipage}[t]{0.62\textwidth}
+    \raggedright
+    {\huge\bfseries\MakeUppercase{\myname}}\\[4pt]%
+    {\small \contactdetails}%
+  \end{minipage}%
+  \hfill%
+  \begin{minipage}[t]{0.28\textwidth}
+    \raggedleft
+    % Place a file named Photo.jpeg alongside this .tex to show your photo.
+    % The block below renders a placeholder box when the file is absent.
+    \IfFileExists{Photo.jpeg}{%
+      \raisebox{-20pt}[\height][0pt]{\includegraphics[width=2.5cm]{Photo.jpeg}}%
+    }{%
+      \raisebox{-20pt}[\height][0pt]{%
+        \fbox{\parbox[b][2.5cm][c]{2.5cm}{\centering\tiny Votre\\Photo\\Ici}}%
+      }%
+    }
+  \end{minipage}%
+  \par\medskip
+  \hrule
+  \nameskip
+}
+
+%--- Name (address commands left empty so cls prints nothing extra) ---%
+\name{Alex Dupont} % keep in sync with \myname above
+
+\begin{document}
+
+%----------------------------------------------------------------------------------------
+%	PROFIL
+%----------------------------------------------------------------------------------------
+\begin{rSection}{Profil}
+Ingénieur logiciel avec 4 ans d'expérience dans le développement de services backend et de pipelines de données.
+À l'aise sur l'ensemble de la stack technique, avec un focus sur la fiabilité des systèmes, des APIs propres
+et l'automatisation. Passionné par la résolution de problèmes complexes et la livraison de solutions concrètes.
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+%	FORMATION
+%----------------------------------------------------------------------------------------
+\begin{rSection}{Formation}
+
+{\bf Licence en Informatique} \hfill {Septembre 2017 -- Juin 2021}\\
+Université de Technologie de Paris
+
+\medskip
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+%	EXPÉRIENCE
+%----------------------------------------------------------------------------------------
+\begin{rSection}{Expérience}
+
+\textbf{Ingénieur Backend} \hfill {Août 2023 -- Présent}\\
+Acme Corp, Paris -- 52\,000\,€/an\\
+\smallskip
+\begin{itemize}[leftmargin=1em, itemsep=-2pt, topsep=4pt]
+  \item Conçu et déployé une file de traitement distribuée gérant 50\,000 événements/jour avec Python et Redis.
+  \item Réduit la latence p95 de l'API de 40\,\% en profilant et réécrivant les requêtes critiques en base de données.
+  \item Piloté la migration d'un monolithe vers des microservices pour le domaine de facturation.
+\end{itemize}
+
+\medskip
+
+\textbf{Développeur Junior} \hfill {Juillet 2021 -- Juillet 2023}\\
+Exemple Startup SAS, Lyon -- 38\,000\,€/an\\
+\smallskip
+\begin{itemize}[leftmargin=1em, itemsep=-2pt, topsep=4pt]
+  \item Développé des outils internes pour les pipelines d'ingestion de données (Python, Airflow, PostgreSQL).
+  \item Maintenu les pipelines CI/CD (GitHub Actions) et l'infrastructure de déploiement Docker.
+  \item Contribué à une bibliothèque cliente open-source adoptée par plus de 200 utilisateurs externes.
+\end{itemize}
+
+\end{rSection}
+
+%----------------------------------------------------------------------------------------
+%	INFORMATIONS COMPLÉMENTAIRES
+%----------------------------------------------------------------------------------------
+\begin{rSection}{Informations complémentaires}
+
+\begin{tabular}{ @{} >{\bfseries}l @{\hspace{4ex}} p{0.72\textwidth} }
+Langues        & Français (langue maternelle), Anglais (C1), Espagnol (B1) \\[6pt]
+Certifications & AWS Certified Developer -- Associate, 2023 \\[3pt]
+               & Google Professional Data Engineer, 2022 \\[6pt]
+Compétences    & Python, Go, PostgreSQL, Redis, Docker, Kubernetes \\
+               & FastAPI, SQLAlchemy, Airflow, GitHub Actions \\[3pt]
+               & Conception de systèmes, API design, modélisation de données \\
+\end{tabular}
+
+\end{rSection}
+
+\end{document}

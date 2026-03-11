@@ -34,6 +34,8 @@ class GeminiClient:
         self._model_name = "gemini-2.0-flash"
         self._call_times: deque[float] = deque(maxlen=self.RPM_LIMIT)
         self._lock = asyncio.Lock()
+        self._embed_call_times: deque[float] = deque(maxlen=self.RPM_LIMIT)
+        self._embed_lock = asyncio.Lock()
 
     async def _wait_for_rate_limit(self) -> None:
         async with self._lock:
@@ -90,3 +92,28 @@ class GeminiClient:
                 raise GeminiJSONError(
                     f"Invalid JSON from LLM (after retry): {retry_exc}\nRaw: {text[:200]}"
                 ) from first_exc
+
+    async def _wait_for_embed_rate_limit(self) -> None:
+        async with self._embed_lock:
+            now = time.monotonic()
+            if len(self._embed_call_times) == self.RPM_LIMIT:
+                oldest = self._embed_call_times[0]
+                window = 60.0 - (now - oldest)
+                if window > 0:
+                    logger.info("Embed rate limit: sleeping %.1fs", window)
+                    await asyncio.sleep(min(window, 120.0))
+            self._embed_call_times.append(time.monotonic())
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Batch embed texts via text-embedding-004. Returns list of 768-dim vectors."""
+        from backend.defaults import EMBEDDING_MODEL
+
+        await self._wait_for_embed_rate_limit()
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=texts,
+            ),
+        )
+        return [e.values for e in result.embeddings]

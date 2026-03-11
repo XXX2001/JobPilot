@@ -4,12 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.matching.fit_engine import (
-    FitEngine,
-    FitAssessment,
-    SkillGap,
-    cosine_similarity,
-)
+from backend.matching.fit_engine import FitEngine, cosine_similarity
 from backend.matching.cv_parser import SkillEntry, CVProfile
 from backend.matching.job_skill_extractor import JobSkill, JobProfile
 

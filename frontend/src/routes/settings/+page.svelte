@@ -30,6 +30,7 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 		daily_limit: number;
 		batch_time: string;
 		min_match_score: number;
+		cv_modification_sensitivity?: string;
 	}
 
 	interface Sources {
@@ -106,6 +107,7 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 	let dailyLimit = $state(10);
 	let batchTime = $state('08:00');
 	let minMatchScore = $state(30);
+	let cvModificationSensitivity = $state<'conservative' | 'balanced' | 'aggressive'>('balanced');
 	let searchLoading = $state(true);
 
 	// Sources
@@ -171,6 +173,7 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 			dailyLimit = s.daily_limit ?? 10;
 			batchTime = s.batch_time ?? '08:00';
 			minMatchScore = s.min_match_score ?? 30;
+			cvModificationSensitivity = (s.cv_modification_sensitivity as 'conservative' | 'balanced' | 'aggressive') ?? 'balanced';
 		} catch {
 			// not yet configured
 		} finally {
@@ -287,7 +290,8 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 					remote_only: remoteOnly,
 					daily_limit: dailyLimit,
 					batch_time: batchTime,
-					min_match_score: minMatchScore
+					min_match_score: minMatchScore,
+					cv_modification_sensitivity: cvModificationSensitivity
 				})
 			});
 			successMsg = 'Search settings saved.';
@@ -670,6 +674,25 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 							<span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out {remoteOnly ? 'translate-x-5' : 'translate-x-0'}"></span>
 						</button>
 					</div>
+				</div>
+
+				<hr class="border-border/30" />
+
+				<!-- CV Modification Sensitivity -->
+				<div class="space-y-2">
+					<label class="text-sm font-medium text-foreground/90" for="cv-sensitivity">CV Modification Sensitivity</label>
+					<select
+						id="cv-sensitivity"
+						bind:value={cvModificationSensitivity}
+						class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm"
+					>
+						<option value="conservative">Conservative — Modify CV for most jobs</option>
+						<option value="balanced">Balanced — Only modify when meaningful gaps exist</option>
+						<option value="aggressive">Aggressive — Trust my base CV, rarely modify</option>
+					</select>
+					<p class="text-xs text-muted-foreground">
+						Controls how aggressively the system tailors your CV for each job.
+					</p>
 				</div>
 			</div>
 

@@ -178,6 +178,15 @@ foreach ($Dir in $Dirs) {
 }
 Write-Ok "Data directories ready"
 
+# Seed templates with the bundled example if the directory is still empty
+$DefaultsTemplates = Join-Path $RepoRoot "scripts\defaults\templates"
+$DataTemplates     = Join-Path $RepoRoot "data\templates"
+if ((Test-Path $DefaultsTemplates) -and (-not (Get-ChildItem $DataTemplates -ErrorAction SilentlyContinue))) {
+    Copy-Item "$DefaultsTemplates\*" $DataTemplates
+    Write-Ok "Seeded data\templates\ with example CV template"
+    Write-Host "  Replace data\templates\example_cv.tex (and add Photo.jpeg) with your own CV." -ForegroundColor Cyan
+}
+
 # ── Step 9: Environment file ──────────────────────────────────────────────────
 Write-Step "9/9  Setting up .env"
 $EnvFile    = Join-Path $RepoRoot ".env"

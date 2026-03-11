@@ -21,6 +21,9 @@ class UserProfile(Base):
     email: Mapped[str] = mapped_column(String, nullable=False)
     phone: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    linkedin_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    driver_license: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    mobility: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     base_cv_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     base_letter_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_info: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
@@ -45,6 +48,7 @@ class SearchSettings(Base):
     daily_limit: Mapped[int] = mapped_column(Integer, default=10)
     batch_time: Mapped[str] = mapped_column(String, default="08:00")
     min_match_score: Mapped[float] = mapped_column(nullable=False, default=30.0)
+    countries: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     cv_modification_sensitivity: Mapped[str] = mapped_column(
         String, default="balanced", nullable=False
     )

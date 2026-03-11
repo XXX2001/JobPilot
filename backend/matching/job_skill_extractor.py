@@ -6,9 +6,7 @@ import re
 from dataclasses import dataclass, field
 
 from backend.matching.skill_patterns import (
-    CRITICAL_SECTION_PATTERNS,
     KNOCKOUT_PATTERN,
-    PREFERRED_SECTION_PATTERNS,
     TECH_PATTERN,
     SKILL_PHRASE_PATTERNS,
     classify_section,

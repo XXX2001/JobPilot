@@ -26,10 +26,6 @@ def _make_job(job_id: int = 1) -> JobDetails:
     )
 
 
-def _make_test_job(job_id: int = 1) -> JobDetails:
-    return _make_job(job_id)
-
-
 def _make_context() -> JobContext:
     return JobContext(
         required_skills=["Python", "distributed systems"],
@@ -185,7 +181,7 @@ async def test_generate_base_cv(tmp_path):
     pipeline = CVPipeline(compiler=compiler)
     result = await pipeline.generate_base_cv(
         base_cv_path=base_cv,
-        job=_make_test_job(),
+        job=_make_job(),
         output_dir=out_dir,
     )
 

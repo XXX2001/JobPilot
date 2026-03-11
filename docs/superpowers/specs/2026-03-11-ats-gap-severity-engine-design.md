@@ -45,15 +45,19 @@ All under `backend/matching/`:
 
 | File | Change |
 |------|--------|
-| `backend/llm/gemini_client.py` | Add `embed()` method |
+| `backend/llm/gemini_client.py` | Add `embed()` method with a separate rate limiter for embeddings |
 | `backend/matching/matcher.py` | Integrate FitEngine after rank_and_filter |
 | `backend/scheduler/morning_batch.py` | Route to base CV or LLM pipeline based on FitEngine |
-| `backend/llm/cv_modifier.py` | Accept FitAssessment instead of JobContext |
-| `backend/llm/prompts.py` | New targeted CVModifier prompt using gap report |
-| `backend/models/user.py` | Add `cv_modification_sensitivity` setting |
+| `backend/latex/pipeline.py` | Add `generate_base_cv()` path (copy + compile, no LLM); refactor `generate_tailored_cv()` to accept `FitAssessment` for the modify path; keep existing `JobContext` path for fallback |
+| `backend/llm/cv_modifier.py` | Add `modify_from_assessment(FitAssessment)` method alongside existing `modify(JobContext)` (kept for fallback path) |
+| `backend/llm/prompts.py` | New `CV_MODIFIER_FROM_ASSESSMENT` prompt using gap report |
+| `backend/models/user.py` | Add `cv_modification_sensitivity` to `SearchSettings`: `Mapped[str] = mapped_column(String, default='balanced')` |
+| `backend/models/job.py` | Add columns to `JobMatch`: `gap_severity: Float`, `ats_score: Float`, `fit_assessment_json: JSON` |
 | `backend/api/settings.py` | Expose new setting |
 | `frontend/src/routes/settings/+page.svelte` | 3-option sensitivity selector |
 | `backend/defaults.py` | Add threshold constants |
+
+**Database migration:** An Alembic migration is required for the new `SearchSettings.cv_modification_sensitivity` column and the new `JobMatch` columns (`gap_severity`, `ats_score`, `fit_assessment_json`).
 
 ### No New Dependencies
 
@@ -92,6 +96,7 @@ class CVProfile:
 - Regex patterns targeting common LaTeX CV structures: `\cvskill{}`, `\skill{}`, skills rows/tables, comma-separated lists in skills sections
 - Experience bullet content scanned for tech/tool mentions
 - Profile/summary paragraph text scanned for skill phrases
+- **Minimum extraction threshold:** if fewer than 3 skills are extracted (template not recognized), fall back to a full-text scan that splits on commas, bullets, and common delimiters to extract candidate skill phrases. Log a warning so the user can check their template compatibility.
 
 **Caching:** `CVProfile` serialized as JSON and stored in DB alongside the user record. On batch run, compare `raw_text_hash` with current `.tex` file — skip re-parsing if unchanged.
 
@@ -124,7 +129,7 @@ class JobProfile:
 - Known tech patterns: capitalized words, compound terms with `/` or `-` (e.g., "CI/CD", "Node.js")
 
 **Step 3 — Criticality scoring** from two signals:
-- **Section position:** critical section → 1.0, preferred → 0.3, neutral → 0.6
+- **Section position:** critical section → 1.0, preferred → 0.5, neutral → 0.3 (unlabeled sections are often generic context, not requirements)
 - **Linguistic modifiers:** "must"/"essential"/"required" near skill → boost to 1.0; "exposure to"/"familiar with"/"bonus" → drop to 0.3
 - Final criticality = max(section_signal, linguistic_signal)
 
@@ -139,7 +144,7 @@ Wraps Gemini `text-embedding-004` using the existing `GeminiClient`.
 ```python
 async def embed(self, texts: list[str]) -> list[list[float]]:
     """Batch embed texts via text-embedding-004. Returns list of 768-dim vectors."""
-    await self._wait_for_rate_limit()
+    await self._wait_for_embed_rate_limit()  # separate rate limiter from LLM calls
     result = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: self._client.models.embed_content(
@@ -149,6 +154,8 @@ async def embed(self, texts: list[str]) -> list[list[float]]:
     )
     return [e.values for e in result.embeddings]
 ```
+
+**Rate limiting:** Embedding calls use a **separate** sliding-window rate limiter from LLM generation calls, since Google applies different rate limits to embedding vs generation endpoints. This prevents embedding calls from unnecessarily throttling LLM calls and vice versa.
 
 **Caching strategy:**
 - **CV embeddings:** cached on upload in DB. Re-embedded only when `raw_text_hash` changes.
@@ -233,6 +240,8 @@ def should_modify(severity: float, sensitivity: str = "balanced") -> bool:
     return severity >= THRESHOLDS[sensitivity]
 ```
 
+**Cosine similarity:** Computed manually (dot product / norms) using standard Python math — no numpy required. Implemented in `fit_engine.py`.
+
 **Simulated ATS score:** `ats_score = (1.0 - severity) * 100` — a 0-100 number representing estimated ATS pass likelihood.
 
 **Practical examples:**
@@ -247,10 +256,20 @@ def should_modify(severity: float, sensitivity: str = "balanced") -> bool:
 
 ### 5. Modified CVModifier Integration
 
-**Current flow:** `JobAnalyzer` (LLM) → generic `JobContext` → `CVModifier` (LLM)
-**New flow:** `FitEngine` (deterministic) → surgical `FitAssessment` → `CVModifier` (LLM)
+**Current flow:** `JobAnalyzer` (LLM) → generic `JobContext` → `CVModifier.modify()` (LLM)
+**New flow:** `FitEngine` (deterministic) → surgical `FitAssessment` → `CVModifier.modify_from_assessment()` (LLM)
+**Fallback flow:** `JobAnalyzer` (LLM) → `JobContext` → `CVModifier.modify()` (LLM) — unchanged, for unparseable jobs
 
-When modification is needed, the CVModifier prompt receives targeted instructions derived from `FitAssessment`:
+**CVModifier dual interface:**
+- `modify(job, cv_tex, context: JobContext)` — **kept unchanged** for the fallback path
+- `modify_from_assessment(job, cv_tex, assessment: FitAssessment)` — **new method** that builds a targeted prompt from the gap report
+
+**CVPipeline changes (`backend/latex/pipeline.py`):**
+- `generate_base_cv(job, output_dir)` — **new method**: copy base `.tex` → compile PDF. No LLM calls. Used when `should_modify == False`.
+- `generate_tailored_cv(job, output_dir, assessment: FitAssessment)` — **modified**: calls `CVModifier.modify_from_assessment()` instead of `JobAnalyzer` + `CVModifier.modify()`.
+- `generate_tailored_cv_fallback(job, output_dir)` — **renamed from old `generate_tailored_cv`**: preserves the existing `JobAnalyzer → CVModifier` flow for the fallback path.
+
+When modification is needed, the new CVModifier prompt receives targeted instructions derived from `FitAssessment`:
 
 ```
 You MUST address these critical gaps (ranked by severity):
@@ -262,6 +281,8 @@ You MUST NOT touch these (already covered):
 
 Budget: only fix gaps where candidate has related experience.
 ```
+
+**Editable sections constraint:** CV modifications are restricted to `Profile`, `Skills`, and `Additional Information` sections only (matching the existing `CVReplacement.section` Literal constraint). Experience section content is never modified — this is an intentional design decision: gap-filling edits should add missing skills to the Skills row or reference them in the Profile, not fabricate experience bullets.
 
 **JobAnalyzer disposition:**
 - Eliminated for most jobs (FitEngine provides the structured analysis)
@@ -294,11 +315,11 @@ morning_batch step 3.5 (NEW — FIT ASSESSMENT):
 morning_batch step 4 (PRE-GENERATE CVs — MODIFIED):
   └─ For each match:
       ├─ IF assessment.should_modify == False:
-      │    └─ Copy base CV → compile PDF (no LLM calls)
+      │    └─ CVPipeline.generate_base_cv() → copy + compile PDF (no LLM calls)
       ├─ IF assessment.should_modify == True:
-      │    └─ CVModifier(fit_assessment) → replacements → compile PDF
+      │    └─ CVPipeline.generate_tailored_cv(assessment) → CVModifier.modify_from_assessment() → compile PDF
       └─ IF FitEngine couldn't parse job (fallback):
-           └─ JobAnalyzer → CVModifier → compile PDF (current flow)
+           └─ CVPipeline.generate_tailored_cv_fallback() → JobAnalyzer → CVModifier.modify() → compile PDF
 ```
 
 ### 7. User Settings & Observability
@@ -324,7 +345,7 @@ Each job match displays:
 - Covered skills list
 - Gap list with criticality
 
-**WebSocket broadcast enrichment:**
+**WebSocket broadcast enrichment** — a new `broadcast_job_assessment()` function is added alongside the existing `broadcast_status()`. It emits a separate message type (`job_progress`) that the frontend can use to render per-job fit details:
 
 ```json
 {

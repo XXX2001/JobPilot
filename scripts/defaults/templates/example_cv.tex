@@ -11,10 +11,10 @@
 \newcommand{\itab}[1]{\hspace{0em}\rlap{#1}}
 
 %--- Store contact details for use inside our custom header ---%
-\newcommand{\contactdetails}{Berlin, Germany \textbar\ \href{mailto:alex.morgan@example.com}{alex.morgan@example.com} \textbar\ +49 170 000 0000 \textbar\ \href{https://linkedin.com/in/alexmorgan}{linkedin.com/in/alexmorgan}}
+\newcommand{\contactdetails}{Paris, France \textbar\ \href{mailto:alex.dupont@example.com}{alex.dupont@example.com} \textbar\ +33 6 00 00 00 00 \textbar\ \href{https://linkedin.com/in/alexdupont}{linkedin.com/in/alexdupont}}
 
 %--- Storable uppercase name (set alongside \name{}) ---%
-\newcommand{\myname}{Alex Morgan}
+\newcommand{\myname}{Alex Dupont}
 
 %--- Override the centered name block with a left+photo layout ---%
 \renewcommand{\printname}{%
@@ -33,7 +33,7 @@
       \raisebox{-20pt}[\height][0pt]{\includegraphics[width=2.5cm]{Photo.jpeg}}%
     }{%
       \raisebox{-20pt}[\height][0pt]{%
-        \fbox{\parbox[b][2.5cm][c]{2.5cm}{\centering\tiny Your\\Photo\\Here}}%
+        \fbox{\parbox[b][2.5cm][c]{2.5cm}{\centering\tiny Votre\\Photo\\Ici}}%
       }%
     }
   \end{minipage}%
@@ -43,69 +43,69 @@
 }
 
 %--- Name (address commands left empty so cls prints nothing extra) ---%
-\name{Alex Morgan} % keep in sync with \myname above
+\name{Alex Dupont} % keep in sync with \myname above
 
 \begin{document}
 
 %----------------------------------------------------------------------------------------
-%	PROFILE
+%	PROFIL
 %----------------------------------------------------------------------------------------
-\begin{rSection}{Profile}
-Software engineer with 4 years of experience building backend services and data pipelines.
-Comfortable working across the full stack, with a focus on reliable systems, clean APIs,
-and automation. Enjoys solving ambiguous problems and shipping things that matter to users.
+\begin{rSection}{Profil}
+Ingénieur logiciel avec 4 ans d'expérience dans le développement de services backend et de pipelines de données.
+À l'aise sur l'ensemble de la stack technique, avec un focus sur la fiabilité des systèmes, des APIs propres
+et l'automatisation. Passionné par la résolution de problèmes complexes et la livraison de solutions concrètes.
 \end{rSection}
 
 %----------------------------------------------------------------------------------------
-%	EDUCATION
+%	FORMATION
 %----------------------------------------------------------------------------------------
-\begin{rSection}{Education}
+\begin{rSection}{Formation}
 
-{\bf BSc in Computer Science} \hfill {September 2017 -- June 2021}\\
-Technical University of Example, Berlin
+{\bf Licence en Informatique} \hfill {Septembre 2017 -- Juin 2021}\\
+Université de Technologie de Paris
 
 \medskip
 \end{rSection}
 
 %----------------------------------------------------------------------------------------
-%	EXPERIENCE
+%	EXPÉRIENCE
 %----------------------------------------------------------------------------------------
-\begin{rSection}{Experience}
+\begin{rSection}{Expérience}
 
-\textbf{Backend Engineer} \hfill {August 2023 -- Present}\\
-Acme Corp, Berlin\\
+\textbf{Ingénieur Backend} \hfill {Août 2023 -- Présent}\\
+Acme Corp, Paris -- 52\,000\,€/an\\
 \smallskip
 \begin{itemize}[leftmargin=1em, itemsep=-2pt, topsep=4pt]
-  \item Designed and shipped a distributed job queue processing 50k events/day using Python and Redis.
-  \item Reduced API p95 latency by 40\% by profiling and rewriting critical database queries.
-  \item Led migration from monolith to microservices for the billing domain.
+  \item Conçu et déployé une file de traitement distribuée gérant 50\,000 événements/jour avec Python et Redis.
+  \item Réduit la latence p95 de l'API de 40\,\% en profilant et réécrivant les requêtes critiques en base de données.
+  \item Piloté la migration d'un monolithe vers des microservices pour le domaine de facturation.
 \end{itemize}
 
 \medskip
 
-\textbf{Junior Developer} \hfill {July 2021 -- July 2023}\\
-Example Startup GmbH, Munich\\
+\textbf{Développeur Junior} \hfill {Juillet 2021 -- Juillet 2023}\\
+Exemple Startup SAS, Lyon -- 38\,000\,€/an\\
 \smallskip
 \begin{itemize}[leftmargin=1em, itemsep=-2pt, topsep=4pt]
-  \item Built internal tooling for data ingestion pipelines (Python, Airflow, PostgreSQL).
-  \item Maintained CI/CD pipelines (GitHub Actions) and Docker-based deployment infrastructure.
-  \item Contributed to open-source client library adopted by 200+ external users.
+  \item Développé des outils internes pour les pipelines d'ingestion de données (Python, Airflow, PostgreSQL).
+  \item Maintenu les pipelines CI/CD (GitHub Actions) et l'infrastructure de déploiement Docker.
+  \item Contribué à une bibliothèque cliente open-source adoptée par plus de 200 utilisateurs externes.
 \end{itemize}
 
 \end{rSection}
 
 %----------------------------------------------------------------------------------------
-%	ADDITIONAL INFORMATION
+%	INFORMATIONS COMPLÉMENTAIRES
 %----------------------------------------------------------------------------------------
-\begin{rSection}{Additional Information}
+\begin{rSection}{Informations complémentaires}
 
 \begin{tabular}{ @{} >{\bfseries}l @{\hspace{4ex}} p{0.72\textwidth} }
-Languages      & English (fluent), German (B2), French (A2) \\[6pt]
+Langues        & Français (langue maternelle), Anglais (C1), Espagnol (B1) \\[6pt]
 Certifications & AWS Certified Developer -- Associate, 2023 \\[3pt]
                & Google Professional Data Engineer, 2022 \\[6pt]
-Skills         & Python, Go, PostgreSQL, Redis, Docker, Kubernetes \\
+Compétences    & Python, Go, PostgreSQL, Redis, Docker, Kubernetes \\
                & FastAPI, SQLAlchemy, Airflow, GitHub Actions \\[3pt]
-               & System design, API design, data modelling \\
+               & Conception de systèmes, API design, modélisation de données \\
 \end{tabular}
 
 \end{rSection}

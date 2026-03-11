@@ -49,10 +49,6 @@ class SearchSettings(Base):
         String, default="balanced", nullable=False
     )
 
-    def __init__(self, **kwargs):
-        kwargs.setdefault("cv_modification_sensitivity", "balanced")
-        super().__init__(**kwargs)
-
 
 class SiteCredential(Base):
     __tablename__ = "site_credentials"

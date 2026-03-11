@@ -1,13 +1,5 @@
 # tests/test_skill_patterns.py
-from backend.matching.skill_patterns import (
-    CRITICAL_SECTION_PATTERNS,
-    PREFERRED_SECTION_PATTERNS,
-    SKILL_PHRASE_PATTERNS,
-    LINGUISTIC_BOOST_PATTERNS,
-    LINGUISTIC_DROP_PATTERNS,
-    classify_section,
-    extract_linguistic_modifier,
-)
+from backend.matching.skill_patterns import classify_section, extract_linguistic_modifier
 
 
 def test_classify_required_section():

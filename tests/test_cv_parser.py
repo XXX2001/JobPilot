@@ -2,7 +2,7 @@
 """Tests for CV LaTeX parser — skill extraction with context tagging."""
 from __future__ import annotations
 
-from backend.matching.cv_parser import CVParser, SkillEntry, CVProfile
+from backend.matching.cv_parser import CVParser, CVProfile
 
 SAMPLE_CV = r"""
 \begin{rSection}{Profile}

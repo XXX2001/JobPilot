@@ -45,6 +45,13 @@ class SearchSettings(Base):
     daily_limit: Mapped[int] = mapped_column(Integer, default=10)
     batch_time: Mapped[str] = mapped_column(String, default="08:00")
     min_match_score: Mapped[float] = mapped_column(nullable=False, default=30.0)
+    cv_modification_sensitivity: Mapped[str] = mapped_column(
+        String, default="balanced", nullable=False
+    )
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("cv_modification_sensitivity", "balanced")
+        super().__init__(**kwargs)
 
 
 class SiteCredential(Base):

@@ -62,3 +62,6 @@ class JobMatch(Base):
     status: Mapped[str] = mapped_column(String, default="new")
     batch_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     matched_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    gap_severity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ats_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    fit_assessment_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

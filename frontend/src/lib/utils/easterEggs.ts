@@ -1,34 +1,34 @@
 // ── Rejection Milestones (warm/motivational) ──────────────────────
 const rejectionMilestones = new Map<number, { message: string; emoji: string }>([
-	[10, { message: 'Tu viens à peine de commencer.', emoji: '🔥' }],
+	[10, { message: "You're just warming up.", emoji: '🔥' }],
 	[
 		25,
 		{
 			message:
-				"Thomas Edison a échoué 1 000 fois avant l'ampoule. Tu es en avance sur son planning.",
+				"Thomas Edison failed 1,000 times before the lightbulb. You're ahead of schedule.",
 			emoji: '💡'
 		}
 	],
 	[
 		50,
 		{
-			message: 'À mi-chemin des 100 — et après 100 refus, le oui fait encore plus mal aux RH.',
+			message: 'Halfway to 100 — and after 100 rejections, the yes hits different.',
 			emoji: '🎯'
 		}
 	],
 	[
 		75,
 		{
-			message: 'À ce stade, tu es pratiquement imperméable aux refus. Niveau armure : mythique.',
+			message: "At this point, you're basically rejection-proof. Armor level: mythic.",
 			emoji: '🛡️'
 		}
 	],
-	[100, { message: '100 refus. Tu es désormais statistiquement inarrêtable.', emoji: '🚀' }],
-	[150, { message: "La plupart abandonnent à 50. Toi t'es d'une autre trempe.", emoji: '💪' }],
+	[100, { message: '100 rejections. You are now statistically unstoppable.', emoji: '🚀' }],
+	[150, { message: "Most people quit at 50. You're built different.", emoji: '💪' }],
 	[
 		200,
 		{
-			message: '200 refus. Les entreprises rejettent une légende, maintenant.',
+			message: '200 rejections. At this point, companies are rejecting a legend.',
 			emoji: '👑'
 		}
 	]
@@ -37,85 +37,85 @@ const rejectionMilestones = new Map<number, { message: string; emoji: string }>(
 // ── Empty States (playful) ────────────────────────────────────────
 const emptyStates: Record<string, string[]> = {
 	queue: [
-		"Le job idéal est là quelque part, il rafraîchit sûrement aussi sa boîte mail.",
-		'Aucune offre pour l'instant. Le marché fait des caprices.',
-		'File vide. Pause café pendant qu'on chasse pour toi.'
+		'The right job is out there, probably also refreshing its inbox.',
+		'No jobs yet. The market is playing hard to get.',
+		"Queue's empty. Time to grab coffee while we hunt."
 	],
 	applications: [
-		'Tout expert a un jour eu une page de candidatures vide.',
-		"Pas encore de candidatures. Ton futur employeur est encore en train d'écrire l'offre.",
-		'Page vierge. Le monde t'appartient (il ne t'a pas encore répondu).'
+		'Every expert was once a beginner with an empty applications page.',
+		'No applications yet. Your future employer is still writing the job post.',
+		"Clean slate. The world is your oyster (that hasn't been applied to yet)."
 	],
 	cv: [
-		'Pas encore de CV personnalisé. Ton CV de base fait de son mieux.',
-		"Rien ici pour l'instant. On chauffe le compilateur LaTeX.",
-		"La forge à CV attend sa première commande."
+		'No tailored CVs yet. Your base CV is doing its best.',
+		"No CVs here yet. We're warming up the LaTeX compiler.",
+		'The CV forge awaits its first commission.'
 	]
 };
 
 // ── Loading Messages (absurd/playful) ─────────────────────────────
 const loadingMessages: string[] = [
-	"Scan de l'internet à la recherche de ton job de rêve...",
-	'Négociation avec les job boards en ton nom...',
-	'Apprentissage de la lecture de fiches de poste par les robots...',
-	"Convaincre LinkedIn que tu n'es pas un bot...",
-	'Traduction du jargon RH en français courant...',
-	"Demander au marché de l'emploi de te prendre au sérieux...",
-	"Soudoyer l'algorithme avec de bonnes ondes...",
-	'Pratique des arts obscurs sur les offres d\'emploi...',
-	"Chuchoter des douceurs aux APIs...",
-	'Faire semblant d\'être 47 onglets de navigateur à la fois...'
+	'Scanning the internet for your dream job...',
+	'Negotiating with job boards on your behalf...',
+	'Teaching robots to read job descriptions...',
+	"Convincing LinkedIn you're not a bot...",
+	'Translating recruiter-speak into English...',
+	'Asking the job market to take you seriously...',
+	'Bribing the algorithm with good vibes...',
+	'Performing dark arts on job listings...',
+	'Whispering sweet nothings to APIs...',
+	'Pretending to be 47 browser tabs at once...'
 ];
 
 // ── Batch Completion Messages ─────────────────────────────────────
 const batchMessages: Record<string, string[]> = {
 	zero_jobs: [
-		"Le marché de l'emploi fait une pause café. On réessaie demain.",
-		'Zéro nouvelle offre. Même les bots ont droit à un jour de repos.',
-		"Rien de nouveau aujourd'hui. Mercure est peut-être rétrograde."
+		"The job market took a coffee break. We'll try again tomorrow.",
+		'Zero new jobs. Even the bots need a day off.',
+		'Nothing new today. Mercury might be in retrograde.'
 	],
 	success: [
-		'Nouvelles opportunités, servies fraîches.',
-		"Ton futur employeur ne le sait pas encore, mais aujourd'hui c'est peut-être le jour.",
-		"Nouvelles offres prêtes à l'emploi. Soyons exigeants."
+		'Fresh opportunities, served hot.',
+		"Your future employer doesn't know it yet, but today might be the day.",
+		"New jobs locked and loaded. Let's get picky."
 	]
 };
 
 // ── CV Generation Toasts ──────────────────────────────────────────
 const cvToasts: string[] = [
-	"CV affiné. Tu es maintenant 3 % plus employable (non vérifié scientifiquement).",
-	"Nouveau CV forgé. C'est dangereux d'y aller seul — prends ça.",
-	'CV taillé sur mesure. Tu en jettes. Littéralement.',
-	'Encore un CV de forgé. Ton compilateur LaTeX te passe le bonjour.'
+	"CV sharpened. You're now 3% more hireable (scientifically unverified).",
+	"New CV forged. It's dangerous to go alone — take this.",
+	'CV tailored. Looking sharp. Literally.',
+	'Another CV crafted. Your LaTeX compiler sends its regards.'
 ];
 
 // ── Profile Completion ────────────────────────────────────────────
 const profileMessages: Record<string, { message: string; emoji: string }> = {
-	complete: { message: 'Profil complet. Tu en jettes sur le papier.', emoji: '✨' },
+	complete: { message: 'Profile complete. You look great on paper.', emoji: '✨' },
 	empty: {
 		message:
-			"Un profil vide, c'est comme arriver à un entretien en pyjama — confortable, mais pas idéal.",
+			'A blank profile is like showing up to an interview in pajamas — comfortable, but not ideal.',
 		emoji: '👔'
 	},
 	partial: {
-		message: "On y est presque ! Quelques champs de plus et tu seras inarrêtable.",
+		message: "Getting there! A few more fields and you'll be unstoppable.",
 		emoji: '📝'
 	}
 };
 
 // ── Apply Confirmation ────────────────────────────────────────────
 const applyConfirmation: string[] = [
-	'Un petit clic pour toi, un grand bond pour ta carrière.',
-	"Cette candidature va rendre le pipeline de recrutement de quelqu'un très heureux.",
-	"Prêt à faire la journée de ce recruteur ? Appuie sur le bouton."
+	'One small click for you, one giant leap for your career.',
+	"This application is about to make someone's hiring pipeline very happy.",
+	"Ready to make this recruiter's day? Hit the button."
 ];
 
 // ── Error / 404 Messages ──────────────────────────────────────────
 const errorMessages: string[] = [
-	"Cette page est comme l'offre d'emploi parfaite — elle n'existe pas (encore).",
-	"Erreur 404 : Satisfaction professionnelle introuvable. Continue de chercher.",
-	"Tu t'es écarté du chemin de carrière. On te ramène.",
-	'Cette page a pris un jour de congé. Essaie une autre route.'
+	"This page is like that perfect job listing — it doesn't exist (yet).",
+	'Error 404: Job satisfaction not found. Keep looking.',
+	"You've wandered off the career path. Let's get you back.",
+	'This page took a personal day. Try another route.'
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────

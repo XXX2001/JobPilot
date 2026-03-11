@@ -1,166 +1,150 @@
-# JobPilot 🚀
+# JobPilot
 
-**AI-powered local job application assistant** — scrapes jobs, tailors your LaTeX CV surgically via Gemini, and helps you apply at scale.
+JobPilot is a local-first job application assistant with a FastAPI backend and a Svelte frontend. It collects jobs, scores them against your preferences, tailors LaTeX CV content, and helps you apply with manual, assisted, or automated flows.
 
-- **Free**: uses Gemini 2.0 Flash free tier + Adzuna free API
-- **Local**: everything runs on your machine; no cloud account needed
-- **Smart**: Gemini edits only the relevant bullet points in your CV — no rewrites
-- **Polished**: Notion/Linear-aesthetic dashboard to track every application
+## What this repository includes
 
----
+- FastAPI backend for scraping, matching, CV generation, and application workflows
+- Svelte frontend for queue review, settings, analytics, and document inspection
+- Local SQLite-backed runtime data under `data/`
+- Installer scripts for Linux/macOS (`scripts/install.sh`) and Windows (`scripts/install.ps1`)
 
 ## Prerequisites
 
-| Tool | Version | Where to get |
-|------|---------|-------------|
-| Python | 3.12+ | [python.org](https://www.python.org/downloads/) |
-| Node.js | 18+ | [nodejs.org](https://nodejs.org/) |
-| Git | any | [git-scm.com](https://git-scm.com/) |
+| Tool | Required version | Notes |
+| --- | --- | --- |
+| Python | 3.12+ | Required for the backend and scripts |
+| Node.js | 18+ | Required for the frontend build |
+| Git | Current version | Needed to clone the repository |
+| uv | Current version | Preferred Python package manager |
 
----
+## Full onboarding
 
-## Quick Start
-
-### Linux / macOS
+### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/jobpilot.git
-cd jobpilot
+git clone <your-repository-url>
+cd Web-automation
+```
+
+### 2. Install dependencies
+
+#### Linux / macOS
+
+```bash
 bash scripts/install.sh
 ```
 
-### Windows (PowerShell)
+#### Windows (PowerShell)
 
 ```powershell
-git clone https://github.com/yourusername/jobpilot.git
-cd jobpilot
 .\scripts\install.ps1
 ```
 
-The installer is **idempotent** — safe to run multiple times. It will:
+The installer is safe to re-run. It checks Python and Node.js, installs Python dependencies with `uv`, installs Playwright Chromium, downloads Tectonic into `bin/`, builds the frontend, creates runtime directories, and initializes `.env` from `.env.example` when needed.
 
-1. Check Python ≥ 3.12 and Node.js ≥ 18
-2. Install [uv](https://docs.astral.sh/uv/) (Python package manager)
-3. Install all Python dependencies via `uv sync`
-4. Install Playwright Chromium for browser automation
-5. Download the [Tectonic](https://tectonic-typesetting.github.io) LaTeX engine to `bin/`
-6. Build the SvelteKit frontend
-7. Create `data/` directories
-8. Copy `.env.example` → `.env` (first run only)
+### 3. Configure environment variables
 
----
-
-## Configuration
-
-Edit `.env` and fill in your API keys:
+Copy `.env.example` to `.env` if the installer did not already create it, then fill in your API keys.
 
 ```dotenv
-# Get yours free at https://aistudio.google.com/
 GOOGLE_API_KEY=your_gemini_api_key
-
-# Get yours free at https://developer.adzuna.com/
 ADZUNA_APP_ID=your_adzuna_app_id
 ADZUNA_APP_KEY=your_adzuna_app_key
 ```
 
-You can also configure these via the **Settings** page in the web UI after starting the app.
+Required services:
 
----
+- `GOOGLE_API_KEY`: Gemini access for tailoring, extraction, and browser-agent prompts
+- `ADZUNA_APP_ID` and `ADZUNA_APP_KEY`: Adzuna search integration
 
-## Launch
+### 4. Build the frontend manually if needed
+
+```bash
+npm install --prefix frontend
+npm run build --prefix frontend
+```
+
+### 5. Start the app
 
 ```bash
 uv run python start.py
 ```
 
-Then open **http://localhost:8000** in your browser.
+Then open `http://localhost:8000`.
 
----
+## First-time workflow
 
-## First-Time Setup
+1. Open the app in your browser.
+2. Complete the setup wizard.
+3. Upload a LaTeX CV template (`.tex`).
+4. Configure search preferences and API keys.
+5. Run a batch or wait for the scheduled job search.
 
-1. Open **http://localhost:8000** — the Setup Wizard will guide you
-2. Upload your base CV as a `.tex` file (LaTeX required for surgical editing)
-3. Set your job search keywords, target location, and daily apply limit
-4. Click **Run Morning Batch** or wait for the 08:00 scheduled run
+## Current limitations
 
----
+- JobPilot is designed as a **local single-user application**.
+- Default startup assumes the backend binds to `127.0.0.1:8000`.
+- The frontend WebSocket logic falls back to a localhost backend if no explicit API base URL is configured.
+- Some workflows assume a desktop environment, including opening browser windows and copying generated files to a local downloads folder.
+- Runtime paths such as `./data`, `frontend/build`, and `bin/tectonic` are relative to the project/runtime context.
 
-## How It Works
+## Platform support
 
-```
-Adzuna API ──┐
-             ├──▶ ScrapingOrchestrator ──▶ JobMatcher ──▶ Queue
-LinkedIn     │        (browser-use)       (keyword fit)
-Indeed ──────┘
+| Platform | Status | Notes |
+| --- | --- | --- |
+| Linux | Primary path | Best-covered by the current installer flow |
+| macOS | Best effort | Tectonic downloads may require manual approval depending on system security settings |
+| Windows | Best effort | PowerShell execution policy, Playwright setup, and local downloads-folder behavior may need manual attention |
 
-Queue ──▶ CVPipeline ──▶ Gemini 2.0 Flash ──▶ LaTeX diff ──▶ Tectonic PDF
-                                                    │
-                                              ApplicationEngine
-                                                    │
-                                         (pause → confirm → apply)
-```
+## Troubleshooting
 
-- **Adzuna**: structured job data via REST API (no browser needed)
-- **browser-use**: headless Chromium + Gemini for any other site
-- **CVPipeline**: copies your base `.tex`, sends relevant sections to Gemini, applies JSON diff via marker injection, compiles with Tectonic
-- **ApplicationEngine**: browser-use agent fills forms; always pauses for your `confirm_submit` before submitting
+### Playwright install fails
 
----
+- Re-run the installer.
+- Try `uv run playwright install chromium` manually.
+- On Linux, browser system dependencies may still need manual installation.
 
-## Project Structure
+### Tectonic is missing or cannot run
 
-```
-jobpilot/
-├── backend/
-│   ├── api/          FastAPI route handlers
-│   ├── applier/      Browser-use application engine
-│   ├── latex/        LaTeX parser, injector, compiler
-│   ├── llm/          Gemini client + CV editor
-│   ├── matching/     Job scoring & filters
-│   ├── models/       SQLAlchemy models + Pydantic schemas
-│   ├── scraping/     Adzuna client + adaptive browser scraper
-│   └── scheduler/    Morning batch (APScheduler)
-├── frontend/         SvelteKit web UI
-├── scripts/
-│   ├── install.sh    Linux/macOS one-command installer
-│   ├── install.ps1   Windows one-command installer
-│   └── download_tectonic.py  Cross-platform Tectonic downloader
-├── tests/            pytest test suite (110+ tests)
-├── data/             Runtime data (CVs, PDFs, DB) — gitignored
-├── bin/              Tectonic binary — gitignored
-└── start.py          Application entry point
-```
+- Re-run the installer or run `uv run python scripts/download_tectonic.py`.
+- Confirm the binary exists in `bin/` or that `tectonic` is available on `PATH`.
+- On macOS, a downloaded binary may require manual approval before first launch.
 
----
-
-## Development
+### Frontend build is missing
 
 ```bash
-# Run tests
-uv run pytest tests/ -q
-
-# Type check
-uv run pyright backend/
-
-# Lint
-uv run ruff check backend/ tests/
-
-# Frontend dev server (hot reload)
-cd frontend && npm run dev
+npm install --prefix frontend
+npm run build --prefix frontend
 ```
 
----
+### The app starts but setup is incomplete
 
-## Limits & Constraints
+- Verify `.env` contains valid API keys.
+- Verify your LaTeX CV exists and is accessible to the app.
+- Verify the frontend build exists at `frontend/build`.
 
-- **Gemini free tier**: 15 requests/minute — the rate limiter handles this automatically
-- **Adzuna free tier**: 250 requests/day — morning batch respects this
-- **No parallel browsers**: browser-use agents run sequentially to stay within RPM limits
-- **No auto-submit**: ApplicationEngine always pauses and waits for your explicit `confirm_submit` before any form submission
-- **LaTeX only**: CV must be a `.tex` file for surgical editing; PDF-only CVs are not supported
+## Development commands
 
----
+```bash
+uv run pytest tests/ -q
+uv run pyright backend/
+uv run ruff check backend/ tests/
+npm run check --prefix frontend
+npm run build --prefix frontend
+```
+
+## Repository layout
+
+```text
+backend/     FastAPI application code
+frontend/    Svelte frontend
+scripts/     Setup and utility scripts
+tests/       Automated tests
+data/        Runtime data (gitignored)
+bin/         Downloaded binaries (gitignored)
+start.py     Local launcher
+```
 
 ## License
 

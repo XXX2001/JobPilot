@@ -46,13 +46,13 @@ class SearchSettings(Base):
     languages: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     excluded_companies: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     daily_limit: Mapped[int] = mapped_column(Integer, default=10)
-    batch_time: Mapped[str] = mapped_column(String, default="08:00")
     min_match_score: Mapped[float] = mapped_column(nullable=False, default=30.0)
     countries: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     cv_modification_sensitivity: Mapped[str] = mapped_column(
         String, default="balanced", nullable=False
     )
 
+    countries: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
 class SiteCredential(Base):
     __tablename__ = "site_credentials"

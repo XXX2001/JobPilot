@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from backend.scraping.adaptive_scraper import AdaptiveScraper
     from backend.scraping.adzuna_client import AdzunaClient
     from backend.scraping.deduplicator import JobDeduplicator
+    from backend.scraping.scrapling_fetcher import ScraplingFetcher
     from backend.scraping.session_manager import BrowserSessionManager
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,10 @@ def _normalize_country(raw: str) -> str:
     # Already a valid 2-letter code?
     if len(key) == 2 and key.isalpha():
         return key
-    return LOCATION_TO_COUNTRY.get(key, "fr")  # default to fr for this user
+    if key in LOCATION_TO_COUNTRY:
+        return LOCATION_TO_COUNTRY[key]
+    logger.warning("Unknown location %r — no country code mapping found", raw)
+    return ""
 
 
 def _flatten_results(results: list) -> list[RawJob]:
@@ -74,17 +78,24 @@ class ScrapingOrchestrator:
     from the FastAPI app state (and mocked in tests).
     """
 
+    # Tier 1 sites handled by ScraplingFetcher (HTTP + single Gemini call)
+    TIER1_SITES: frozenset[str] = frozenset(
+        {"linkedin", "indeed", "google_jobs", "welcome_to_the_jungle", "glassdoor"}
+    )
+
     def __init__(
         self,
         adzuna_client: "AdzunaClient | None" = None,
         adaptive_scraper: "AdaptiveScraper | None" = None,
         session_mgr: "BrowserSessionManager | None" = None,
         deduplicator: "JobDeduplicator | None" = None,
+        scrapling_fetcher: "ScraplingFetcher | None" = None,
     ) -> None:
         self.adzuna = adzuna_client
         self.adaptive_scraper = adaptive_scraper
         self.session_mgr = session_mgr
         self.deduplicator = deduplicator
+        self.scrapling_fetcher = scrapling_fetcher
 
     async def run_morning_batch(
         self,
@@ -160,7 +171,7 @@ class ScrapingOrchestrator:
         # Phase 2 — Browser sources (sequential, human-like delay)
         # ------------------------------------------------------------------
         browser_sources = [s for s in sources if s.type == "browser"]
-        if browser_sources and self.adaptive_scraper:
+        if browser_sources and (self.adaptive_scraper or self.scrapling_fetcher):
             await broadcast_status(
                 f"Phase 2: Browser scraping {len(browser_sources)} sites…", progress=0.35
             )
@@ -184,21 +195,90 @@ class ScrapingOrchestrator:
                         or site_cfg.get("country_codes", [""])[0]
                         or location
                     )
-                    jobs = await self.adaptive_scraper.scrape_job_listings(
-                        url=source.url or "",
-                        keywords=keywords,
-                        prompt_template=prompt_template,
-                        site=source.name,
-                        location=location,
-                        country_code=src_country_code,
-                    )
-                    for job in jobs:
-                        if not job.country:
-                            job.country = src_country_code
-                    all_jobs.extend(jobs)
-                    logger.info("Phase 2: %d jobs from %s", len(jobs), source.name)
+
+                    # Search one keyword at a time to avoid overly-specific
+                    # combined queries that return 0 results. Distribute
+                    # max_jobs across keywords so each search stays small.
+                    source_jobs: list[RawJob] = []
+                    search_keywords = keywords if keywords else [""]
+                    per_kw_max = max(5, 20 // len(search_keywords)) if search_keywords else 20
+
+                    for kw in search_keywords:
+                        kw_list = [kw] if kw else []
+                        jobs: list[RawJob] = []
+
+                        # Tier 1: ScraplingFetcher (fast HTTP + single Gemini call)
+                        tier1_attempted = False
+                        if self.scrapling_fetcher and source.name in self.TIER1_SITES:
+                            tier1_attempted = True
+                            try:
+                                jobs = await self.scrapling_fetcher.scrape_job_listings(
+                                    url=source.url or "",
+                                    keywords=kw_list,
+                                    max_jobs=per_kw_max,
+                                    site=source.name,
+                                    location=location,
+                                    country_code=src_country_code,
+                                )
+                                if jobs:
+                                    logger.info(
+                                        "Phase 2 [Tier 1]: %d jobs from %s for keyword %r",
+                                        len(jobs), source.name, kw,
+                                    )
+                                else:
+                                    logger.info(
+                                        "Phase 2 [Tier 1]: 0 jobs from %s kw=%r — falling back to Tier 2",
+                                        source.name, kw,
+                                    )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Phase 2 [Tier 1] failed for %s kw=%r: %s — falling back to Tier 2",
+                                    source.name, kw, exc,
+                                )
+                                jobs = []
+
+                        # Tier 2: AdaptiveScraper (full browser-use agent) — used as fallback
+                        # or when Tier 1 is not applicable
+                        if not jobs and self.adaptive_scraper:
+                            try:
+                                jobs = await self.adaptive_scraper.scrape_job_listings(
+                                    url=source.url or "",
+                                    keywords=kw_list,
+                                    max_jobs=per_kw_max,
+                                    prompt_template=prompt_template,
+                                    site=source.name,
+                                    location=location,
+                                    country_code=src_country_code,
+                                )
+                                tier_label = "Tier 2 fallback" if tier1_attempted else "Tier 2"
+                                logger.info(
+                                    "Phase 2 [%s]: %d jobs from %s for keyword %r",
+                                    tier_label, len(jobs), source.name, kw,
+                                )
+                            except Exception as exc:
+                                logger.warning(
+                                    "Phase 2: %s keyword %r failed (continuing): %s",
+                                    source.name, kw, exc,
+                                )
+
+                        try:
+                            for job in jobs:
+                                if not job.country:
+                                    job.country = src_country_code
+                            source_jobs.extend(jobs)
+                        except Exception as exc:
+                            logger.warning(
+                                "Phase 2: %s keyword %r failed (continuing): %s",
+                                source.name, kw, exc,
+                            )
+                        # Brief delay between keyword searches on the same site
+                        if kw != search_keywords[-1]:
+                            await asyncio.sleep(random.uniform(1, 2))
+
+                    all_jobs.extend(source_jobs)
+                    logger.info("Phase 2: %d total jobs from %s", len(source_jobs), source.name)
                     await broadcast_status(
-                        f"Phase 2: {len(jobs)} jobs from {source.name}", progress=0.5
+                        f"Phase 2: {len(source_jobs)} jobs from {source.name}", progress=0.5
                     )
                 except Exception as exc:
                     logger.warning("Phase 2: scraping %s failed (continuing): %s", source.name, exc)
@@ -210,11 +290,11 @@ class ScrapingOrchestrator:
                     await asyncio.sleep(delay)
 
         # ------------------------------------------------------------------
-        # Phase 3 — Lab URL sources (parallel, no login needed)
+        # Phase 3 — Custom URL sources (parallel, no login needed)
         # ------------------------------------------------------------------
         lab_sources = [s for s in sources if s.type == "lab_url"]
         if lab_sources and self.adaptive_scraper:
-            await broadcast_status(f"Phase 3: Scraping {len(lab_sources)} lab sites…", progress=0.6)
+            await broadcast_status(f"Phase 3: Scraping {len(lab_sources)} custom sites…", progress=0.6)
             lab_tasks = [
                 asyncio.create_task(
                     self.adaptive_scraper.scrape_job_listings(
@@ -232,9 +312,9 @@ class ScrapingOrchestrator:
                 if not job.country:
                     job.country = _normalize_country(location)
             all_jobs.extend(phase3_jobs)
-            logger.info("Phase 3 done: %d jobs from lab URLs", len(phase3_jobs))
+            logger.info("Phase 3 done: %d jobs from custom sites", len(phase3_jobs))
             await broadcast_status(
-                f"Phase 3 done: {len(phase3_jobs)} jobs from lab URLs", progress=0.75
+                f"Phase 3 done: {len(phase3_jobs)} jobs from custom sites", progress=0.75
             )
 
         # ------------------------------------------------------------------

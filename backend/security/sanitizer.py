@@ -4,16 +4,17 @@ from __future__ import annotations
 import logging
 import re
 
-logger = logging.getLogger(__name__)
+from backend.defaults import (
+    MAX_LEN_ADDITIONAL_ANSWERS,
+    MAX_LEN_APPLY_URL,
+    MAX_LEN_COMPANY,
+    MAX_LEN_DESCRIPTION,
+    MAX_LEN_LOCATION,
+    MAX_LEN_SALARY_TEXT,
+    MAX_LEN_TITLE,
+)
 
-# ── Field length caps ──────────────────────────────────────────────────────────
-MAX_LEN_TITLE = 300
-MAX_LEN_COMPANY = 200
-MAX_LEN_DESCRIPTION = 2000
-MAX_LEN_LOCATION = 200
-MAX_LEN_SALARY_TEXT = 100
-MAX_LEN_APPLY_URL = 2048
-MAX_LEN_ADDITIONAL_ANSWERS = 5000
+logger = logging.getLogger(__name__)
 
 # ── Injection patterns (case-insensitive, line-level) ─────────────────────────
 _INJECTION_PATTERNS: list[re.Pattern] = [

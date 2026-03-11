@@ -17,7 +17,7 @@ DBSession = Annotated[AsyncSession, Depends(get_db)]
 if TYPE_CHECKING:  # pragma: no cover
     from backend.applier.engine import ApplicationEngine
     from backend.latex.pipeline import CVPipeline
-    from backend.scheduler.morning_batch import MorningBatchScheduler
+    from backend.scheduler.morning_batch import MorningBatchRunner
     from backend.scraping.orchestrator import ScrapingOrchestrator
     from backend.scraping.session_manager import BrowserSessionManager
 
@@ -38,5 +38,5 @@ def get_scraping_orchestrator(request: Request) -> "ScrapingOrchestrator":
     return request.app.state.scraping_orchestrator
 
 
-def get_morning_scheduler(request: Request) -> "MorningBatchScheduler":
-    return request.app.state.morning_scheduler
+def get_batch_runner(request: Request) -> "MorningBatchRunner":
+    return request.app.state.batch_runner

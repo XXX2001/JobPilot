@@ -1,5 +1,3 @@
-"""FastAPI routes for /api/jobs (T14)."""
-
 from __future__ import annotations
 
 import logging

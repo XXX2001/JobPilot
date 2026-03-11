@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class BrowserSessionManager:
     #  Public API                                                          #
     # ------------------------------------------------------------------ #
 
-    async def get_or_create_session(self, site: str) -> "Browser":  # type: ignore[return]
+    async def get_or_create_session(self, site: str) -> Optional[Any]:
         """Return a browser pre-loaded with the user's saved session for *site*.
 
         If no session exists, blocks until the user logs in (or 10 min timeout).
@@ -74,15 +74,9 @@ class BrowserSessionManager:
 
         if storage_path.exists():
             logger.info("Reusing saved session for site=%s", site)
-            # Create browser with stored state and ensure we can open a page/context
-            browser = Browser(headless=False, storage_state=str(storage_path))
-            try:
-                # warm up / probe available APIs so callers don't hit AttributeError
-                await self._open_page_and_context(browser)
-            except Exception:
-                # non-fatal: we still return the browser even if probing fails
-                logger.debug("Probing browser APIs failed for site=%s", site)
-            return browser
+            # Session file exists — adaptive_scraper will load it directly.
+            # No need to create a Browser object here.
+            return None  # type: ignore[return-value]
 
         # First, try auto-login using stored credentials (if any). If that
         # succeeds we return a browser with the saved storage state already
@@ -95,35 +89,45 @@ class BrowserSessionManager:
         except Exception:
             logger.debug("Auto-login attempt raised an exception for site=%s", site)
 
-        # Auto-login not available or failed: request manual login via WS
+        # Auto-login not available or failed: open browser for manual login
         logger.info("No saved session for site=%s — requesting manual login", site)
-        await self._request_login(site)
 
-        # After the event fires, save state and return browser
+        # Create the browser FIRST so the user has a window to log into
         save_path = self.PROFILES_DIR / site / "state.json"
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        browser = Browser(headless=False)
+        
+        # Pass storage_state so watchdog knows where to auto-save upon stop()
+        browser = Browser(headless=False, storage_state=str(save_path))
+        
         try:
-            page, ctx = await self._open_page_and_context(browser)
-            # Prefer context.storage_state when available
-            if ctx is not None and hasattr(ctx, "storage_state"):
-                await ctx.storage_state(path=str(save_path))
-                logger.info("Saved session state for site=%s to %s", site, save_path)
-            elif page is not None:
-                # Some browser APIs expose storage_state via the page's context
-                page_ctx = getattr(page, "context", None)
-                if page_ctx is not None and hasattr(page_ctx, "storage_state"):
-                    await page_ctx.storage_state(path=str(save_path))
-                    logger.info("Saved session state for site=%s to %s", site, save_path)
-                elif hasattr(page, "storage_state"):
-                    await page.storage_state(path=str(save_path))
-                    logger.info("Saved session state for site=%s to %s", site, save_path)
-                else:
-                    raise RuntimeError("no storage_state API available on page/context")
-            else:
-                raise RuntimeError("no page/context API available on browser")
+            await browser.start()
+            page = await browser.new_page()
+            
+            # Navigate to the site's login page so the user sees it
+            from backend.scraping.site_prompts import SITE_CONFIGS
+            cfg = SITE_CONFIGS.get(site, {})
+            login_url = cfg.get("login_url")
+            if login_url and page is not None:
+                try:
+                    await page.goto(login_url)
+                except Exception:
+                    logger.debug("Could not navigate to login page for %s", site)
+        except Exception:
+            logger.debug("Could not open page/context for manual login browser")
+
+        # Now broadcast LoginRequired and wait for user to click 'Done'
+        await self._request_login(site)
+
+        # After the event fires, save state from the ALREADY OPEN browser
+        try:
+            # stop() gracefully clears event buses and dispatches SaveStorageStateEvent
+            # which writes the state to the storage_state path we provided in __init__.
+            # The agent will call start() again later.
+            await browser.stop()
+            logger.info("Saved session state for site=%s to %s", site, save_path)
         except Exception as exc:
             logger.warning("Could not save storage state for site=%s: %s", site, exc)
+            
         return browser
 
     def confirm_login(self, site: str) -> None:
@@ -273,7 +277,8 @@ class BrowserSessionManager:
                 stmt = select(SiteCredential).where(SiteCredential.site_name == site)
                 result = await db.execute(stmt)
                 row = result.scalar_one_or_none()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Failed to fetch credentials for site=%s: %s", site, type(exc).__name__)
             row = None
 
         if not row or not row.encrypted_email or not row.encrypted_password:
@@ -292,15 +297,19 @@ class BrowserSessionManager:
             )
             return None
 
-        # Open browser + page/context via compatibility helper
-        browser = Browser(headless=False)
+        save_path = self.PROFILES_DIR / site / "state.json"
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Open browser via browser_use (provides watchdog with save path)
+        browser = Browser(headless=False, storage_state=str(save_path))
         try:
-            page, ctx = await self._open_page_and_context(browser)
+            await browser.start()
+            page = await browser.new_page()
 
             if page is None:
                 # cannot interact
                 try:
-                    await browser.close()
+                    await browser.kill()
                 except Exception:
                     pass
                 return None
@@ -311,15 +320,23 @@ class BrowserSessionManager:
             if site == "linkedin":
                 try:
                     await page.goto("https://www.linkedin.com/login")
+                    
                     # fill known LinkedIn inputs
-                    await page.fill("input#username", email)
-                    await page.fill("input#password", password)
+                    u_elems = await page.get_elements_by_css_selector("input#username")
+                    if u_elems: await u_elems[0].fill(email)
+                        
+                    p_elems = await page.get_elements_by_css_selector("input#password")
+                    if p_elems: await p_elems[0].fill(password)
+                    
                     # submit
-                    await page.click("button[type=submit]")
+                    btn_elems = await page.get_elements_by_css_selector("button[type=submit]")
+                    if btn_elems: await btn_elems[0].click()
+                    
                     # wait a short while for navigation/auth
-                    await page.wait_for_timeout(3000)
+                    await asyncio.sleep(3)
+                    
                     # consider login successful if we're not on the login path
-                    url = getattr(page, "url", None) or ""
+                    url = await page.get_url()
                     if "/login" not in url:
                         success = True
                 except Exception:
@@ -343,35 +360,37 @@ class BrowserSessionManager:
                         "input[name=password]",
                     ]
 
-                    filled = False
                     for sel in email_selectors:
                         try:
-                            if await page.query_selector(sel):
-                                await page.fill(sel, email)
-                                filled = True
+                            elems = await page.get_elements_by_css_selector(sel)
+                            if elems:
+                                await elems[0].fill(email)
                                 break
                         except Exception:
                             continue
+                            
                     for sel in pass_selectors:
                         try:
-                            if await page.query_selector(sel):
-                                await page.fill(sel, password)
+                            elems = await page.get_elements_by_css_selector(sel)
+                            if elems:
+                                await elems[0].fill(password)
                                 break
                         except Exception:
                             continue
 
                     # submit: try common submit buttons
                     try:
-                        if await page.query_selector("button[type=submit]"):
-                            await page.click("button[type=submit]")
+                        btn_elems = await page.get_elements_by_css_selector("button[type=submit]")
+                        if btn_elems:
+                            await btn_elems[0].click()
                         else:
                             # fallback: press Enter in password field
-                            await page.keyboard.press("Enter")
+                            await page.press("Enter")
                     except Exception:
                         pass
 
-                    await page.wait_for_timeout(3000)
-                    url = getattr(page, "url", None) or ""
+                    await asyncio.sleep(3)
+                    url = await page.get_url()
                     if "/account/login" not in url and "/login" not in url:
                         success = True
                 except Exception:
@@ -380,95 +399,26 @@ class BrowserSessionManager:
             if not success:
                 # close browser and return None to fall back to manual
                 try:
-                    await browser.close()
+                    await browser.kill()
                 except Exception:
                     pass
                 return None
 
-            # Save storage state to disk using the same logic as manual save
-            save_path = self.PROFILES_DIR / site / "state.json"
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-
-            # Re-open page/context in case previous objects don't expose storage_state
-            page, ctx = await self._open_page_and_context(browser)
+            # Save storage state to disk using graceful stop
             try:
-                if ctx is not None and hasattr(ctx, "storage_state"):
-                    await ctx.storage_state(path=str(save_path))
-                    logger.info("Auto-saved session state for site=%s to %s", site, save_path)
-                elif page is not None:
-                    page_ctx = getattr(page, "context", None)
-                    if page_ctx is not None and hasattr(page_ctx, "storage_state"):
-                        await page_ctx.storage_state(path=str(save_path))
-                        logger.info("Auto-saved session state for site=%s to %s", site, save_path)
-                    elif hasattr(page, "storage_state"):
-                        await page.storage_state(path=str(save_path))
-                        logger.info("Auto-saved session state for site=%s to %s", site, save_path)
-                    else:
-                        logger.warning(
-                            "Could not find storage_state API to save auto-login for %s", site
-                        )
-                else:
-                    logger.warning(
-                        "No page/context available to save auto-login state for %s", site
-                    )
+                await browser.stop()
+                logger.info("Auto-saved session state for site=%s to %s", site, save_path)
             except Exception as exc:
-                logger.warning(
-                    "Failed to save storage state after auto-login for %s: %s", site, exc
-                )
+                logger.warning("Failed to save storage state after auto-login for %s: %s", site, type(exc).__name__)
 
             return browser
 
         except Exception:
             try:
-                await browser.close()
+                await browser.kill()
             except Exception:
                 pass
             return None
-
-    async def _open_page_and_context(self, browser) -> tuple[Optional[object], Optional[object]]:
-        """Compatibility helper: return (page, context) for different browser APIs.
-
-        Tries the following in order:
-        1. browser.new_context() -> ctx.new_page()
-        2. browser.new_page()
-        3. browser.open_page()
-
-        Returns (page, ctx) where either may be None if unavailable.
-        """
-        # Try Playwright-style context -> page
-        try:
-            if hasattr(browser, "new_context"):
-                ctx = await browser.new_context()
-                page = None
-                if hasattr(ctx, "new_page"):
-                    try:
-                        page = await ctx.new_page()
-                    except Exception:
-                        page = None
-                return page, ctx
-        except Exception:
-            # fallthrough to other APIs
-            pass
-
-        # Try browser.new_page()
-        try:
-            if hasattr(browser, "new_page"):
-                page = await browser.new_page()
-                ctx = getattr(page, "context", None)
-                return page, ctx
-        except Exception:
-            pass
-
-        # Try older/open_page API
-        try:
-            if hasattr(browser, "open_page"):
-                page = await browser.open_page()
-                ctx = getattr(page, "context", None)
-                return page, ctx
-        except Exception:
-            pass
-
-        return None, None
 
 
 __all__ = ["BrowserSessionManager", "SessionInfo"]

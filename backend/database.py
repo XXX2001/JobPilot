@@ -43,6 +43,8 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    # Seed job_sources from SITE_CONFIGS if the table is empty
+    await _seed_default_sources()
 
 @asynccontextmanager  # type: ignore
 async def db_session() -> AsyncSession:  # type: ignore[override]
@@ -63,3 +65,37 @@ async def db_session() -> AsyncSession:  # type: ignore[override]
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+async def _seed_default_sources() -> None:
+    """Populate the job_sources table from SITE_CONFIGS when empty."""
+    from sqlalchemy import select
+
+    from backend.models.job import JobSource
+    from backend.scraping.site_prompts import SITE_CONFIGS
+
+    try:
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(JobSource).limit(1))
+            if result.scalar_one_or_none() is not None:
+                logger.debug("Job sources already seeded — skipping")
+                return  # already seeded
+
+            count = 0
+            for key, cfg in SITE_CONFIGS.items():
+                if key == "lab_website":
+                    continue  # custom website template, not a real source
+                source = JobSource(
+                    name=key,
+                    type=cfg["type"],
+                    url=cfg.get("base_url", ""),
+                    config={},
+                    enabled=True,
+                )
+                session.add(source)
+                count += 1
+
+            await session.commit()
+            logger.info("Seeded %d default job sources", count)
+    except Exception as exc:
+        logger.error("Failed to seed default job sources: %s", exc, exc_info=True)

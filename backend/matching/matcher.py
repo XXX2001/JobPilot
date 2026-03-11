@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from backend.defaults import MIN_MATCH_SCORE
 from backend.matching.filters import JobFilters
 from backend.models.schemas import JobDetails
 
@@ -56,7 +57,7 @@ class JobMatcher:
         self,
         jobs: list[JobDetails],
         filters: JobFilters,
-        min_score: float = 30.0,
+        min_score: float = MIN_MATCH_SCORE,
     ) -> list[tuple[JobDetails, float]]:
         """Score all jobs, filter below threshold, return sorted by score desc."""
         scored = [(job, self.score(job, filters)) for job in jobs]

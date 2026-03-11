@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
+from backend.config import settings
+from backend.defaults import DAILY_LIMIT, MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
 from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
 from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.models.application import Application, ApplicationEvent
@@ -28,10 +30,10 @@ class ApplyMode(str, Enum):
 
 class ApplicantInfo(BaseModel):
     full_name: str = Field("", max_length=200)
-    email: str = Field("", max_length=254)
-    phone: str = Field("", max_length=30)
-    location: str = Field("", max_length=200)
-    additional_answers_json: str = Field("", max_length=5000)
+    email: str = Field("", max_length=MAX_LEN_EMAIL)
+    phone: str = Field("", max_length=MAX_LEN_PHONE)
+    location: str = Field("", max_length=MAX_LEN_LOCATION)
+    additional_answers_json: str = Field("", max_length=MAX_LEN_ADDITIONAL_ANSWERS)
 
 
 class ApplicationEngine:
@@ -43,15 +45,16 @@ class ApplicationEngine:
     def __init__(
         self,
         api_key: str,
-        model: str = "gemini-2.0-flash",
-        daily_limit: int = 10,
+        model: str = None,
+        daily_limit: int = DAILY_LIMIT,
     ) -> None:
         self._api_key = api_key
-        self._model = model
+        # If model not provided, use configured primary model
+        self._model = model or settings.GOOGLE_MODEL
         self._daily_limit = daily_limit
 
-        self._auto = AutoApplyStrategy(api_key=api_key, model=model)
-        self._assisted = AssistedApplyStrategy(api_key=api_key, model=model)
+        self._auto = AutoApplyStrategy(api_key=api_key, model=self._model)
+        self._assisted = AssistedApplyStrategy(api_key=api_key, model=self._model)
         self._manual = ManualApplyStrategy()
 
         # Per-job asyncio events for confirm/cancel coming from WS
@@ -170,6 +173,7 @@ class ApplicationEngine:
                 email=applicant.email,
                 phone=applicant.phone,
                 location=applicant.location,
+                additional_answers=applicant.additional_answers_json,
                 cv_pdf=cv_pdf,
                 letter_pdf=letter_pdf,
             )
@@ -190,11 +194,15 @@ class ApplicationEngine:
         try:
             from datetime import datetime
 
+            from sqlalchemy import select
+
+            from backend.models.job import JobMatch
+
             app = Application(
                 job_match_id=job_match_id,
                 method=result.method,
                 status=result.status,
-                applied_at=datetime.utcnow() if result.status == "applied" else None,
+                applied_at=datetime.utcnow() if result.status in ("applied", "manual") else None,
                 notes=result.message or None,
             )
             db.add(app)
@@ -206,6 +214,14 @@ class ApplicationEngine:
                 details=result.message or None,
             )
             db.add(event)
+
+            # Update JobMatch status so the job is removed from the queue
+            if result.status in ("applied", "manual"):
+                stmt = select(JobMatch).where(JobMatch.id == job_match_id)
+                match = (await db.execute(stmt)).scalar_one_or_none()
+                if match is not None:
+                    match.status = "applied"
+
             await db.commit()
             logger.info(
                 "Recorded application id=%d job_match_id=%d status=%s",

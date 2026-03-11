@@ -1,4 +1,8 @@
-"""Morning batch scheduler — orchestrates daily job scraping and CV pre-generation."""
+"""Morning batch runner — orchestrates job scraping and CV pre-generation.
+
+The batch is triggered manually via POST /api/queue/refresh. There is no
+automatic scheduling; users decide when to search for new jobs.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
 from backend.config import settings
-from backend.defaults import MIN_JOB_SKILLS_FOR_FIT_ENGINE
+from backend.defaults import CONCURRENCY_GEMINI, DAILY_LIMIT, MIN_JOB_SKILLS_FOR_FIT_ENGINE, MIN_MATCH_SCORE
 from backend.matching.cv_parser import CVParser
 from backend.matching.embedder import Embedder
 from backend.matching.filters import JobFilters
@@ -88,8 +92,8 @@ def _resolve_cv_path(profile_row: Any, data_dir: Path) -> Path | None:
     return None
 
 
-class MorningBatchScheduler:
-    """Orchestrates the daily morning job discovery and CV pre-generation pipeline.
+class MorningBatchRunner:
+    """Orchestrates job discovery and CV pre-generation pipeline.
 
     Steps:
       1. Scrape all configured sources.
@@ -97,6 +101,8 @@ class MorningBatchScheduler:
       3. Store new matches to the DB.
       4. Pre-generate tailored CVs for the top N matches (N = remaining daily limit).
       5. Broadcast "ready" status over WebSocket.
+
+    Triggered manually via POST /api/queue/refresh.
     """
 
     def __init__(
@@ -119,40 +125,7 @@ class MorningBatchScheduler:
         self._job_extractor = JobSkillExtractor()
 
     # ------------------------------------------------------------------ #
-    #  Lifecycle                                                           #
-    # ------------------------------------------------------------------ #
-
-    def start(self, batch_time: str = "08:00") -> None:
-        """Schedule the morning batch as a cron job at *batch_time* (HH:MM)."""
-        if self._scheduler is None:
-            logger.warning("APScheduler not installed — morning batch scheduling disabled")
-            return
-        hour, minute = batch_time.split(":")
-        self._scheduler.add_job(
-            self._run_batch_task,
-            CronTrigger(hour=int(hour), minute=int(minute)),
-            id="morning_batch",
-            replace_existing=True,
-        )
-        self._scheduler.start()
-        logger.info("Morning batch scheduler started — will run daily at %s", batch_time)
-
-    def stop(self) -> None:
-        """Shutdown the APScheduler gracefully."""
-        if self._scheduler and self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
-            logger.info("Morning batch scheduler stopped")
-
-    # ------------------------------------------------------------------ #
-    #  APScheduler entry point                                             #
-    # ------------------------------------------------------------------ #
-
-    def _run_batch_task(self) -> None:
-        """APScheduler calls this synchronously — we create an asyncio task."""
-        asyncio.ensure_future(self.run_batch())
-
-    # ------------------------------------------------------------------ #
-    #  Public batch runner (also callable manually for testing/debugging) #
+    #  Public batch runner                                                 #
     # ------------------------------------------------------------------ #
 
     async def run_batch(self) -> None:
@@ -177,7 +150,7 @@ class MorningBatchScheduler:
         sources = await self._load_sources(db)
 
         keywords: list[str] = _extract_json_list(settings_row.keywords, "include")
-        daily_limit: int = settings_row.daily_limit or 10
+        daily_limit: int = settings_row.daily_limit or DAILY_LIMIT
         cv_path = _resolve_cv_path(
             profile_row, data_dir=Path(settings.jobpilot_data_dir)
         )
@@ -300,11 +273,15 @@ class MorningBatchScheduler:
             _additional_context = "\n".join(_additional_parts)
 
             pairs = list(zip(top_ids, [jd for jd, _ in ranked[: len(top_ids)]]))
-            sem = asyncio.Semaphore(3)  # cap concurrent Gemini calls
+            sem = asyncio.Semaphore(CONCURRENCY_GEMINI)
 
             async def _gen_one(mid: int, jd: Any) -> tuple[int, Any]:
                 async with sem:
-                    out_dir = Path(settings.jobpilot_data_dir) / "cvs" / str(mid)
+                    # Name output dir with job title slug for readability
+                    import re as _re
+                    slug = _re.sub(r"[^\w]+", "_", (jd.title or "job").lower()).strip("_")[:50]
+                    dir_name = f"{mid}_{slug}"
+                    out_dir = Path(settings.jobpilot_data_dir) / "cvs" / dir_name
                     out_dir.mkdir(parents=True, exist_ok=True)
                     assessment = assessments.get(mid)
 
@@ -365,10 +342,9 @@ class MorningBatchScheduler:
             # Return sensible defaults without persisting
             row = SearchSettings(
                 id=1,
-                keywords=["python", "machine learning"],
-                daily_limit=10,
-                batch_time="08:00",
-                min_match_score=30.0,
+                keywords=[],
+                daily_limit=DAILY_LIMIT,
+                min_match_score=MIN_MATCH_SCORE,
                 remote_only=False,
             )
         return row
@@ -388,37 +364,94 @@ class MorningBatchScheduler:
         db: AsyncSession,
         ranked: list[tuple[JobDetails, float]],
     ) -> list[int]:
-        """Persist new job matches and return their DB IDs."""
+        """Persist new job matches and return their DB IDs.
+
+        Jobs are deduplicated by a hash of (company, title, location) so
+        repeated batch runs do not create duplicate Job rows.  If a job
+        already exists the existing row is reused for the new JobMatch.
+        """
+        import hashlib
+
         today = date.today()
         match_ids: list[int] = []
 
         for jd, score in ranked:
-            # Upsert the Job row
-            job_row = Job(
-                title=jd.title,
-                company=jd.company,
-                location=jd.location or "",
-                country=jd.country or "",
-                description=jd.description or "",
-                salary_min=jd.salary_min,
-                salary_max=jd.salary_max,
-                url=jd.url or "",
-                apply_url=jd.apply_url or jd.url or "",
-                apply_method=jd.apply_method or "",
-                posted_at=jd.posted_at,
-            )
-            db.add(job_row)
-            await db.flush()
+            # Compute dedup hash — same logic as /api/jobs/search
+            dedup_hash = hashlib.md5(
+                f"{jd.company}|{jd.title}|{jd.location}".lower().encode()
+            ).hexdigest()
 
-            match_row = JobMatch(
-                job_id=job_row.id,
-                score=score,
-                batch_date=today,
-                status="new",
-            )
-            db.add(match_row)
-            await db.flush()
-            match_ids.append(match_row.id)
+            # Check for existing Job with same hash
+            existing = (
+                await db.execute(select(Job).where(Job.dedup_hash == dedup_hash))
+            ).scalar_one_or_none()
+
+            if existing is not None:
+                job_row = existing
+                # Update fields that may have improved (e.g. description, apply_url)
+                if jd.description and len(jd.description) > len(existing.description or ""):
+                    existing.description = jd.description
+                if jd.apply_url and not existing.apply_url:
+                    existing.apply_url = jd.apply_url
+            else:
+                job_row = Job(
+                    title=jd.title,
+                    company=jd.company,
+                    location=jd.location or "",
+                    country=jd.country or "",
+                    description=jd.description or "",
+                    salary_min=jd.salary_min,
+                    salary_max=jd.salary_max,
+                    url=jd.url or "",
+                    apply_url=jd.apply_url or jd.url or "",
+                    apply_method=jd.apply_method or "",
+                    posted_at=jd.posted_at,
+                    dedup_hash=dedup_hash,
+                )
+                db.add(job_row)
+                await db.flush()
+
+            # Skip jobs that already have a non-new match (applied/skipped)
+            any_actioned = (
+                await db.execute(
+                    select(JobMatch).where(
+                        JobMatch.job_id == job_row.id,
+                        JobMatch.status.in_(["applied", "skipped"]),
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if any_actioned is not None:
+                logger.debug(
+                    "Skipping job_id=%d — already %s", job_row.id, any_actioned.status
+                )
+                continue
+
+            # Skip creating a duplicate match for the same job on the same day
+            existing_match = (
+                await db.execute(
+                    select(JobMatch).where(
+                        JobMatch.job_id == job_row.id,
+                        JobMatch.batch_date == today,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            if existing_match is not None:
+                # Update score if it improved
+                if score > existing_match.score:
+                    existing_match.score = score
+                match_ids.append(existing_match.id)
+            else:
+                match_row = JobMatch(
+                    job_id=job_row.id,
+                    score=score,
+                    batch_date=today,
+                    status="new",
+                )
+                db.add(match_row)
+                await db.flush()
+                match_ids.append(match_row.id)
 
         await db.commit()
         return match_ids
@@ -467,4 +500,4 @@ class MorningBatchScheduler:
         )
 
 
-__all__ = ["MorningBatchScheduler"]
+__all__ = ["MorningBatchRunner"]

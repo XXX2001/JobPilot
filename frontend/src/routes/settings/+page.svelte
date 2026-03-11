@@ -28,7 +28,6 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 		remote_only: boolean;
 		excluded_companies?: { items?: string[] };
 		daily_limit: number;
-		batch_time: string;
 		min_match_score: number;
 		cv_modification_sensitivity?: string;
 	}
@@ -105,7 +104,6 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 	let salaryMin = $state(0);
 	let remoteOnly = $state(false);
 	let dailyLimit = $state(10);
-	let batchTime = $state('08:00');
 	let minMatchScore = $state(30);
 	let cvModificationSensitivity = $state<'conservative' | 'balanced' | 'aggressive'>('balanced');
 	let searchLoading = $state(true);
@@ -171,7 +169,6 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 			salaryMin = s.salary_min ?? 0;
 			remoteOnly = s.remote_only ?? false;
 			dailyLimit = s.daily_limit ?? 10;
-			batchTime = s.batch_time ?? '08:00';
 			minMatchScore = s.min_match_score ?? 30;
 			cvModificationSensitivity = (s.cv_modification_sensitivity as 'conservative' | 'balanced' | 'aggressive') ?? 'balanced';
 		} catch {
@@ -638,13 +635,6 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 						<input id="daily_limit" type="number" min="1" max="50" bind:value={dailyLimit}
 							class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm" />
 					</div>
-
-					<!-- Batch time -->
-					<div class="space-y-1.5">
-						<label class="text-sm font-medium text-foreground/90" for="batch_time">Batch schedule time</label>
-						<input id="batch_time" type="time" bind:value={batchTime}
-							class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm" />
-					</div>
 				</div>
 
 				<hr class="border-border/30" />
@@ -938,8 +928,8 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 			<section>
 				<div class="mb-4 flex items-center justify-between">
 					<div>
-						<h3 class="text-xl font-semibold font-heading mb-1">Custom Target URLs</h3>
-						<p class="text-sm text-muted-foreground">Add specific research lab or custom job board URLs to the scraping queue.</p>
+						<h3 class="text-xl font-semibold font-heading mb-1">Custom Websites</h3>
+						<p class="text-sm text-muted-foreground">Add any job board, careers page, or company website URL to scrape for job listings.</p>
 					</div>
 				</div>
 
@@ -975,7 +965,7 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 						<form onsubmit={(e) => { e.preventDefault(); addCustomSite(); }} class="p-4 bg-muted/10">
 							<p class="text-xs font-medium text-foreground/80 mb-3 uppercase tracking-wider">Add New Source</p>
 							<div class="flex flex-col md:flex-row gap-3">
-								<input type="text" placeholder="Short id (e.g. mit_lab)" bind:value={newCustomSite.name} required
+								<input type="text" placeholder="Short id (e.g. company_careers)" bind:value={newCustomSite.name} required
 									class="flex-1 min-w-[140px] text-sm px-3.5 py-2.5 bg-background border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm" />
 								<input type="text" placeholder="Display name" bind:value={newCustomSite.display_name}
 									class="flex-1 min-w-[140px] text-sm px-3.5 py-2.5 bg-background border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm" />

@@ -6,10 +6,12 @@ def _make_settings(monkeypatch, **extra_env):
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     monkeypatch.setenv("ADZUNA_APP_ID", "test-id")
     monkeypatch.setenv("ADZUNA_APP_KEY", "test-key")
+    if "JOBPILOT_SCRAPER_HEADLESS" not in extra_env:
+        monkeypatch.delenv("JOBPILOT_SCRAPER_HEADLESS", raising=False)
     for key, value in extra_env.items():
         monkeypatch.setenv(key, value)
     from backend.config import Settings
-    return Settings()
+    return Settings(_env_file=None)
 
 
 def test_default_is_headless(monkeypatch):

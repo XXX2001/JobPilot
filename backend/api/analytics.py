@@ -1,5 +1,3 @@
-"""FastAPI routes for /api/analytics (T15 - usage analytics)."""
-
 from __future__ import annotations
 
 import logging
@@ -65,7 +63,6 @@ async def get_analytics_summary(db: DBSession):
     responded = (await db.execute(responded_stmt)).scalar_one()
     response_rate = round(responded / total_apps * 100, 1) if total_apps > 0 else 0.0
 
-    # Average match score from job_matches (deferred — placeholder until Wave 3 wires JobMatch)
     avg_match_score: Optional[float] = None
     try:
         from backend.models.job import JobMatch

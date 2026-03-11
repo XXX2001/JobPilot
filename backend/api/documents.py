@@ -1,12 +1,10 @@
-"""FastAPI routes for /api/documents (T14 - document management)."""
-
 from __future__ import annotations
 # pyright: reportInvalidTypeForm=false
 
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
@@ -32,7 +30,7 @@ class DocumentOut(BaseModel):
     doc_type: str
     tex_path: Optional[str]
     pdf_path: Optional[str]
-    diff_json: Optional[dict]
+    diff_json: Optional[Any]
     created_at: datetime
 
 
@@ -190,7 +188,6 @@ async def regenerate_documents(
             await db.delete(d)
         await db.commit()
 
-    # Queue background regeneration (actual pipeline call deferred to Wave 3 scheduler)
     logger.info("Regeneration queued for match_id=%d (force=%s)", match_id, body.force)
 
     return {

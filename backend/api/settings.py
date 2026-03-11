@@ -1,5 +1,3 @@
-"""FastAPI routes for /api/settings (T15 - user profile and search settings)."""
-
 from __future__ import annotations
 
 import logging
@@ -19,7 +17,6 @@ from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.scraping.site_prompts import SITE_CONFIGS
 
 logger = logging.getLogger(__name__)
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], redirect_slashes=False)
 
@@ -34,6 +31,9 @@ class ProfileOut(BaseModel):
     email: str
     phone: Optional[str]
     location: Optional[str]
+    linkedin_url: Optional[str]
+    driver_license: Optional[str]
+    mobility: Optional[str]
     base_cv_path: Optional[str]
     base_letter_path: Optional[str]
     additional_info: Optional[dict]
@@ -46,6 +46,9 @@ class ProfileUpdate(BaseModel):
     email: Optional[str] = None
     phone: Optional[str] = None
     location: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    driver_license: Optional[str] = None
+    mobility: Optional[str] = None
     base_cv_path: Optional[str] = None
     base_letter_path: Optional[str] = None
     additional_info: Optional[dict] = None
@@ -65,7 +68,6 @@ class SearchSettingsOut(BaseModel):
     languages: Optional[dict]
     excluded_companies: Optional[dict]
     daily_limit: int
-    batch_time: str
     min_match_score: float
     countries: Optional[dict] = None
     cv_modification_sensitivity: str = "balanced"
@@ -83,7 +85,6 @@ class SearchSettingsUpdate(BaseModel):
     languages: Optional[dict] = None
     excluded_companies: Optional[dict] = None
     daily_limit: Optional[int] = None
-    batch_time: Optional[str] = None
     min_match_score: Optional[float] = None
     countries: Optional[dict] = None
     cv_modification_sensitivity: Optional[Literal["conservative", "balanced", "aggressive"]] = None
@@ -120,6 +121,9 @@ async def get_profile(db: DBSession):
             email="",
             phone=None,
             location=None,
+            linkedin_url=None,
+            driver_license=None,
+            mobility=None,
             base_cv_path=None,
             base_letter_path=None,
             additional_info=None,
@@ -155,6 +159,12 @@ async def update_profile(body: ProfileUpdate, db: DBSession):
             profile.phone = body.phone
         if body.location is not None:
             profile.location = body.location
+        if body.linkedin_url is not None:
+            profile.linkedin_url = body.linkedin_url
+        if body.driver_license is not None:
+            profile.driver_license = body.driver_license
+        if body.mobility is not None:
+            profile.mobility = body.mobility
         if body.base_cv_path is not None:
             profile.base_cv_path = body.base_cv_path
         if body.base_letter_path is not None:
@@ -205,7 +215,6 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             languages=body.languages,
             excluded_companies=body.excluded_companies,
             daily_limit=body.daily_limit if body.daily_limit is not None else 10,
-            batch_time=body.batch_time or "08:00",
             min_match_score=body.min_match_score if body.min_match_score is not None else 30.0,
             countries=body.countries,
             cv_modification_sensitivity=body.cv_modification_sensitivity or "balanced",
@@ -234,8 +243,6 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             ss.excluded_companies = body.excluded_companies
         if body.daily_limit is not None:
             ss.daily_limit = body.daily_limit
-        if body.batch_time is not None:
-            ss.batch_time = body.batch_time
         if body.min_match_score is not None:
             ss.min_match_score = body.min_match_score
         if body.countries is not None:
@@ -462,6 +469,7 @@ async def get_credentials(db: DBSession):
                 else:
                     masked = "***@***"
             except Exception:
+                logger.warning("Credential decryption failed for site=%s", key)
                 masked = "***@***"
         out.append(
             CredentialOut(
@@ -539,7 +547,7 @@ async def clear_session(site_name: str):
 
 @router.get("/custom-sites", response_model=list[CustomSiteOut])
 async def get_custom_sites(db: DBSession):
-    """Return custom/lab_url job source entries from the DB."""
+    """Return custom website job source entries from the DB."""
     stmt = select(JobSource).where(JobSource.type.in_(["lab_url", "custom"]))
     result = await db.execute(stmt)
     rows = result.scalars().all()
@@ -561,7 +569,7 @@ async def get_custom_sites(db: DBSession):
 
 @router.post("/custom-sites", response_model=CustomSiteOut)
 async def add_custom_site(body: CustomSiteCreate, db: DBSession):
-    """Add a custom lab/URL job source."""
+    """Add a custom website job source."""
     row = JobSource(
         name=body.name,
         type="lab_url",

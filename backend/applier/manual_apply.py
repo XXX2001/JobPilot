@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import webbrowser
 from pathlib import Path
 
@@ -18,35 +19,43 @@ class ApplicationResult(BaseModel):
 
 
 class ManualApplyStrategy:
-    """Opens the job application URL in the default browser.
-
-    No automation — the user completes the application themselves.
-    CV / letter paths are surfaced in the result message so the user
-    knows where the tailored documents live.
-    """
-
     async def apply(
         self,
         apply_url: str,
         cv_pdf: Path | None = None,
         letter_pdf: Path | None = None,
     ) -> ApplicationResult:
-        from backend.config import settings as _settings
+        downloads_dir = Path.home() / "Downloads"
+        downloads_dir.mkdir(exist_ok=True)
 
-        docs_dir = str(cv_pdf.parent) if cv_pdf else str(Path(_settings.jobpilot_data_dir) / "cvs")
+        copied_files: list[str] = []
+        for src, label in [(cv_pdf, "CV"), (letter_pdf, "Cover Letter")]:
+            if src and src.exists():
+                dest = downloads_dir / src.name
+                # Avoid overwriting — add suffix if file exists
+                if dest.exists():
+                    dest = (
+                        downloads_dir / f"{src.stem}_{label.lower().replace(' ', '_')}{src.suffix}"
+                    )
+                try:
+                    shutil.copy2(src, dest)
+                    copied_files.append(f"{label}: {dest.name}")
+                    logger.info("Copied %s to %s", src, dest)
+                except Exception as exc:
+                    logger.warning("Failed to copy %s to Downloads: %s", src, exc)
+
         try:
             webbrowser.open(apply_url)
             logger.info("Opened URL in browser: %s", apply_url)
-            message = (
-                f"Opened {apply_url} in your browser. Your tailored documents are in: {docs_dir}"
-            )
+            message = f"Opened {apply_url} in your browser."
         except Exception as exc:
             logger.warning("webbrowser.open failed: %s", exc)
-            message = (
-                f"Could not open browser automatically. "
-                f"Please visit: {apply_url}. "
-                f"Documents: {docs_dir}"
-            )
+            message = f"Could not open browser automatically. Please visit: {apply_url}."
+
+        if copied_files:
+            message += f" Documents copied to ~/Downloads: {', '.join(copied_files)}"
+        elif cv_pdf:
+            message += f" Documents are in: {cv_pdf.parent}"
 
         return ApplicationResult(status="manual", method="manual", message=message)
 

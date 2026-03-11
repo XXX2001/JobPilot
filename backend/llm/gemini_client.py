@@ -11,6 +11,7 @@ from google import genai
 from pydantic import BaseModel
 
 from backend.config import settings
+from backend.defaults import GEMINI_FALLBACK_MODEL
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -31,7 +32,14 @@ class GeminiClient:
 
     def __init__(self) -> None:
         self._client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        self._model_name = "gemini-2.0-flash"
+        # Build ordered list of candidate models: primary + fallbacks
+        primary = settings.GOOGLE_MODEL or GEMINI_FALLBACK_MODEL
+        fallbacks = [m.strip() for m in (settings.GOOGLE_MODEL_FALLBACKS or "").split(",")]
+        fallbacks = [m for m in fallbacks if m]
+        self._candidates: list[str] = [primary] + fallbacks
+        # current index into candidates
+        self._candidate_idx = 0
+        self._model_name = self._candidates[self._candidate_idx]
         self._call_times: deque[float] = deque(maxlen=self.RPM_LIMIT)
         self._lock = asyncio.Lock()
         self._embed_call_times: deque[float] = deque(maxlen=self.RPM_LIMIT)
@@ -50,21 +58,38 @@ class GeminiClient:
 
     async def generate_text(self, prompt: str) -> str:
         await self._wait_for_rate_limit()
-        for attempt in range(3):
-            try:
-                response = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: self._client.models.generate_content(
-                        model=self._model_name, contents=prompt
-                    ),
-                )
-                return response.text
-            except Exception as e:
-                if "429" in str(e) and attempt < 2:
-                    await asyncio.sleep(2**attempt * 5)
-                    continue
-                raise GeminiRateLimitError(str(e)) from e
-        raise GeminiRateLimitError("Exhausted retries")
+        max_attempts = len(self._candidates) if self._candidates else 1
+        last_exc: Exception | None = None
+        for model_try in range(max_attempts):
+            self._model_name = self._candidates[model_try]
+            for attempt in range(3):
+                try:
+                    response = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self._client.models.generate_content(
+                            model=self._model_name, contents=prompt
+                        ),
+                    )
+                    return response.text
+                except Exception as e:
+                    last_exc = e
+                    # Detect model-not-found / NOT_FOUND and break to try next candidate
+                    msg = str(e)
+                    if (
+                        "404" in msg
+                        or "NOT_FOUND" in msg
+                        or "model" in msg
+                        and "not found" in msg.lower()
+                    ):
+                        logger.warning(
+                            "Model %s not found: %s — trying next candidate", self._model_name, e
+                        )
+                        break
+                    if "429" in msg and attempt < 2:
+                        await asyncio.sleep(2**attempt * 5)
+                        continue
+                    raise GeminiRateLimitError(str(e)) from e
+        raise GeminiRateLimitError(f"All model candidates failed: {last_exc}")
 
     async def generate_json(self, prompt: str, schema: Type[T]) -> T:
         text = await self.generate_text(prompt)

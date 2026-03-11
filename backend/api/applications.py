@@ -1,5 +1,3 @@
-"""FastAPI routes for /api/applications (T15 - application management)."""
-
 from __future__ import annotations
 
 import logging
@@ -61,7 +59,9 @@ class ApplicationListOut(BaseModel):
 class CreateApplicationRequest(BaseModel):
     job_match_id: Optional[int] = None
     method: Literal["auto", "assisted", "manual"] = "manual"
-    status: Literal["pending", "applied", "cancelled", "failed", "interview", "offer", "rejected"] = "pending"
+    status: Literal[
+        "pending", "applied", "cancelled", "failed", "interview", "offer", "rejected"
+    ] = "pending"
     notes: Optional[str] = None
 
 
@@ -73,7 +73,17 @@ class UpdateApplicationRequest(BaseModel):
 
 
 class CreateEventRequest(BaseModel):
-    event_type: Literal["pending", "applied", "cancelled", "failed", "interview", "offer", "rejected", "viewed", "follow_up"]
+    event_type: Literal[
+        "pending",
+        "applied",
+        "cancelled",
+        "failed",
+        "interview",
+        "offer",
+        "rejected",
+        "viewed",
+        "follow_up",
+    ]
     details: Optional[str] = None
 
 
@@ -129,6 +139,7 @@ async def list_applications(
         all_events = events_result.scalars().all()
 
         from collections import defaultdict
+
         events_by_app: dict[int, list] = defaultdict(list)
         for event in all_events:
             events_by_app[event.application_id].append(event)
@@ -269,9 +280,7 @@ async def add_application_event(application_id: int, body: CreateEventRequest, d
 # ─── Apply endpoint ───────────────────────────────────────────────────────────
 
 
-async def _resolve_documents(
-    match_id: int, db
-) -> tuple[Path | None, Path | None]:
+async def _resolve_documents(match_id: int, db) -> tuple[Path | None, Path | None]:
     """Return (cv_pdf, letter_pdf) Paths for the latest tailored docs for match_id.
 
     Returns (None, None) if no documents have been generated yet.
@@ -332,6 +341,7 @@ class ApplyRequest(BaseModel):
     def validate_json(cls, v: str) -> str:
         if v:
             import json
+
             try:
                 json.loads(v)
             except json.JSONDecodeError:
@@ -342,6 +352,8 @@ class ApplyRequest(BaseModel):
 @router.post("/{match_id}/apply", status_code=200)
 async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request: Request):
     """Trigger an application for a job match via auto / assisted / manual strategy."""
+    from backend.models.user import UserProfile
+
     try:
         from backend.applier.engine import (  # noqa: PLC0415
             ApplicantInfo,
@@ -360,13 +372,50 @@ async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid apply method: {body.method!r}")
 
+    # ── Auto-populate applicant info from UserProfile when not provided ──
+    profile = (
+        await db.execute(select(UserProfile).where(UserProfile.id == 1))
+    ).scalar_one_or_none()
+
+    full_name = body.full_name or (profile.full_name if profile else "")
+    email = body.email or (profile.email if profile else "")
+    phone = body.phone or (profile.phone if profile else "")
+    location = body.location or (profile.location if profile else "")
+    additional_answers = body.additional_answers_json
+    if not additional_answers and profile and profile.additional_info:
+        import json as _json
+
+        try:
+            additional_answers = _json.dumps(profile.additional_info)
+        except Exception:
+            additional_answers = ""
+
+    # Inject profile fields into additional_answers so the agent can use them
+    if profile:
+        import json as _json2
+
+        try:
+            answers_dict = _json2.loads(additional_answers) if additional_answers else {}
+        except Exception:
+            answers_dict = {}
+        changed = False
+        if profile.linkedin_url and "linkedin_url" not in answers_dict:
+            answers_dict["linkedin_url"] = profile.linkedin_url
+            changed = True
+        if profile.driver_license and "driver_license" not in answers_dict:
+            answers_dict["driver_license"] = profile.driver_license
+            changed = True
+        if profile.mobility and "mobility" not in answers_dict:
+            answers_dict["mobility"] = profile.mobility
+            changed = True
+        if changed:
+            additional_answers = _json2.dumps(answers_dict)
+
     # Resolve apply_url from the job if not provided in the request body
     apply_url = body.apply_url
     if not apply_url:
         job_stmt = (
-            select(Job)
-            .join(JobMatch, JobMatch.job_id == Job.id)
-            .where(JobMatch.id == match_id)
+            select(Job).join(JobMatch, JobMatch.job_id == Job.id).where(JobMatch.id == match_id)
         )
         job_row = (await db.execute(job_stmt)).scalar_one_or_none()
         if job_row:
@@ -375,15 +424,39 @@ async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request
             logger.warning("No apply_url found for match_id=%d", match_id)
 
     applicant = ApplicantInfo(
-        full_name=body.full_name,
-        email=body.email,
-        phone=body.phone,
-        location=body.location,
-        additional_answers_json=body.additional_answers_json,
+        full_name=full_name,
+        email=email,
+        phone=phone,
+        location=location,
+        additional_answers_json=additional_answers,
     )
 
     # Resolve tailored CV and cover letter for this job match
     cv_pdf, letter_pdf = await _resolve_documents(match_id=match_id, db=db)
+
+    # Fall back to base CV/letter from user profile if no tailored docs exist
+    if cv_pdf is None and profile and profile.base_cv_path:
+        base_cv = Path(profile.base_cv_path)
+        if base_cv.exists():
+            cv_pdf = base_cv
+            logger.info("Using base CV as fallback: %s", cv_pdf)
+    if letter_pdf is None and profile and profile.base_letter_path:
+        base_letter = Path(profile.base_letter_path)
+        if base_letter.exists():
+            letter_pdf = base_letter
+            logger.info("Using base cover letter as fallback: %s", letter_pdf)
+
+    # Last resort: scan templates directory for a .tex-compiled PDF
+    if cv_pdf is None:
+        from backend.config import settings as app_settings
+
+        templates_dir = Path(app_settings.jobpilot_data_dir) / "templates"
+        if templates_dir.is_dir():
+            pdf_candidates = sorted(templates_dir.glob("*.pdf"))
+            if pdf_candidates:
+                cv_pdf = pdf_candidates[0]
+                logger.info("Using auto-detected base CV PDF: %s", cv_pdf)
+
     if cv_pdf:
         logger.info("Resolved cv_pdf=%s for match_id=%d", cv_pdf, match_id)
     if letter_pdf:

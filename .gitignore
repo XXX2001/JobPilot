@@ -24,7 +24,9 @@ frontend/build/
 frontend/.svelte-kit/
 
 # ─── Runtime Data ─────────────────────────────────────────────────────────────
-data/
+data/*
+!data/templates/
+!data/**/.gitkeep
 bin/
 *.db
 *.db-wal
@@ -46,6 +48,7 @@ Thumbs.db
 *.png
 *.jpg
 *.jpeg
+!data/templates/*.jpeg
 captcha.md
 taste-skill/
 

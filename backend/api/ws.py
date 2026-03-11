@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
-from typing import Dict
+from typing import Any, Dict
 
 try:
     from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -34,12 +35,19 @@ except Exception:  # pragma: no cover - fallback for environments without fastap
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
     def __init__(self) -> None:
         self.active_connections: Dict[str, WebSocket] = {}
         self._lock = asyncio.Lock()
+        # Message handler registry: type -> async callable(msg_dict, websocket)
+        self._message_handlers: Dict[str, Any] = {}
+
+    def register_handler(self, msg_type: str, handler) -> None:
+        """Register a handler for a specific WS message type."""
+        self._message_handlers[msg_type] = handler
 
     async def connect(self, websocket: WebSocket) -> str:
         try:
@@ -82,7 +90,6 @@ class ConnectionManager:
         except Exception:
             self.disconnect(client_id)
 
-
 manager = ConnectionManager()
 
 
@@ -97,28 +104,27 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 break
             except Exception:
                 continue
-            # Handle ping/pong keepalive
             try:
                 msg = json.loads(data)
-                if isinstance(msg, dict) and msg.get("type") == "ping":
+                if not isinstance(msg, dict):
+                    continue
+                msg_type = msg.get("type")
+                if msg_type == "ping":
                     await websocket.send_text(json.dumps({"type": "pong"}))
+                elif msg_type in manager._message_handlers:
+                    handler = manager._message_handlers[msg_type]
+                    try:
+                        handler(msg)
+                    except Exception as exc:
+                        logger.debug("Handler for %s failed: %s", msg_type, exc)
             except Exception:
                 pass
     finally:
         manager.disconnect(client_id)
 
-
 async def broadcast_status(message: str, progress: float = 0.0) -> None:
     """Broadcast a status update to all connected WebSocket clients."""
-    payload = json.dumps({"type": "status", "message": message, "progress": progress})
-    to_remove: list[str] = []
-    for cid, ws in list(manager.active_connections.items()):
-        try:
-            await ws.send_text(payload)
-        except Exception:
-            to_remove.append(cid)
-    for cid in to_remove:
-        manager.disconnect(cid)
+    await manager.broadcast({"type": "status", "message": message, "progress": progress})
 
 
 async def broadcast_job_assessment(

@@ -65,6 +65,7 @@ class CVPipeline:
         base_cv_path: Path,
         job: JobDetails,
         output_dir: Path,
+        additional_context: str = "",
     ) -> TailoredCV:
         """Copy base CV and compile PDF without any LLM modification."""
         output_dir.mkdir(parents=True, exist_ok=True)

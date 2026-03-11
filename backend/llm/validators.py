@@ -9,7 +9,7 @@ class LetterEdit(BaseModel):
 
 
 class CVReplacement(BaseModel):
-    section: Literal["Profile", "Experience", "Skills", "Additional Information"]
+    section: Literal["Profile", "Skills", "Additional Information"]
     original_text: str              # verbatim substring that must exist in the CV
     replacement_text: str           # the new text to substitute in
     reason: str                     # human-readable explanation

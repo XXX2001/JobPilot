@@ -7,60 +7,20 @@ Falls back gracefully on malformed agent output.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import re
 from typing import Any
 
 from backend.config import settings
+from backend.defaults import GEMINI_FALLBACK_MODEL
 from backend.models.schemas import JobDetails, RawJob
+from backend.scraping.json_utils import extract_json_from_text, parse_jobs_from_json
 from backend.scraping.site_prompts import SITE_PROMPTS, format_prompt
-from backend.security.sanitizer import sanitize_for_prompt, sanitize_url
 
 logger = logging.getLogger(__name__)
 
 
-def _extract_json_from_text(text: str) -> Any:
-    """Robustly extract a JSON value (array or object) from arbitrary agent output.
-
-    The LLM often wraps JSON in markdown code fences or prefixes it with prose.
-    This tries a series of extraction strategies before giving up.
-    """
-    if not text:
-        return None
-
-    # Strategy 1: direct parse
-    stripped = text.strip()
-    try:
-        return json.loads(stripped)
-    except json.JSONDecodeError:
-        pass
-
-    # Strategy 2: extract from ```json ... ``` fences
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", stripped)
-    if fence_match:
-        try:
-            return json.loads(fence_match.group(1).strip())
-        except json.JSONDecodeError:
-            pass
-
-    # Strategy 3: find first [ ... ] block
-    array_match = re.search(r"(\[[\s\S]*\])", stripped)
-    if array_match:
-        try:
-            return json.loads(array_match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    # Strategy 4: find first { ... } block
-    obj_match = re.search(r"(\{[\s\S]*\})", stripped)
-    if obj_match:
-        try:
-            return json.loads(obj_match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    return None
+# _extract_json_from_text is now in json_utils — keep local alias for backward compat
+_extract_json_from_text = extract_json_from_text
 
 
 class AdaptiveScraper:
@@ -79,7 +39,7 @@ class AdaptiveScraper:
         try:
             from browser_use import ChatGoogle  # type: ignore
 
-            model = settings.GOOGLE_MODEL or "gemini-2.0-flash"
+            model = settings.GOOGLE_MODEL or GEMINI_FALLBACK_MODEL
             return ChatGoogle(model=model, api_key=self._api_key)
         except ImportError:
             logger.warning("browser_use not installed; AdaptiveScraper will be a no-op")
@@ -293,62 +253,7 @@ Do NOT click the apply button. Just extract and return JSON.
             return []
 
         parsed = _extract_json_from_text(raw_text)
-        if parsed is None:
-            logger.warning("Could not parse JSON from agent result (url=%s)", source_url)
-            return []
-
-        # Normalise: may be a dict with a 'jobs' key, or a bare list
-        if isinstance(parsed, dict):
-            for key in ("jobs", "results", "listings", "data"):
-                if isinstance(parsed.get(key), list):
-                    parsed = parsed[key]
-                    break
-            else:
-                # Single job dict?
-                parsed = [parsed]
-
-        if not isinstance(parsed, list):
-            logger.warning("Agent result is not a list (url=%s)", source_url)
-            return []
-
-        jobs: list[RawJob] = []
-        for item in parsed:
-            if not isinstance(item, dict):
-                continue
-            try:
-                raw_url = str(item.get("apply_url") or item.get("url") or source_url)
-                clean_url = sanitize_url(raw_url) or sanitize_url(source_url)
-                job = RawJob(
-                    title=sanitize_for_prompt(
-                        str(item.get("title") or "Unknown Title"), 300, "title"
-                    ),
-                    company=sanitize_for_prompt(
-                        str(item.get("company") or "Unknown Company"), 200, "company"
-                    ),
-                    location=sanitize_for_prompt(
-                        str(item.get("location") or ""), 200, "location"
-                    ),
-                    salary_text=sanitize_for_prompt(
-                        str(item.get("salary") or ""), 100, "salary"
-                    ),
-                    description=sanitize_for_prompt(
-                        str(
-                            item.get("description_preview") or item.get("description") or ""
-                        ),
-                        2000, "description",
-                    ),
-                    url=clean_url,
-                    apply_url=clean_url,
-                    apply_method=str(item.get("apply_method") or ""),
-                    source_name="browser",
-                    raw_data=item,
-                )
-                jobs.append(job)
-            except Exception as exc:
-                logger.debug("Skipping malformed job item: %s — %s", item, exc)
-                continue
-
-        return jobs
+        return parse_jobs_from_json(parsed, source_url=source_url, source_name="browser")
 
     def _parse_job_details(self, result: Any, job_url: str = "") -> JobDetails | None:
         """Parse a browser-use agent result for a single job's full details."""

@@ -34,10 +34,10 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted if shown on the card (null if not)
 
-        - description_preview: Any description snippet visible on the card (null if not shown)
+        - description: Full job description text visible on the card or detail page (null if not shown)
 
-        - apply_url: Construct this as https://www.linkedin.com/jobs/view/{jobId}/
-          where {jobId} is the numeric job ID found in the card's data attributes or
+        - apply_url: Construct this as https://www.linkedin.com/jobs/view/{{jobId}}/
+          where {{jobId}} is the numeric job ID found in the card's data attributes or
           in the currentJobId URL parameter when hovering. Look for aria-label, data-job-id,
           or href attributes on the job card element to find the job ID number.
           NEVER use the search results URL as apply_url.
@@ -118,7 +118,7 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted (null if not shown)
 
-        - description_preview: First 200 chars of the description preview
+        - description: Full job description text (as much as available)
 
         - apply_url: The direct job detail URL (not the Indeed redirect if possible)
 
@@ -134,20 +134,19 @@ SITE_PROMPTS: dict[str, str] = {
     "google_jobs": """
 
         Navigate DIRECTLY to this URL (do not use the search box):
-        https://{google_domain}/search?q={keywords}+emplois+{location}&ibp=htl;jobs
+        https://{google_domain}/search?q={keywords}+emplois+{location}&udm=8
+
+        This is the Google Jobs tab (udm=8). It shows a dedicated job listings page.
 
         If the page shows a location/cookie consent popup, dismiss it by clicking "Reject all",
         "No thanks", or pressing Escape — then continue.
 
-        Wait for the Google Jobs panel to appear in the search results.
-        If the "Jobs" tab/section is not visible, try:
-        https://{google_domain}/search?q={keywords}+jobs+{location}
-        and look for the Jobs section.
+        Wait for the job listings to load on the page.
 
-        Extract job listings from the Google Jobs panel.
-        Do NOT click on individual job cards — read all data from the panel list without clicking.
+        Extract job listings from the Google Jobs results.
+        Do NOT click on individual job cards — read all data from the list without clicking.
 
-        For each job visible in the panel (up to {max_jobs}), extract:
+        For each job visible (up to {max_jobs}), extract:
 
         - title: The full job title
 
@@ -159,11 +158,9 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted (null if not shown)
 
-        - description_preview: Any description snippet visible in the panel (null if not shown)
+        - description: Full job description text visible (null if not shown)
 
         - apply_url: The href/link of the job card or "Apply" button pointing to the original posting
-
-        If there is no Jobs panel at all, extract job listings from the regular search results.
 
         Return the results as a JSON array.
 
@@ -193,7 +190,7 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted (null if not shown)
 
-        - description_preview: First 200 chars of the job teaser text
+        - description: Full job description text (as much as available)
 
         - apply_url: The full URL to the job detail page
 
@@ -225,7 +222,7 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted (null if not shown)
 
-        - description_preview: First 200 chars of the description
+        - description: Full job description text (as much as available)
 
         - apply_url: The URL to the job detail page
 
@@ -237,27 +234,26 @@ SITE_PROMPTS: dict[str, str] = {
 
     "lab_website": """
 
-        You are on a research lab or university careers page: {url}
+        You are on a careers or job listings page: {url}
 
-        Find any job/position openings listed on this page.
+        Find any job or position openings listed on this page.
 
-        These may be labeled as: positions, openings, careers, jobs,
-
-        PhD, postdoc, research engineer, software engineer, etc.
+        These may be labeled as: positions, openings, careers, jobs, vacancies,
+        internships, apprenticeships, PhD, postdoc, or any other job-related listing.
 
         For each position found (up to {max_jobs}), extract whatever is available:
 
         - title: The position title
 
-        - company: The lab/institution name (infer from page if not explicit)
+        - company: The company or organisation name (infer from page if not explicit)
 
         - location: Location if shown (null if not)
 
-        - salary: Salary/stipend if shown (null if not)
+        - salary: Salary if shown (null if not)
 
         - posted_date: When posted if shown (null if not)
 
-        - description_preview: First 200 chars of description
+        - description: Full job description text (as much as available)
 
         - apply_url: The link to apply or more details (use current URL if no direct link)
 
@@ -283,7 +279,7 @@ SITE_PROMPTS: dict[str, str] = {
 
         - posted_date: When it was posted (null if not shown)
 
-        - description_preview: First 200 chars of description (null if not shown)
+        - description: Full job description text (as much as available) (null if not shown)
 
         - apply_url: The URL to the job detail or apply page
 
@@ -323,6 +319,8 @@ SITE_CONFIGS: dict[str, dict] = {
 
         "type": "browser",
 
+        "tier": 1,
+
         "country_codes": ["gb", "us", "de", "fr", "nl", "ca", "au"],
 
         "base_url": "https://www.linkedin.com/jobs/",
@@ -347,6 +345,8 @@ SITE_CONFIGS: dict[str, dict] = {
 
         "type": "browser",
 
+        "tier": 1,
+
         "country_codes": ["gb", "us", "ca", "au", "de", "fr"],
 
         "base_url": "https://www.indeed.com/jobs",
@@ -368,6 +368,8 @@ SITE_CONFIGS: dict[str, dict] = {
         "apply_method": "manual",
 
         "type": "browser",
+
+        "tier": 1,
 
         "country_codes": ["gb", "us", "de", "fr", "nl"],
 
@@ -391,6 +393,8 @@ SITE_CONFIGS: dict[str, dict] = {
 
         "type": "browser",
 
+        "tier": 1,
+
         "country_codes": ["fr", "gb", "de", "nl"],
 
         "base_url": "https://www.welcometothejungle.com/en/jobs",
@@ -413,9 +417,11 @@ SITE_CONFIGS: dict[str, dict] = {
 
         "type": "browser",
 
-        "country_codes": ["gb", "us"],
+        "tier": 1,
 
-        "base_url": "https://www.glassdoor.com/Job/jobs.htm",
+        "country_codes": ["fr"],
+
+        "base_url": "https://www.glassdoor.fr/index.htm",
 
     },
 
@@ -445,7 +451,7 @@ SITE_CONFIGS: dict[str, dict] = {
 
         "name": "lab_website",
 
-        "display_name": "Research Lab",
+        "display_name": "Custom Website",
 
         "prompt_key": "lab_website",
 
@@ -456,6 +462,8 @@ SITE_CONFIGS: dict[str, dict] = {
         "apply_method": "manual",
 
         "type": "lab_url",
+
+        "tier": 2,
 
         "country_codes": [],
 
@@ -569,5 +577,112 @@ def format_prompt(site: str, **kwargs) -> str:
 
 
 
-__all__ = ["SITE_PROMPTS", "SITE_CONFIGS", "format_prompt"]
+# ---------------------------------------------------------------------------
+# Tier 1 (Scrapling) — CSS selectors to scope content before cleaning
+# ---------------------------------------------------------------------------
+
+SITE_CONTENT_SELECTORS: dict[str, str] = {
+    "linkedin": ".jobs-search-results-list, .scaffold-layout__list",
+    "indeed": "#mosaic-jobResults, .jobsearch-ResultsList",
+    "google_jobs": "#search, #rso, .MjjYud",
+    "welcome_to_the_jungle": "[data-testid='search-results-list-item-wrapper']",
+    # glassdoor.fr — job cards live inside the react-job-listing list items
+    "glassdoor": "[data-test='jobListing'], .react-job-listing, .JobsList_jobListItem, .JobsList_wrapper",
+}
+
+# ---------------------------------------------------------------------------
+# Tier 1 (Scrapling) — extraction-only prompts (no navigation, just parse)
+# ---------------------------------------------------------------------------
+
+EXTRACTION_PROMPTS: dict[str, str] = {
+    "default": """You are a job listing extractor. Extract all job listings from the page content below.
+
+Return a JSON array. Each job object must have:
+- title: job title
+- company: company name
+- location: location string
+- salary: salary text or null
+- posted_date: posting date or null
+- description: full job description text (as much as available on the page), or null if not shown
+- apply_url: direct URL to the job posting
+
+Return ONLY the JSON array, no prose, no markdown fences.
+
+Page content:
+{cleaned_content}
+""",
+
+    "linkedin": """You are a job listing extractor for LinkedIn. Extract all job listings from the page content below.
+
+LinkedIn job IDs appear in href attributes like /jobs/view/1234567890/ or data-job-id="1234567890".
+Use these to construct apply_url as: https://www.linkedin.com/jobs/view/JOBID/
+
+Return a JSON array. Each job object must have:
+- title: job title
+- company: company name
+- location: location string
+- salary: salary text or null
+- posted_date: posting date or null
+- description: full job description text (as much as available on the page), or null if not shown
+- apply_url: https://www.linkedin.com/jobs/view/JOBID/ (replace JOBID with the numeric ID)
+
+Return ONLY the JSON array, no prose, no markdown fences.
+
+Page content:
+{cleaned_content}
+""",
+
+    "glassdoor": """You are a job listing extractor for Glassdoor France (glassdoor.fr). Extract all individual job listings from the page content below.
+
+IMPORTANT:
+- Only extract ACTUAL job postings (with a title, company, and location). Do NOT extract job category links or sidebar navigation items.
+- Job URLs on glassdoor.fr look like: /Emploi/company-title-location-JV_IC....htm or /partner/jobListing.htm?pos=...
+- Always construct ABSOLUTE URLs by prepending https://www.glassdoor.fr to any relative path (e.g. /Emploi/... → https://www.glassdoor.fr/Emploi/...)
+
+Return a JSON array. Each job object must have:
+- title: job title
+- company: company name
+- location: location string
+- salary: salary text or null
+- posted_date: posting date or null
+- description: full job description text (as much as available on the page), or null if not shown
+- apply_url: full absolute URL to the job listing (https://www.glassdoor.fr/...)
+
+Return ONLY the JSON array, no prose, no markdown fences.
+
+Page content:
+{cleaned_content}
+""",
+
+    "google_jobs": """You are a job listing extractor for Google Jobs. Extract all job listings from the page content below.
+
+IMPORTANT:
+- Job cards may have a data-share-url attribute containing a Google Jobs deep link. Use that as the apply_url.
+- If no data-share-url is available, use the href of the job card link.
+- Do NOT use fragment-only URLs (starting with #) as apply_url.
+
+Return a JSON array. Each job object must have:
+- title: job title
+- company: company name
+- location: location string
+- salary: salary text or null
+- posted_date: posting date or null
+- description: full job description text (as much as available on the page), or null if not shown
+- apply_url: the data-share-url or href pointing to the job listing
+
+Return ONLY the JSON array, no prose, no markdown fences.
+
+Page content:
+{cleaned_content}
+""",
+}
+
+
+__all__ = [
+    "SITE_PROMPTS",
+    "SITE_CONFIGS",
+    "SITE_CONTENT_SELECTORS",
+    "EXTRACTION_PROMPTS",
+    "format_prompt",
+]
 

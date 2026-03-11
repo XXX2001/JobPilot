@@ -53,11 +53,12 @@ async def lifespan(app: FastAPI):
         from backend.llm.gemini_client import GeminiClient
         from backend.llm.job_analyzer import JobAnalyzer
         from backend.matching.matcher import JobMatcher
-        from backend.scheduler.morning_batch import MorningBatchScheduler
+        from backend.scheduler.morning_batch import MorningBatchRunner
         from backend.scraping.adaptive_scraper import AdaptiveScraper
         from backend.scraping.adzuna_client import AdzunaClient
         from backend.scraping.deduplicator import JobDeduplicator
         from backend.scraping.orchestrator import ScrapingOrchestrator
+        from backend.scraping.scrapling_fetcher import ScraplingFetcher
         from backend.scraping.session_manager import BrowserSessionManager
 
         gemini = GeminiClient()
@@ -72,22 +73,26 @@ async def lifespan(app: FastAPI):
         dedup = JobDeduplicator()
         adaptive = AdaptiveScraper(gemini_api_key=settings.GOOGLE_API_KEY)
         session_mgr = BrowserSessionManager()
+        scrapling = ScraplingFetcher(gemini_client=gemini) if settings.SCRAPLING_ENABLED else None
         orchestrator = ScrapingOrchestrator(
             adzuna_client=adzuna,
             adaptive_scraper=adaptive,
             session_mgr=session_mgr,
             deduplicator=dedup,
+            scrapling_fetcher=scrapling,
         )
         matcher = JobMatcher()
+        from backend.defaults import DAILY_LIMIT
+
         apply_engine = ApplicationEngine(
             api_key=settings.GOOGLE_API_KEY,
-            daily_limit=10,
+            daily_limit=DAILY_LIMIT,
         )
 
-        # DB factory for the scheduler (creates a new session each call)
+        # DB factory for the batch runner (creates a new session each call)
         from backend.database import AsyncSessionLocal
 
-        scheduler = MorningBatchScheduler(
+        batch_runner = MorningBatchRunner(
             scraper=orchestrator,
             matcher=matcher,
             cv_pipeline=cv_pipeline,
@@ -104,10 +109,7 @@ async def lifespan(app: FastAPI):
         app.state.scraping_orchestrator = orchestrator
         app.state.matcher = matcher
         app.state.apply_engine = apply_engine
-        app.state.morning_scheduler = scheduler
-
-        # APScheduler auto-start removed — batch runs only on user action
-        # (POST /api/queue/refresh → scheduler.run_batch())
+        app.state.batch_runner = batch_runner
 
         logger.info("All singletons initialised")
     except Exception as exc:
@@ -153,12 +155,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down JobPilot application")
-    try:
-        scheduler = getattr(app.state, "morning_scheduler", None)
-        if scheduler:
-            scheduler.stop()
-    except Exception as exc:
-        logger.warning("Scheduler shutdown error: %s", exc)
+    # No scheduler to shut down — batch runs are on-demand only
 
 
 app: Any = FastAPI(lifespan=lifespan, redirect_slashes=False)  # type: ignore[arg-type]
@@ -283,10 +280,20 @@ async def _generic_error_handler(request: Request, exc: Exception) -> JSONRespon
 class SPAStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except Exception:
             # Fall back to index.html for client-side routing
-            return await super().get_response("index.html", scope)
+            response = await super().get_response("index.html", scope)
+
+        # Immutable assets (hashed filenames) can be cached forever.
+        # Everything else (index.html, fallback) must revalidate so the
+        # browser always picks up new builds.
+        if "/_app/immutable/" in path:
+            response.headers["cache-control"] = "public, max-age=31536000, immutable"
+        elif not isinstance(response, NotModifiedResponse):
+            response.headers["cache-control"] = "no-cache"
+
+        return response
 
 
 # Serve frontend static files if built (don't crash if missing)

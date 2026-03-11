@@ -29,14 +29,21 @@ class CVModifier:
         job: JobDetails,
         cv_tex: str,
         context: JobContext,
+        additional_context: str = "",
     ) -> CVModifierOutput:
         if len(cv_tex) > 50_000:
             logger.warning("CV text exceeds 50KB (%d chars), truncating", len(cv_tex))
             cv_tex = cv_tex[:50_000]
-        context_md = context.to_markdown(job.title, job.company)
+        context_md = sanitize_for_prompt(
+            context.to_markdown(job.title, job.company), 10_000, "job_context"
+        )
+        clean_additional = sanitize_for_prompt(
+            additional_context or "None provided.", 2000, "additional_context"
+        )
         prompt = CV_MODIFIER_SKILL.format(
             job_context_md=context_md,
             cv_tex=cv_tex,
+            additional_context=clean_additional,
         )
         raw = await self._client.generate_json(prompt, CVModifierOutput)
         # Enforce ≤3 cap and confidence threshold at the class boundary

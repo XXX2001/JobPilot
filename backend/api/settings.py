@@ -6,7 +6,7 @@ import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
@@ -68,6 +68,7 @@ class SearchSettingsOut(BaseModel):
     batch_time: str
     min_match_score: float
     countries: Optional[dict] = None
+    cv_modification_sensitivity: str = "balanced"
 
 
 class SearchSettingsUpdate(BaseModel):
@@ -85,6 +86,7 @@ class SearchSettingsUpdate(BaseModel):
     batch_time: Optional[str] = None
     min_match_score: Optional[float] = None
     countries: Optional[dict] = None
+    cv_modification_sensitivity: Optional[Literal["conservative", "balanced", "aggressive"]] = None
 
 
 class SourcesUpdate(BaseModel):
@@ -206,6 +208,7 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             batch_time=body.batch_time or "08:00",
             min_match_score=body.min_match_score if body.min_match_score is not None else 30.0,
             countries=body.countries,
+            cv_modification_sensitivity=body.cv_modification_sensitivity or "balanced",
         )
         db.add(ss)
     else:
@@ -237,6 +240,8 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             ss.min_match_score = body.min_match_score
         if body.countries is not None:
             ss.countries = body.countries
+        if body.cv_modification_sensitivity is not None:
+            ss.cv_modification_sensitivity = body.cv_modification_sensitivity
 
     await db.commit()
     await db.refresh(ss)

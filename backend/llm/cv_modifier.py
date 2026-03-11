@@ -6,9 +6,10 @@ from typing import TYPE_CHECKING
 
 from backend.llm.gemini_client import GeminiClient
 
+from backend.llm.job_context import JobContext
+
 if TYPE_CHECKING:
     from backend.matching.fit_engine import FitAssessment
-from backend.llm.job_context import JobContext
 from backend.llm.prompts import CV_MODIFIER_SKILL
 from backend.llm.validators import CVModifierOutput
 from backend.models.schemas import JobDetails
@@ -43,9 +44,9 @@ class CVModifier:
 
     async def modify_from_assessment(
         self,
-        job: JobDetails,
+        job: JobDetails,  # noqa: ARG002 — kept for API consistency with modify()
         cv_tex: str,
-        assessment: "FitAssessment",
+        assessment: FitAssessment,
     ) -> CVModifierOutput:
         """Targeted CV modification using FitAssessment gap analysis."""
         from backend.llm.prompts import CV_MODIFIER_FROM_ASSESSMENT

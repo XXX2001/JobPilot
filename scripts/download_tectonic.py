@@ -95,7 +95,24 @@ def _get_download_url(asset_name: str) -> str:
             logger.info("Found asset: %s", url)
             return url
 
-    # Try a fallback with partial match (e.g. different glibc variant)
+    # Improved fallback: look for asset matching system and arch
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        arch = "x86_64"
+    elif machine in ("aarch64", "arm64"):
+        arch = "aarch64"
+    else:
+        arch = machine
+
+    for asset in data.get("assets", []):
+        name = asset["name"]
+        if "tectonic" in name.lower() and (".tar.gz" in name or ".zip" in name) and system in name.lower() and arch in name:
+            url = asset["browser_download_url"]
+            logger.warning("Exact asset not found; using fallback: %s", url)
+            return url
+
+    # Old fallback with partial match (e.g. different glibc variant)
     asset_base = asset_name.replace(".tar.gz", "").replace(".zip", "")
     for asset in data.get("assets", []):
         if asset_base.split("-")[0] in asset["name"] and (

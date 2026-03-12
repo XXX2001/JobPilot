@@ -93,7 +93,7 @@ async def save_session(page) -> None:
         path = get_session_path(page.url)
         path.parent.mkdir(parents=True, exist_ok=True)
         context = page.context
-        await context.storage_state(path=str(path))
+        await context.storage_state(path=path.resolve().as_posix())
         logger.info("Saved browser session for %s → %s", page.url, path)
     except Exception as exc:
         logger.debug("Could not save session after CAPTCHA: %s", exc)
@@ -240,7 +240,7 @@ async def preflight_check_url(
         ]
         profile_dir.mkdir(parents=True, exist_ok=True)
         context = await pw.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
+            user_data_dir=profile_dir.resolve().as_posix(),
             headless=headless,
             args=launch_args,
         )
@@ -263,7 +263,7 @@ async def preflight_check_url(
             logger.info("Preflight: %s is accessible (no block)", url)
             # Save storage-state snapshot alongside profile dir for browser-use consumers
             try:
-                await context.storage_state(path=str(session_path))
+                await context.storage_state(path=session_path.resolve().as_posix())
             except Exception:
                 pass
             await context.close()
@@ -283,7 +283,7 @@ async def preflight_check_url(
     try:
         profile_dir.mkdir(parents=True, exist_ok=True)
         context = await pw.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
+            user_data_dir=profile_dir.resolve().as_posix(),
             headless=False,
             args=launch_args,
         )
@@ -308,7 +308,7 @@ async def preflight_check_url(
     if resolved:
         # Save storage-state snapshot for browser-use consumers that load storage_state=
         try:
-            await context.storage_state(path=str(session_path))
+            await context.storage_state(path=session_path.resolve().as_posix())
             logger.info("Preflight: saved session for %s after block resolution", url)
         except Exception as exc:
             logger.debug("Preflight session save failed: %s", exc)

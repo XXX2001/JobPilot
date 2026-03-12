@@ -64,7 +64,7 @@ class GeminiClient:
             self._model_name = self._candidates[model_try]
             for attempt in range(3):
                 try:
-                    response = await asyncio.get_event_loop().run_in_executor(
+                    response = await asyncio.get_running_loop().run_in_executor(
                         None,
                         lambda: self._client.models.generate_content(
                             model=self._model_name, contents=prompt
@@ -134,7 +134,7 @@ class GeminiClient:
         from backend.defaults import EMBEDDING_MODEL
 
         await self._wait_for_embed_rate_limit()
-        result = await asyncio.get_event_loop().run_in_executor(
+        result = await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: self._client.models.embed_content(
                 model=EMBEDDING_MODEL,

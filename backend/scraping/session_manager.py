@@ -97,7 +97,7 @@ class BrowserSessionManager:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Pass storage_state so watchdog knows where to auto-save upon stop()
-        browser = Browser(headless=False, storage_state=str(save_path))
+        browser = Browser(headless=False, storage_state=save_path.resolve().as_posix(), user_data_dir=None)
         
         try:
             await browser.start()
@@ -301,7 +301,7 @@ class BrowserSessionManager:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Open browser via browser_use (provides watchdog with save path)
-        browser = Browser(headless=False, storage_state=str(save_path))
+        browser = Browser(headless=False, storage_state=save_path.resolve().as_posix(), user_data_dir=None)
         try:
             await browser.start()
             page = await browser.new_page()

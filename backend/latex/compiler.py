@@ -58,7 +58,7 @@ class LaTeXCompiler:
         tectonic = self._find_tectonic()
         if tectonic is None:
             raise LaTeXCompilationError(
-                "Tectonic not found. Run 'python scripts/install.sh' or add tectonic to PATH."
+                "Tectonic not found. Run 'python scripts/download_tectonic.py' or add tectonic to PATH."
             )
 
         if output_dir is None:

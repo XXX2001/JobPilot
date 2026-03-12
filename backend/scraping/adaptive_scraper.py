@@ -111,7 +111,7 @@ class AdaptiveScraper:
                         Path(settings.jobpilot_data_dir) / "browser_profiles" / site / "state.json"
                     )
                     if storage_path.exists():
-                        storage_state = str(storage_path)
+                        storage_state = storage_path.resolve().as_posix()
             except OSError:
                 storage_state = None
 

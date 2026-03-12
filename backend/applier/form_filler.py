@@ -79,18 +79,22 @@ class PlaywrightFormFiller:
         profile_dir = Path(settings.jobpilot_data_dir) / "browser_profiles" / site_key
         profile_dir.mkdir(parents=True, exist_ok=True)
 
+        import platform as _platform
         launch_args = [
             "--disable-blink-features=AutomationControlled",
-            "--disable-dev-shm-usage",
             "--no-first-run",
             "--disable-infobars",
         ]
+        if _platform.system() == "Windows":
+            launch_args.append("--disable-gpu")
+        else:
+            launch_args.append("--disable-dev-shm-usage")
 
         pw = await async_playwright().start()
         context = None
         try:
             context = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
+                user_data_dir=profile_dir.as_posix(),
                 headless=False,
                 args=launch_args,
             )
@@ -256,7 +260,7 @@ class PlaywrightFormFiller:
         context = None
         try:
             context = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir),
+                user_data_dir=profile_dir.as_posix(),
                 headless=False,
                 args=launch_args,
             )

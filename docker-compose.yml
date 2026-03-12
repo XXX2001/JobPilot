@@ -1,0 +1,14 @@
+services:
+  jobpilot:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env                    # your GOOGLE_API_KEY, ADZUNA_APP_ID, ADZUNA_APP_KEY
+    environment:
+      - JOBPILOT_HOST=0.0.0.0
+    volumes:
+      - jobpilot_data:/app/data # CVs, templates, PDFs, sessions persist here
+
+volumes:
+  jobpilot_data:

@@ -286,7 +286,6 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 					salary_min: salaryMin || null,
 					remote_only: remoteOnly,
 					daily_limit: dailyLimit,
-					batch_time: batchTime,
 					min_match_score: minMatchScore,
 					cv_modification_sensitivity: cvModificationSensitivity
 				})

@@ -50,6 +50,8 @@ Thumbs.db
 !data/templates/*.jpeg
 captcha.md
 taste-skill/
+start-jobpilot.ps1
+Start Jobpilot.bat
 
 # ─── Logs ─────────────────────────────────────────────────────────────────────
 *.log

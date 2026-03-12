@@ -90,8 +90,11 @@ else
             warn "Unknown OS '$(uname -s)' — skipping Playwright install. Run 'uv run playwright install chromium' manually."
             ;;
     esac
+    # browser-use uses patchright internally — install its Chromium too
+    uv run patchright install chromium || warn "Patchright install failed — browser-use automation may be unavailable."
+
     if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" &>/dev/null 2>&1; then
-        success "Playwright Chromium installed"
+        success "Playwright + Patchright Chromium installed"
     else
         warn "Playwright Chromium not functional after install — browser automation may be unavailable."
     fi

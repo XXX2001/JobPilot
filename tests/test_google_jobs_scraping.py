@@ -309,8 +309,8 @@ class TestCleanHtmlGoogleJobs:
         big_content = "<div id='search'>" + "<p>Job listing data. </p>" * 5000 + "</div>"
         html = f"<html><body>{big_content}</body></html>"
         result = fetcher._clean_html(html, site="google_jobs")
-        # Should be truncated (default max is 30000 chars)
-        assert len(result) <= 35000  # some overhead from markdown conversion
+        # Should be truncated to MAX_SCRAPLING_CONTENT_CHARS (50000) + some markdown overhead
+        assert len(result) <= 55000
 
     def test_promotes_data_share_url_to_href(self):
         fetcher = _make_fetcher()

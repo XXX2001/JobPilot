@@ -203,7 +203,7 @@ async def test_engine_cancel_apply_returns_cancelled(monkeypatch):
 
     monkeypatch.setattr(auto_mod, "_BROWSER_USE_AVAILABLE", True)
     monkeypatch.setattr(auto_mod, "Agent", MagicMock())
-    monkeypatch.setattr(auto_mod, "ChatGoogleGenerativeAI", MagicMock())
+    monkeypatch.setattr(auto_mod, "ChatGoogle", MagicMock())
     monkeypatch.setattr(auto_mod, "Browser", MagicMock())
     monkeypatch.setattr(auto_mod, "BrowserConfig", MagicMock(), raising=False)
 
@@ -319,7 +319,7 @@ async def test_browser_use_apply_parses_additional_answers_json(monkeypatch):
     import json
 
     monkeypatch.setattr(mod, "_BROWSER_USE_AVAILABLE", True)
-    monkeypatch.setattr(mod, "ChatGoogleGenerativeAI", MagicMock())
+    monkeypatch.setattr(mod, "ChatGoogle", MagicMock())
     monkeypatch.setattr(mod, "Browser", MagicMock())
 
     captured_task: list[str] = []
@@ -382,7 +382,7 @@ async def test_assisted_apply_tier1_failure_falls_back():
     with patch.object(strategy._form_filler, "fill_only", new=AsyncMock(side_effect=RuntimeError("page crash"))), \
          patch.object(mod, "_BROWSER_USE_AVAILABLE", True), \
          patch.object(mod, "Agent", MagicMock(return_value=MagicMock(run=AsyncMock()))), \
-         patch.object(mod, "ChatGoogleGenerativeAI", MagicMock()), \
+         patch.object(mod, "ChatGoogle", MagicMock()), \
          patch.object(mod, "Browser", MagicMock()):
         result = await strategy.apply(apply_url="https://example.com/job")
 

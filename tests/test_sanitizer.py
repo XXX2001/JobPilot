@@ -23,7 +23,7 @@ class TestSanitizeForPrompt:
         assert len(result) == 300
 
     def test_truncates_description(self):
-        text = "x" * 3000
+        text = "x" * (MAX_LEN_DESCRIPTION + 1000)
         result = sanitize_for_prompt(text, MAX_LEN_DESCRIPTION, "description")
         assert len(result) == MAX_LEN_DESCRIPTION
 

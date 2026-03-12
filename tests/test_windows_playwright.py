@@ -120,6 +120,33 @@ def test_07_browser_use_importable():
         pytest.fail(f"Cannot import browser_use: {e}\nRun: uv sync")
 
 
+def test_07b_patchright_chromium_installed():
+    """patchright (used by browser-use internally) must have Chromium installed.
+
+    If this fails, run:  uv run patchright install chromium
+    This is the ROOT CAUSE of the 'No local browser binary found' deadlock.
+    """
+    try:
+        from patchright.sync_api import sync_playwright as sync_patchright
+    except ImportError:
+        pytest.skip("patchright not installed — run: uv sync")
+
+    try:
+        with sync_patchright() as p:
+            exe = p.chromium.executable_path
+            _print(f"patchright chromium path: {exe}")
+            assert Path(exe).exists(), (
+                f"patchright Chromium binary not found at: {exe}\n"
+                "Run:  uv run patchright install chromium\n"
+                "This is the ROOT CAUSE of the browser-use deadlock on Windows."
+            )
+    except Exception as e:
+        pytest.fail(
+            f"patchright Chromium not installed: {e}\n"
+            "Run:  uv run patchright install chromium"
+        )
+
+
 def test_08_browser_use_finds_chromium():
     """browser-use's LocalBrowserWatchdog must find the chromium binary."""
     try:

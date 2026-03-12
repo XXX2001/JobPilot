@@ -50,9 +50,9 @@ async def test_scraper_retries_on_agent_failure():
             keywords=["python"],
         )
 
-    # Should return empty list (graceful degradation) after 3 failed attempts
+    # Should return empty list (graceful degradation) after 2 failed attempts
     assert result == []
-    assert call_count == 3
+    assert call_count == 2
 
 
 @pytest.mark.asyncio

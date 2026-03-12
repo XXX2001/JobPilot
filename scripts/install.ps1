@@ -101,9 +101,15 @@ if ($PlaywrightOk) {
     } catch {
         Write-Warn "Playwright install failed: $_ — browser automation will be unavailable."
     }
+    # browser-use uses patchright internally — install its Chromium too
+    try {
+        & uv run patchright install chromium
+    } catch {
+        Write-Warn "Patchright install failed: $_ — browser-use automation may be unavailable."
+    }
     $result = & uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Ok "Playwright Chromium installed"
+        Write-Ok "Playwright + Patchright Chromium installed"
     } else {
         Write-Warn "Playwright Chromium not functional after install — browser automation may be unavailable."
     }

@@ -123,11 +123,7 @@ def test_07_browser_use_importable():
 def test_07b_patchright_chromium_installed():
     """patchright (used by browser-use internally) must have Chromium installed.
 
-    browser-use's LocalBrowserWatchdog looks for the 'chrome' channel via:
-        uvx playwright install chrome
-    If this fails, run:
-        uv run patchright install chromium
-        uv run playwright install chrome
+    If this fails, run:  uv run patchright install chromium
     This is the ROOT CAUSE of the 'No local browser binary found' deadlock.
     """
     try:
@@ -142,48 +138,13 @@ def test_07b_patchright_chromium_installed():
             assert Path(exe).exists(), (
                 f"patchright Chromium binary not found at: {exe}\n"
                 "Run:  uv run patchright install chromium\n"
-                "Also: uv run playwright install chrome\n"
                 "This is the ROOT CAUSE of the browser-use deadlock on Windows."
             )
     except Exception as e:
         pytest.fail(
             f"patchright Chromium not installed: {e}\n"
-            "Run:  uv run patchright install chromium\n"
-            "Also: uv run playwright install chrome"
+            "Run:  uv run patchright install chromium"
         )
-
-
-def test_07c_playwright_chrome_channel_installed():
-    """The 'chrome' channel must be installed for browser-use's watchdog.
-
-    browser-use's LocalBrowserWatchdog specifically runs:
-        uvx playwright install chrome
-    to locate the browser. If only 'chromium' is installed, it still won't
-    find it and will try to install at runtime — causing the 30s deadlock.
-
-    Fix: uv run playwright install chrome
-    """
-    from playwright.sync_api import sync_playwright
-
-    with sync_playwright() as p:
-        try:
-            exe = p.chromium.executable_path
-            _print(f"playwright chromium executable: {exe}")
-        except Exception as e:
-            _print(f"Cannot get chromium path: {e}")
-
-        # Try launching with channel='chrome' — this is what browser-use needs
-        try:
-            browser = p.chromium.launch(channel="chrome", headless=True)
-            version = browser.version
-            _print(f"playwright chrome channel launched OK — version: {version}")
-            browser.close()
-        except Exception as e:
-            pytest.fail(
-                f"playwright 'chrome' channel not available: {e}\n"
-                "Run:  uv run playwright install chrome\n"
-                "This channel is required by browser-use's LocalBrowserWatchdog."
-            )
 
 
 def test_08_browser_use_finds_chromium():

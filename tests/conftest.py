@@ -5,12 +5,6 @@ from pathlib import Path
 import pytest
 import unittest.mock as mock
 
-# On Windows, browser-use spawns a playwright subprocess inside an asyncio
-# event handler. ProactorEventLoop (Windows default) deadlocks in this case.
-# Switch to SelectorEventLoop globally for all tests on Windows.
-if platform.system() == "Windows":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
 # Ensure project root is in sys.path so tests can import backend package
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

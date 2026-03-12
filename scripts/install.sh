@@ -90,6 +90,8 @@ else
             warn "Unknown OS '$(uname -s)' — skipping Playwright install. Run 'uv run playwright install chromium' manually."
             ;;
     esac
+    # browser-use's watchdog looks for the 'chrome' channel specifically — install it too
+    uv run playwright install chrome || warn "Playwright chrome channel install failed — browser-use may fall back to manual install."
     # browser-use uses patchright internally — install its Chromium too
     uv run patchright install chromium || warn "Patchright install failed — browser-use automation may be unavailable."
 

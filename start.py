@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """JobPilot launcher — starts backend and opens browser."""
 
-import asyncio
 import os
 import platform
 import shutil
@@ -99,11 +98,6 @@ def free_port(port: int) -> None:
 
 
 def main():
-    # On Windows, ProactorEventLoop (default) deadlocks when browser-use runs
-    # playwright subprocess inside an asyncio handler. Switch to SelectorEventLoop.
-    if platform.system() == "Windows":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
     check_prerequisites()
 
     Path(PROJECT_ROOT).mkdir(parents=True, exist_ok=True)

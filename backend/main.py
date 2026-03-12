@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
 
         logger.info("All singletons initialised")
     except Exception as exc:
-        logger.warning("Singleton init failed (non-fatal in test env): %s", exc)
+        logger.warning("Singleton init failed (non-fatal in test env): %s", exc, exc_info=True)
 
     # ── Wire WS client message routing ──────────────────────────────────
     try:

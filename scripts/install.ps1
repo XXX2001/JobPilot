@@ -101,6 +101,12 @@ if ($PlaywrightOk) {
     } catch {
         Write-Warn "Playwright install failed: $_ — browser automation will be unavailable."
     }
+    # browser-use's watchdog looks for the 'chrome' channel specifically — install it too
+    try {
+        & uv run playwright install chrome
+    } catch {
+        Write-Warn "Playwright chrome channel install failed: $_ — browser-use may fall back to manual install."
+    }
     # browser-use uses patchright internally — install its Chromium too
     try {
         & uv run patchright install chromium

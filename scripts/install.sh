@@ -76,12 +76,25 @@ step "4/9  Installing Playwright Chromium"
 if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" &>/dev/null 2>&1; then
     success "Playwright Chromium already installed"
 else
-    if [ "$(uname -s)" = "Linux" ]; then
-        uv run playwright install chromium --with-deps
+    case "$(uname -s)" in
+        Linux)
+            uv run playwright install chromium --with-deps || warn "Playwright install failed — browser automation will be unavailable."
+            ;;
+        Darwin)
+            uv run playwright install chromium || warn "Playwright install failed — browser automation will be unavailable."
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            uv run playwright install chromium || warn "Playwright install failed — browser automation will be unavailable."
+            ;;
+        *)
+            warn "Unknown OS '$(uname -s)' — skipping Playwright install. Run 'uv run playwright install chromium' manually."
+            ;;
+    esac
+    if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" &>/dev/null 2>&1; then
+        success "Playwright Chromium installed"
     else
-        uv run playwright install chromium
+        warn "Playwright Chromium not functional after install — browser automation may be unavailable."
     fi
-    success "Playwright Chromium installed"
 fi
 
 # ── Step 6: Download Tectonic ─────────────────────────────────────────────────

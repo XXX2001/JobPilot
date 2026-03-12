@@ -116,7 +116,7 @@ class AdaptiveScraper:
                 storage_state = None
 
             browser = (
-                Browser(headless=settings.jobpilot_scraper_headless, storage_state=storage_state)
+                Browser(headless=settings.jobpilot_scraper_headless, storage_state=storage_state, user_data_dir=None)
                 if storage_state
                 else Browser(headless=settings.jobpilot_scraper_headless)
             )

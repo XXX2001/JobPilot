@@ -151,6 +151,7 @@ class AssistedApplyStrategy:
         )
         if state_path.exists():
             browser_kwargs["storage_state"] = state_path.resolve().as_posix()
+            browser_kwargs["user_data_dir"] = None
             logger.info("[Tier 2 assisted] Loading saved session from %s", state_path)
         else:
             logger.warning("[Tier 2 assisted] No saved session — browser will not be logged in")

@@ -96,8 +96,17 @@ try {
 if ($PlaywrightOk) {
     Write-Ok "Playwright Chromium already installed"
 } else {
-    & uv run playwright install chromium
-    Write-Ok "Playwright Chromium installed"
+    try {
+        & uv run playwright install chromium
+    } catch {
+        Write-Warn "Playwright install failed: $_ — browser automation will be unavailable."
+    }
+    $result = & uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Playwright Chromium installed"
+    } else {
+        Write-Warn "Playwright Chromium not functional after install — browser automation may be unavailable."
+    }
 }
 
 # ── Step 6: Download Tectonic ─────────────────────────────────────────────────

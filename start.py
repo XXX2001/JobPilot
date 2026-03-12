@@ -14,6 +14,8 @@ import uvicorn  # type: ignore
 
 from backend.config import PROJECT_ROOT
 
+host = os.environ.get("JOBPILOT_HOST", "127.0.0.1")
+port = int(os.environ.get("JOBPILOT_PORT", "8000"))
 
 def check_prerequisites():
     """Verify all dependencies are available."""
@@ -37,7 +39,7 @@ def _find_binary(name: str) -> bool:
     return (PROJECT_ROOT / "bin" / f"{name}{ext}").exists()
 
 
-def free_port(port: int) -> None:
+def free_port(host: str, port: int) -> None:
     """Kill any process currently listening on *port* so we can bind cleanly."""
     import signal
     import socket
@@ -45,7 +47,7 @@ def free_port(port: int) -> None:
     # Quick check: is the port actually in use?
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.2)
-        if s.connect_ex(("127.0.0.1", port)) != 0:
+        if s.connect_ex((host, port)) != 0:
             return  # port is free, nothing to do
 
     print(f"  Port {port} is in use — stopping existing process…")
@@ -114,10 +116,7 @@ def main():
     ]:
         (PROJECT_ROOT / d).mkdir(parents=True, exist_ok=True)
 
-    host = "127.0.0.1"
-    port = 8000
-
-    free_port(port)
+    free_port(host, port)
 
     print(f"\n  JobPilot starting on http://{host}:{port}\n")
 

@@ -130,19 +130,40 @@ if (Test-Path $TectonicBin) {
 }
 
 if (-not $TectonicOk) {
-    Write-Info "Downloading Tectonic binary..."
-    try {
-        & uv run python scripts\download_tectonic.py
-        if (Test-Path $TectonicBin) {
-            $ver = & $TectonicBin --version 2>&1
-            Write-Ok "Tectonic installed: $($ver | Select-Object -First 1)"
-        } else {
-            Write-Warn "Tectonic download failed. PDF generation will be disabled."
-            Write-Warn "Manual install: https://tectonic-typesetting.github.io"
+    # Try winget first (built into Windows 10/11, handles signing & runtime deps automatically)
+    $wingetCmd = Get-Command winget -ErrorAction SilentlyContinue
+    $installedViaWinget = $false
+    if ($wingetCmd) {
+        Write-Info "Installing Tectonic via winget..."
+        try {
+            & winget install --id tectonic-typesetting.tectonic --accept-package-agreements --accept-source-agreements --silent 2>&1 | Out-Null
+            # winget installs to PATH but not to bin\tectonic.exe — find it
+            $wingetTectonic = Get-Command tectonic -ErrorAction SilentlyContinue
+            if ($wingetTectonic) {
+                Write-Ok "Tectonic installed via winget: $(& tectonic --version 2>&1 | Select-Object -First 1)"
+                $installedViaWinget = $true
+                $TectonicOk = $true
+            }
+        } catch {
+            Write-Warn "winget install failed: $_ — falling back to binary download."
         }
-    } catch {
-        Write-Warn "Tectonic download error: $_"
-        Write-Warn "PDF generation will be disabled until Tectonic is installed."
+    }
+
+    if (-not $installedViaWinget) {
+        Write-Info "Downloading Tectonic binary..."
+        try {
+            & uv run python scripts\download_tectonic.py
+            if (Test-Path $TectonicBin) {
+                $ver = & $TectonicBin --version 2>&1
+                Write-Ok "Tectonic installed: $($ver | Select-Object -First 1)"
+            } else {
+                Write-Warn "Tectonic download failed. PDF generation will be disabled."
+                Write-Warn "Manual install: https://tectonic-typesetting.github.io"
+            }
+        } catch {
+            Write-Warn "Tectonic download error: $_"
+            Write-Warn "PDF generation will be disabled until Tectonic is installed."
+        }
     }
 }
 

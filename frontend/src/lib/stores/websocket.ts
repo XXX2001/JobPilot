@@ -7,6 +7,8 @@ export const wsStatus = writable<WsStatus>('disconnected');
 const _messages = writable<any[]>([]);
 export const messages: Readable<any[]> = { subscribe: _messages.subscribe };
 
+export const loginPrompt = writable<{ site: string; text: string } | null>(null);
+
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -43,6 +45,12 @@ export function connectWs() {
       try {
         const data = JSON.parse(event.data);
         _messages.update(msgs => [...msgs.slice(-199), data]);
+        if (data.type === 'login_required') {
+          loginPrompt.set({
+            site: data.site,
+            text: data.browser_window_title || `Please log into ${data.site} in the browser window, then click 'Done'.`
+          });
+        }
       } catch (e) {
         _messages.update(msgs => [...msgs.slice(-199), event.data]);
       }

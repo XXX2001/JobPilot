@@ -1,34 +1,15 @@
 <script lang="ts">
-	import { messages, send } from '$lib/stores/websocket';
+	import { loginPrompt, send } from '$lib/stores/websocket';
 	import { LogIn, X, Check } from 'lucide-svelte';
 
-	let pendingLogin = $state<{ site: string; text: string } | null>(null);
-
-	$effect(() => {
-		const msgs = $messages;
-		if (msgs.length > 0) {
-			const last = msgs[msgs.length - 1];
-			if (last && last.type === 'login_required' && !pendingLogin) {
-				pendingLogin = {
-					site: last.site,
-					text: last.browser_window_title || `Please log into ${last.site} in the browser window, then click 'Done'.`
-				};
-			}
-		}
-	});
-
 	function handleDone() {
-		if (pendingLogin) {
-			send({ type: 'login_done', site: pendingLogin.site });
-			pendingLogin = null;
-		}
+		send({ type: 'login_done', site: $loginPrompt!.site });
+		loginPrompt.set(null);
 	}
 
 	function handleCancel() {
-		if (pendingLogin) {
-			send({ type: 'login_cancel', site: pendingLogin.site });
-			pendingLogin = null;
-		}
+		send({ type: 'login_cancel', site: $loginPrompt!.site });
+		loginPrompt.set(null);
 	}
 
 	function capitalize(str: string) {
@@ -37,7 +18,7 @@
 	}
 </script>
 
-{#if pendingLogin}
+{#if $loginPrompt}
 	<div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm">
 		<div class="w-[450px] max-w-[90vw] rounded-xl border border-border bg-background p-6 shadow-2xl flex flex-col gap-6">
 			<div class="flex items-center gap-4">
@@ -49,14 +30,14 @@
 						Login Required
 					</h2>
 					<p class="text-sm text-muted-foreground">
-						{capitalize(pendingLogin.site)} wants to make sure it's you.
+						{capitalize($loginPrompt.site)} wants to make sure it's you.
 					</p>
 				</div>
 			</div>
 
 			<div class="rounded-lg bg-accent/30 p-4 border border-border/50">
 				<p class="text-sm text-foreground leading-relaxed">
-					{pendingLogin.text}
+					{$loginPrompt.text}
 				</p>
 			</div>
 

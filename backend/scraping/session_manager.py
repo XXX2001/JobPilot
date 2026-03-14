@@ -97,7 +97,12 @@ class BrowserSessionManager:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Pass storage_state so watchdog knows where to auto-save upon stop()
-        browser = Browser(headless=False, storage_state=save_path.resolve().as_posix(), user_data_dir=None)
+        from backend.utils.browser_path import get_chromium_executable
+        _exe = get_chromium_executable()
+        _bkw: dict = {"headless": False, "storage_state": save_path.resolve().as_posix(), "user_data_dir": None}
+        if _exe:
+            _bkw["executable_path"] = _exe
+        browser = Browser(**_bkw)
         
         try:
             await browser.start()
@@ -301,7 +306,12 @@ class BrowserSessionManager:
         save_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Open browser via browser_use (provides watchdog with save path)
-        browser = Browser(headless=False, storage_state=save_path.resolve().as_posix(), user_data_dir=None)
+        from backend.utils.browser_path import get_chromium_executable
+        _exe = get_chromium_executable()
+        _bkw2: dict = {"headless": False, "storage_state": save_path.resolve().as_posix(), "user_data_dir": None}
+        if _exe:
+            _bkw2["executable_path"] = _exe
+        browser = Browser(**_bkw2)
         try:
             await browser.start()
             page = await browser.new_page()

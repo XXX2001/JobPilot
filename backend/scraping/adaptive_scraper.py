@@ -115,11 +115,14 @@ class AdaptiveScraper:
             except OSError:
                 storage_state = None
 
-            browser = (
-                Browser(headless=settings.jobpilot_scraper_headless, storage_state=storage_state, user_data_dir=None)
-                if storage_state
-                else Browser(headless=settings.jobpilot_scraper_headless)
-            )
+            from backend.utils.browser_path import get_chromium_executable
+            _exe = get_chromium_executable()
+            _browser_kwargs: dict = {"headless": settings.jobpilot_scraper_headless, "user_data_dir": None}
+            if _exe:
+                _browser_kwargs["executable_path"] = _exe
+            if storage_state:
+                _browser_kwargs["storage_state"] = storage_state
+            browser = Browser(**_browser_kwargs)
             try:
                 agent = Agent(
                     task=prompt,

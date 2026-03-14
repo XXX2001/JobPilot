@@ -94,9 +94,14 @@ else
     uv run patchright install chromium || warn "Patchright install failed — browser-use automation may be unavailable."
 
     if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop()" &>/dev/null 2>&1; then
-        success "Playwright + Patchright Chromium installed"
+        success "Playwright Chromium installed"
     else
         warn "Playwright Chromium not functional after install — browser automation may be unavailable."
+    fi
+    if uv run python -c "from patchright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop()" &>/dev/null 2>&1; then
+        success "Patchright Chromium installed"
+    else
+        warn "Patchright Chromium not verified — browser-use will fall back to Playwright Chromium automatically."
     fi
 fi
 

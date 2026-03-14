@@ -107,11 +107,17 @@ if ($PlaywrightOk) {
     } catch {
         Write-Warn "Patchright install failed: $_ — browser-use automation may be unavailable."
     }
-    $result = & uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" 2>&1
+    $result = & uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop()" 2>&1
     if ($LASTEXITCODE -eq 0) {
-        Write-Ok "Playwright + Patchright Chromium installed"
+        Write-Ok "Playwright Chromium installed"
     } else {
         Write-Warn "Playwright Chromium not functional after install — browser automation may be unavailable."
+    }
+    $result2 = & uv run python -c "from patchright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop()" 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Patchright Chromium installed"
+    } else {
+        Write-Warn "Patchright Chromium not verified — browser-use will fall back to Playwright Chromium automatically."
     }
 }
 

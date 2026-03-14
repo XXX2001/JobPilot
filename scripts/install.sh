@@ -73,7 +73,7 @@ success "Python dependencies installed"
 
 # ── Step 5: Playwright browsers ───────────────────────────────────────────────
 step "4/9  Installing Playwright Chromium"
-if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" &>/dev/null 2>&1; then
+if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop()" &>/dev/null 2>&1; then
     success "Playwright Chromium already installed"
 else
     case "$(uname -s)" in
@@ -93,7 +93,7 @@ else
     # browser-use uses patchright internally — install its Chromium too
     uv run patchright install chromium || warn "Patchright install failed — browser-use automation may be unavailable."
 
-    if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" &>/dev/null 2>&1; then
+    if uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop()" &>/dev/null 2>&1; then
         success "Playwright + Patchright Chromium installed"
     else
         warn "Playwright Chromium not functional after install — browser automation may be unavailable."

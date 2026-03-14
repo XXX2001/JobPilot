@@ -89,7 +89,7 @@ Write-Ok "Python dependencies installed"
 Write-Step "4/9  Installing Playwright Chromium"
 $PlaywrightOk = $false
 try {
-    $result = & uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); p.stop()" 2>&1
+    $result = & uv run python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); b.close(); p.stop()" 2>&1
     $PlaywrightOk = $LASTEXITCODE -eq 0
 } catch { $PlaywrightOk = $false }
 

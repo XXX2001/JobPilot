@@ -40,6 +40,26 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
+# Auto-generate CREDENTIAL_KEY if not set, and persist it to .env so it
+# survives restarts.  This runs once on first launch — no installer needed.
+if not settings.CREDENTIAL_KEY:
+    from cryptography.fernet import Fernet  # type: ignore
+
+    _new_key = Fernet.generate_key().decode()
+    settings.CREDENTIAL_KEY = _new_key
+
+    _env_path = Path(__file__).resolve().parent.parent / ".env"
+    if _env_path.exists():
+        _text = _env_path.read_text(encoding="utf-8")
+        if "CREDENTIAL_KEY=" in _text:
+            import re as _re
+            _text = _re.sub(r"^CREDENTIAL_KEY=.*$", f"CREDENTIAL_KEY={_new_key}", _text, flags=_re.MULTILINE)
+        else:
+            _text = _text.rstrip("\n") + f"\nCREDENTIAL_KEY={_new_key}\n"
+        _env_path.write_text(_text, encoding="utf-8")
+    else:
+        _env_path.write_text(f"CREDENTIAL_KEY={_new_key}\n", encoding="utf-8")
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(settings.jobpilot_data_dir)

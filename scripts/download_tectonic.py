@@ -11,7 +11,6 @@ Skips download if the binary already exists and is functional.
 from __future__ import annotations
 
 import logging
-import os
 import platform
 import stat
 import subprocess
@@ -95,14 +94,14 @@ def _get_download_url(asset_name: str) -> str:
             logger.info("Found asset: %s", url)
             return url
 
-    # Try a fallback with partial match (e.g. different glibc variant)
-    asset_base = asset_name.replace(".tar.gz", "").replace(".zip", "")
+    # Tectonic release assets include the version number in the filename, e.g.
+    # "tectonic-0.15.0-x86_64-pc-windows-msvc.zip" while _get_asset_name()
+    # returns "tectonic-x86_64-pc-windows-msvc.zip".  Match by suffix instead.
+    suffix = asset_name[len("tectonic-"):]  # e.g. "x86_64-pc-windows-msvc.zip"
     for asset in data.get("assets", []):
-        if asset_base.split("-")[0] in asset["name"] and (
-            ".tar.gz" in asset["name"] or ".zip" in asset["name"]
-        ):
+        if asset["name"].endswith(suffix):
             url = asset["browser_download_url"]
-            logger.warning("Exact asset not found; using fallback: %s", url)
+            logger.info("Found versioned asset: %s", url)
             return url
 
     tag = data.get("tag_name", "unknown")

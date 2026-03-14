@@ -127,9 +127,9 @@ $TectonicBin = Join-Path $RepoRoot "bin\tectonic.exe"
 $TectonicOk  = $false
 if (Test-Path $TectonicBin) {
     try {
-        $ver = & $TectonicBin --version 2>&1
+        & $TectonicBin --version *>$null
         if ($LASTEXITCODE -eq 0) {
-            Write-Ok "Tectonic already installed: $($ver | Select-Object -First 1)"
+            Write-Ok "Tectonic already installed"
             $TectonicOk = $true
         }
     } catch {}
@@ -142,11 +142,11 @@ if (-not $TectonicOk) {
     if ($wingetCmd) {
         Write-Info "Installing Tectonic via winget..."
         try {
-            & winget install --id tectonic-typesetting.tectonic --accept-package-agreements --accept-source-agreements --silent 2>&1 | Out-Null
+            & winget install --id tectonic-typesetting.tectonic --accept-package-agreements --accept-source-agreements --silent *>$null
             # winget installs to PATH but not to bin\tectonic.exe — find it
             $wingetTectonic = Get-Command tectonic -ErrorAction SilentlyContinue
             if ($wingetTectonic) {
-                Write-Ok "Tectonic installed via winget: $(& tectonic --version 2>&1 | Select-Object -First 1)"
+                Write-Ok "Tectonic installed via winget"
                 $installedViaWinget = $true
                 $TectonicOk = $true
             }
@@ -160,8 +160,12 @@ if (-not $TectonicOk) {
         try {
             & uv run python scripts\download_tectonic.py
             if (Test-Path $TectonicBin) {
-                $ver = & $TectonicBin --version 2>&1
-                Write-Ok "Tectonic installed: $($ver | Select-Object -First 1)"
+                & $TectonicBin --version *>$null
+                if ($LASTEXITCODE -eq 0) {
+                    Write-Ok "Tectonic installed"
+                } else {
+                    Write-Warn "Tectonic binary downloaded but failed to run. PDF generation may be unavailable."
+                }
             } else {
                 Write-Warn "Tectonic download failed. PDF generation will be disabled."
                 Write-Warn "Manual install: https://tectonic-typesetting.github.io"

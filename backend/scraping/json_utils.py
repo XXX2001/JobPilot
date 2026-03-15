@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -12,6 +13,48 @@ from backend.models.schemas import RawJob
 from backend.security.sanitizer import sanitize_for_prompt, sanitize_url
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_posted_date(value: Any) -> datetime | None:
+    """Best-effort parsing of a posted_date from LLM output.
+
+    Handles ISO formats, relative strings like '2 days ago', 'yesterday', etc.
+    Returns None on failure.
+    """
+    if value is None:
+        return None
+    s = str(value).strip().lower()
+    if not s or s == "null" or s == "none":
+        return None
+
+    # Try ISO / common date formats
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+
+    # Relative dates: "X days ago", "yesterday", "today", etc.
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    if "today" in s or "just posted" in s or "just now" in s:
+        return now
+    if "yesterday" in s:
+        return now - timedelta(days=1)
+    m = re.search(r"(\d+)\s*(day|jour|d)", s)
+    if m:
+        return now - timedelta(days=int(m.group(1)))
+    m = re.search(r"(\d+)\s*(week|semaine|w)", s)
+    if m:
+        return now - timedelta(weeks=int(m.group(1)))
+    m = re.search(r"(\d+)\s*(hour|heure|h)", s)
+    if m:
+        return now - timedelta(hours=int(m.group(1)))
+    m = re.search(r"(\d+)\s*(month|mois)", s)
+    if m:
+        return now - timedelta(days=int(m.group(1)) * 30)
+
+    return None
 
 
 def extract_json_from_text(text: str) -> Any:
@@ -127,6 +170,7 @@ def parse_jobs_from_json(
                 url=clean_url,
                 apply_url=clean_apply or clean_url,
                 apply_method=str(item.get("apply_method") or ""),
+                posted_at=_parse_posted_date(item.get("posted_date") or item.get("posted_at")),
                 source_name=source_name,
                 raw_data=item,
             )

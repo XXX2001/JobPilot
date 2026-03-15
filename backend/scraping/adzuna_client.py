@@ -31,6 +31,7 @@ class AdzunaClient:
         country: str = "gb",
         page: int = 1,
         results_per_page: int = 20,
+        max_days_old: int | None = None,
     ) -> list[RawJob]:
         """Search Adzuna for jobs matching keywords + filters."""
         params: dict = {
@@ -41,6 +42,8 @@ class AdzunaClient:
             "salary_min": filters.salary_min,
             "results_per_page": results_per_page,
         }
+        if max_days_old is not None:
+            params["max_days_old"] = max_days_old
         if "full-time" in (filters.job_types or []):
             params["full_time"] = 1
         params = {k: v for k, v in params.items() if v is not None and v != ""}

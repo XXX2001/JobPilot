@@ -51,8 +51,16 @@ class SearchSettings(Base):
     cv_modification_sensitivity: Mapped[str] = mapped_column(
         String, default="balanced", nullable=False
     )
+    cv_tailoring_enabled: Mapped[bool] = mapped_column(
+        default=True, nullable=False, server_default="1"
+    )
+    max_results_per_source: Mapped[int] = mapped_column(
+        Integer, default=20, nullable=False, server_default="20"
+    )
+    max_job_age_days: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None
+    )
 
-    countries: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
 class SiteCredential(Base):
     __tablename__ = "site_credentials"

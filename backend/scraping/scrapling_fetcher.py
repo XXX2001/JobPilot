@@ -55,6 +55,7 @@ class ScraplingFetcher:
         site: str | None = None,
         location: str = "",
         country_code: str = "",
+        max_age_days: int | None = None,
     ) -> list[RawJob]:
         """Fetch a job listings page and extract jobs with a single Gemini call.
 
@@ -67,6 +68,7 @@ class ScraplingFetcher:
         search_url = self._build_search_url(
             base_url=url, site=site, keywords=keywords,
             location=location, country_code=country_code,
+            max_age_days=max_age_days,
         )
         logger.info(
             "[Tier 1] START scrape — site=%s search_url=%s keywords=%r fetcher=%s headless=%s",
@@ -195,11 +197,13 @@ class ScraplingFetcher:
         keywords: list[str],
         location: str = "",
         country_code: str = "",
+        max_age_days: int | None = None,
     ) -> str:
         """Build a keyword-aware search URL for the given site.
 
         Falls back to base_url if no template is defined for the site.
         country_code is a 2-letter ISO code (e.g. 'fr', 'gb').
+        max_age_days limits results to jobs posted within the last N days.
         """
         kw = quote_plus(" ".join(keywords)) if keywords else ""
         loc = quote_plus(location) if location else ""
@@ -218,30 +222,48 @@ class ScraplingFetcher:
         }
 
         if site == "linkedin":
-            # LinkedIn job search URL
+            # LinkedIn f_TPR: r86400=24h, r604800=week, r2592000=month
             params = f"keywords={kw}"
             if loc:
                 params += f"&location={loc}"
+            if max_age_days is not None:
+                seconds = max_age_days * 86400
+                params += f"&f_TPR=r{seconds}&sortBy=DD"
             return f"https://www.linkedin.com/jobs/search/?{params}"
 
         if site == "indeed":
             domain = _INDEED_DOMAINS.get(cc, f"{cc}.indeed.com")
-            return f"https://{domain}/jobs?q={kw}&l={loc}"
+            url = f"https://{domain}/jobs?q={kw}&l={loc}"
+            if max_age_days is not None:
+                url += f"&fromage={max_age_days}"
+            return url
 
         if site == "google_jobs":
             domain = _GOOGLE_DOMAINS.get(cc, "www.google.com")
             query = quote_plus(f"{' '.join(keywords)} emplois {location}") if keywords else "jobs"
-            return f"https://{domain}/search?q={query}&udm=8"
+            url = f"https://{domain}/search?q={query}&udm=8"
+            if max_age_days is not None:
+                # Google Jobs: chips=date_posted:today/3days/week/month
+                if max_age_days <= 1:
+                    url += "&chips=date_posted:today"
+                elif max_age_days <= 3:
+                    url += "&chips=date_posted:3days"
+                elif max_age_days <= 7:
+                    url += "&chips=date_posted:week"
+                else:
+                    url += "&chips=date_posted:month"
+            return url
 
         if site == "welcome_to_the_jungle":
-            return (
+            url = (
                 f"https://www.welcometothejungle.com/en/jobs?query={kw}"
                 f"&refinementList[offices.country_reference_code][0]={cc.upper()}"
             )
+            return url
 
         if site == "glassdoor":
-            # Use glassdoor.fr directly — glassdoor.com redirects to glassdoor.fr homepage
-            # regardless of keyword, returning the same generic popular-jobs page every time.
+            # Glassdoor web UI does not reliably support date URL params.
+            # Recency filtering is handled by the post-scrape date filter instead.
             return (
                 f"https://www.glassdoor.fr/Emploi/emplois.htm"
                 f"?suggestChosen=false&clickSource=searchBtn&typedKeyword={kw}&locT=N&locId=0&jobType=all"

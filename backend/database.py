@@ -43,6 +43,8 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    await _migrate_add_columns()
+
     # Seed job_sources from SITE_CONFIGS if the table is empty
     await _seed_default_sources()
 
@@ -65,6 +67,30 @@ async def db_session() -> AsyncSession:  # type: ignore[override]
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
+
+
+async def _migrate_add_columns() -> None:
+    """Add columns that may be missing from existing databases."""
+    from sqlalchemy import text
+
+    migrations = [
+        ("search_settings", "cv_tailoring_enabled", "BOOLEAN NOT NULL DEFAULT 1"),
+        ("search_settings", "max_results_per_source", "INTEGER NOT NULL DEFAULT 20"),
+        ("search_settings", "max_job_age_days", "INTEGER"),
+    ]
+    try:
+        async with engine.begin() as conn:
+            for table, column, col_type in migrations:
+                # Check if column exists
+                result = await conn.execute(text(f"PRAGMA table_info({table})"))
+                existing = {row[1] for row in result.fetchall()}
+                if column not in existing:
+                    await conn.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                    )
+                    logger.info("Added column %s.%s", table, column)
+    except Exception as exc:
+        logger.debug("Column migration check: %s", exc)
 
 
 async def _seed_default_sources() -> None:

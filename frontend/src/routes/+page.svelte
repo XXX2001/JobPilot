@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { apiFetch } from '$lib/api';
-	import { messages, send } from '$lib/stores/websocket';
+	import { messages, send, onWsConnect } from '$lib/stores/websocket';
 	import { RefreshCw, AlertCircle, Zap, MousePointer, X } from 'lucide-svelte';
 	import CVReviewPanel from '$lib/components/CVReviewPanel.svelte';
 	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
-	import TypewriterText from '$lib/components/TypewriterText.svelte';
+	import BatchPipelineTracker from '$lib/components/BatchPipelineTracker.svelte';
 	import { getEmptyState } from '$lib/utils/easterEggs';
 
 	interface Job {
@@ -63,13 +63,13 @@
 				screenshot: lastMsg.screenshot_base64
 			};
 		}
-		if (lastMsg.type === 'status' && lastMsg.progress >= 1.0) {
+		if (lastMsg.type === 'status' && (lastMsg.progress >= 1.0 || lastMsg.progress < 0)) {
 			refreshing = false;
 			if (refreshTimeout) {
 				clearTimeout(refreshTimeout);
 				refreshTimeout = null;
 			}
-			loadQueue();
+			if (lastMsg.progress >= 1.0) loadQueue();
 		}
 	});
 
@@ -89,7 +89,25 @@
 		}
 	}
 
+	/** Check backend batch status and sync local refreshing state. */
+	async function syncBatchStatus() {
+		try {
+			const status = await apiFetch<{ running: boolean; last_status: any }>('/api/queue/status');
+			if (status.running) {
+				refreshing = true;
+				if (refreshTimeout) clearTimeout(refreshTimeout);
+				refreshTimeout = setTimeout(() => { refreshing = false; }, 5 * 60 * 1000);
+			} else {
+				refreshing = false;
+				if (refreshTimeout) { clearTimeout(refreshTimeout); refreshTimeout = null; }
+			}
+		} catch {
+			// Ignore — status endpoint may not be available
+		}
+	}
+
 	async function refreshQueue() {
+		if (refreshing) return; // Prevent double-click
 		refreshing = true;
 		if (refreshTimeout) clearTimeout(refreshTimeout);
 		refreshTimeout = setTimeout(() => {
@@ -98,6 +116,8 @@
 		try {
 			await apiFetch('/api/queue/refresh', { method: 'POST' });
 		} catch (e: any) {
+			// 409 = already running — keep refreshing state
+			if (e.message?.includes('409')) return;
 			error = e.message ?? 'Refresh failed';
 			refreshing = false;
 			if (refreshTimeout) {
@@ -168,7 +188,19 @@
 		}
 	}
 
-	onMount(loadQueue);
+	let unsubWsConnect: (() => void) | null = null;
+
+	onMount(() => {
+		loadQueue();
+		syncBatchStatus();
+		// On WS reconnect (e.g. after page refresh), re-sync batch status
+		unsubWsConnect = onWsConnect(syncBatchStatus);
+	});
+
+	onDestroy(() => {
+		unsubWsConnect?.();
+		if (refreshTimeout) clearTimeout(refreshTimeout);
+	});
 </script>
 
 <!-- Header -->
@@ -200,22 +232,13 @@
 
 {#if phase === 'review'}
 	<CVReviewPanel matches={activeMatches} {modes} onback={backToSelect} oncomplete={onRunComplete} />
+{:else if refreshing}
+	<BatchPipelineTracker />
 {:else if loading}
 	<div class="flex flex-col items-center justify-center gap-4 py-20">
 		<div class="relative">
 			<div class="h-10 w-10 rounded-full border-2 border-primary/20 border-t-primary animate-spin"></div>
 		</div>
-		<TypewriterText
-			messages={[
-				"Scan de l'internet à la recherche de ton job de rêve...",
-				'Négociation avec les job boards en ton nom...',
-				'Apprentissage de la lecture de fiches de poste par les robots...',
-				"Convaincre LinkedIn que tu n'es pas un bot...",
-				'Traduction du jargon RH en français courant...',
-				"Soudoyer l'algorithme avec de bonnes ondes..."
-			]}
-			class="text-muted-foreground text-sm"
-		/>
 	</div>
 {:else if matches.length === 0}
 	<div class="flex flex-col items-center justify-center gap-3 py-20 text-center">

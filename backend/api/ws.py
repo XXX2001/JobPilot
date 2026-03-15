@@ -96,6 +96,14 @@ manager = ConnectionManager()
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     client_id = await manager.connect(websocket)
+    # Send current batch status to reconnecting clients
+    try:
+        app = websocket.app if hasattr(websocket, "app") else None
+        runner = getattr(getattr(app, "state", None), "batch_runner", None) if app else None
+        if runner and runner.running and runner.last_status:
+            await websocket.send_text(json.dumps(runner.last_status))
+    except Exception:
+        pass
     try:
         while True:
             try:

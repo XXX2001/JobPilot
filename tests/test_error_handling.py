@@ -179,7 +179,7 @@ async def test_gemini_json_retry_on_malformed_output():
     # Both calls return garbage JSON
     call_count = 0
 
-    async def _bad_generate(prompt: str) -> str:
+    async def _bad_generate(prompt: str, **kwargs) -> str:
         nonlocal call_count
         call_count += 1
         return "not valid json at all"
@@ -209,7 +209,7 @@ async def test_gemini_json_succeeds_on_retry():
 
     call_count = 0
 
-    async def _flaky_generate(prompt: str) -> str:
+    async def _flaky_generate(prompt: str, **kwargs) -> str:
         nonlocal call_count
         call_count += 1
         if call_count == 1:

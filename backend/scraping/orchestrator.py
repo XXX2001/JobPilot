@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from backend.models.schemas import RawJob
@@ -104,6 +105,8 @@ class ScrapingOrchestrator:
         sources: "list[JobSource] | None" = None,
         location: str = "",
         countries: list[str] | None = None,
+        max_results_per_source: int = 20,
+        max_age_days: int | None = None,
     ) -> list[RawJob]:
         """Run the full morning scraping pipeline.
 
@@ -113,6 +116,8 @@ class ScrapingOrchestrator:
             sources:  List of JobSource ORM records. Loaded from DB if None.
             location: User's target location string (e.g. "France", "Paris").
             countries: List of 2-letter country codes (e.g. ["fr", "gb"]).
+            max_results_per_source: Max jobs to fetch per source (default 20).
+            max_age_days: Only fetch jobs posted within the last N days (None=no filter).
 
         Returns:
             Deduplicated list of RawJob records.
@@ -141,11 +146,12 @@ class ScrapingOrchestrator:
             for src in api_sources:
                 src_config = src.config or {}
                 country = _normalize_country(src_config.get("country", "fr"))
+                f = filters if filters else _empty_filters()
                 task = asyncio.create_task(
-                    self.adzuna.search(keywords=keywords, filters=filters, country=country)
-                    if filters
-                    else self.adzuna.search(
-                        keywords=keywords, filters=_empty_filters(), country=country
+                    self.adzuna.search(
+                        keywords=keywords, filters=f, country=country,
+                        results_per_page=max_results_per_source,
+                        max_days_old=max_age_days,
                     )
                 )
                 api_tasks.append(task)
@@ -161,7 +167,11 @@ class ScrapingOrchestrator:
             try:
                 f = filters if filters is not None else _empty_filters()
                 country = _normalize_country(countries[0]) if countries else _normalize_country(location) if location else "fr"
-                jobs = await self.adzuna.search(keywords=keywords, filters=f, country=country)
+                jobs = await self.adzuna.search(
+                    keywords=keywords, filters=f, country=country,
+                    results_per_page=max_results_per_source,
+                    max_days_old=max_age_days,
+                )
                 all_jobs.extend(jobs)
                 logger.info("Phase 1 (default Adzuna): %d jobs, country=%s, keywords=%s", len(jobs), country, keywords)
             except Exception as exc:
@@ -201,7 +211,7 @@ class ScrapingOrchestrator:
                     # max_jobs across keywords so each search stays small.
                     source_jobs: list[RawJob] = []
                     search_keywords = keywords if keywords else [""]
-                    per_kw_max = max(5, 20 // len(search_keywords)) if search_keywords else 20
+                    per_kw_max = max(5, max_results_per_source // len(search_keywords)) if search_keywords else max_results_per_source
 
                     for kw in search_keywords:
                         kw_list = [kw] if kw else []
@@ -219,6 +229,7 @@ class ScrapingOrchestrator:
                                     site=source.name,
                                     location=location,
                                     country_code=src_country_code,
+                                    max_age_days=max_age_days,
                                 )
                                 if jobs:
                                     logger.info(
@@ -316,6 +327,18 @@ class ScrapingOrchestrator:
             await broadcast_status(
                 f"Phase 3 done: {len(phase3_jobs)} jobs from custom sites", progress=0.75
             )
+
+        # ------------------------------------------------------------------
+        # Post-scrape date filter (safety net for sources without URL-level filtering)
+        # ------------------------------------------------------------------
+        if max_age_days is not None and all_jobs:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+            before = len(all_jobs)
+            # Keep jobs with no posted_at (can't be filtered) or within the cutoff
+            all_jobs = [j for j in all_jobs if j.posted_at is None or j.posted_at >= cutoff]
+            filtered_out = before - len(all_jobs)
+            if filtered_out:
+                logger.info("Post-scrape date filter: removed %d old jobs (cutoff=%s)", filtered_out, cutoff.date())
 
         # ------------------------------------------------------------------
         # Deduplicate

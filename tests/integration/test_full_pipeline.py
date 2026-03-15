@@ -110,18 +110,37 @@ async def test_cv_tailoring_pipeline_end_to_end(tmp_path):
 
     fake_compiler.compile = _compile
 
-    # Mock CV editor that returns a valid summary edit
-    from pydantic import BaseModel
+    # Mock CVModifier that returns a valid replacement
+    from backend.llm.validators import CVModifierOutput, CVReplacement
+    from backend.latex.applicator import CVApplicator
 
-    class FakeSummaryEdit(BaseModel):
-        edited_summary: str = "Experienced Python dev with FastAPI expertise."
-        changes_made: list[str] = ["Added FastAPI mention"]
+    fake_modifier = MagicMock()
+    fake_modifier.modify = AsyncMock(return_value=CVModifierOutput(replacements=[
+        CVReplacement(
+            section="Profile",
+            original_text="Senior Python developer with 5 years experience.",
+            replacement_text="Experienced Python dev with FastAPI expertise.",
+            reason="Added FastAPI mention",
+            job_requirement_matched="FastAPI",
+            confidence=0.9,
+        )
+    ]))
 
-    fake_editor = MagicMock()
-    fake_editor.edit_summary = AsyncMock(return_value=FakeSummaryEdit())
-    fake_editor.edit_experience = AsyncMock(return_value=None)
+    from backend.llm.job_analyzer import JobAnalyzer
+    fake_analyzer = MagicMock(spec=JobAnalyzer)
+    from backend.llm.job_context import JobContext
+    fake_analyzer.analyze = AsyncMock(return_value=JobContext(
+        required_skills=["FastAPI"], nice_to_have_skills=[], keywords=["python"],
+        candidate_matches=["Python"], candidate_gaps=["FastAPI"],
+        do_not_touch=["dates"], top_changes_hint=["Profile: add FastAPI"],
+    ))
 
-    pipeline = CVPipeline(compiler=fake_compiler, cv_editor=fake_editor)
+    pipeline = CVPipeline(
+        compiler=fake_compiler,
+        job_analyzer=fake_analyzer,
+        cv_modifier=fake_modifier,
+        cv_applicator=CVApplicator(),
+    )
 
     job = JobDetails(
         title="Senior FastAPI Developer",
@@ -138,7 +157,7 @@ async def test_cv_tailoring_pipeline_end_to_end(tmp_path):
     assert result.pdf_path.exists()
     assert result.cv_tailored is True
     assert len(result.diff) >= 1
-    assert result.diff[0].section == "summary"
+    assert result.diff[0].section == "Profile"
 
 
 # ─── T3: Manual apply flow (API) ──────────────────────────────────────────────

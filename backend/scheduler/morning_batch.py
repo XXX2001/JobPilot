@@ -123,20 +123,35 @@ class MorningBatchRunner:
         self._embedder = embedder
         self._cv_parser = CVParser()
         self._job_extractor = JobSkillExtractor()
+        # Batch state tracking
+        self.running: bool = False
+        self.last_status: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ #
     #  Public batch runner                                                 #
     # ------------------------------------------------------------------ #
 
+    async def _broadcast_and_track(self, message: str, progress: float) -> None:
+        """Broadcast status and track it for reconnecting clients."""
+        self.last_status = {"type": "status", "message": message, "progress": progress}
+        await broadcast_status(message, progress=progress)
+
     async def run_batch(self) -> None:
         """Full 5-step morning pipeline."""
+        if self.running:
+            logger.warning("Batch already running — ignoring duplicate trigger")
+            return
+        self.running = True
+        self.last_status = None
         logger.info("Morning batch started")
         db: AsyncSession = self._db_factory()
         try:
             await self._run_batch_inner(db)
         except Exception as exc:
             logger.error("Morning batch failed: %s", exc, exc_info=True)
+            await self._broadcast_and_track(f"Batch failed: {exc}", progress=-1.0)
         finally:
+            self.running = False
             await db.close()
 
     # ------------------------------------------------------------------ #
@@ -151,6 +166,8 @@ class MorningBatchRunner:
 
         keywords: list[str] = _extract_json_list(settings_row.keywords, "include")
         daily_limit: int = settings_row.daily_limit or DAILY_LIMIT
+        max_results_per_source: int = getattr(settings_row, "max_results_per_source", 20) or 20
+        max_age_days: int | None = getattr(settings_row, "max_job_age_days", None)
         cv_path = _resolve_cv_path(
             profile_row, data_dir=Path(settings.jobpilot_data_dir)
         )
@@ -166,7 +183,7 @@ class MorningBatchRunner:
         )
 
         # ── Step 1: Scrape ───────────────────────────────────────────────
-        await broadcast_status("Searching for jobs…", progress=0.05)
+        await self._broadcast_and_track("Searching for jobs…", progress=0.05)
         location = filters.locations[0] if filters.locations else ""
         countries = _extract_json_list(settings_row.countries, "items") if settings_row.countries else []
         raw_jobs = await self._scraper.run_morning_batch(
@@ -175,9 +192,11 @@ class MorningBatchRunner:
             sources=sources,
             location=location,
             countries=countries,
+            max_results_per_source=max_results_per_source,
+            max_age_days=max_age_days,
         )
         logger.info("Scraped %d raw jobs", len(raw_jobs))
-        await broadcast_status(f"Found {len(raw_jobs)} raw jobs — ranking…", progress=0.35)
+        await self._broadcast_and_track(f"Found {len(raw_jobs)} raw jobs — ranking…", progress=0.35)
 
         # ── Step 2: Match & rank ─────────────────────────────────────────
         job_details = [self._raw_to_details(j) for j in raw_jobs]
@@ -189,12 +208,12 @@ class MorningBatchRunner:
         logger.info("Ranked %d jobs above threshold %.1f", len(ranked), filters.min_score)
 
         # ── Step 3: Store new matches ────────────────────────────────────
-        await broadcast_status("Storing new matches…", progress=0.55)
+        await self._broadcast_and_track("Storing new matches…", progress=0.55)
         new_match_ids = await self._store_matches(db, ranked)
         logger.info("Stored %d new job matches", len(new_match_ids))
 
         # ── Step 3.5: Fit Assessment ─────────────────────────────────────
-        await broadcast_status("Analyzing job fit…", progress=0.58)
+        await self._broadcast_and_track("Analyzing job fit…", progress=0.58)
         sensitivity = getattr(settings_row, "cv_modification_sensitivity", "balanced")
 
         # Parse and embed CV profile (cached by hash)
@@ -252,12 +271,19 @@ class MorningBatchRunner:
             await db.commit()
 
         # ── Step 4: Pre-generate CVs for top N ──────────────────────────
+        cv_tailoring_enabled = getattr(settings_row, "cv_tailoring_enabled", True)
         guard = DailyLimitGuard(db=db, limit=daily_limit)
         remaining = await guard.remaining_today()
         top_ids = new_match_ids[:remaining]
-        await broadcast_status(
-            f"Generating tailored CVs for top {len(top_ids)} matches…", progress=0.65
-        )
+
+        if cv_tailoring_enabled:
+            await self._broadcast_and_track(
+                f"Generating tailored CVs for top {len(top_ids)} matches…", progress=0.65
+            )
+        else:
+            await self._broadcast_and_track(
+                f"Compiling base CV for top {len(top_ids)} matches (AI tailoring disabled)…", progress=0.65
+            )
 
         if cv_path and cv_path.exists():
             # Build additional context from user profile for the CV modifier
@@ -283,6 +309,16 @@ class MorningBatchRunner:
                     dir_name = f"{mid}_{slug}"
                     out_dir = Path(settings.jobpilot_data_dir) / "cvs" / dir_name
                     out_dir.mkdir(parents=True, exist_ok=True)
+
+                    # When CV tailoring is disabled, always use the base CV (no AI calls)
+                    if not cv_tailoring_enabled:
+                        result = await self._cv_pipeline.generate_base_cv(
+                            base_cv_path=cv_path,
+                            job=jd,
+                            output_dir=out_dir,
+                        )
+                        return mid, result
+
                     assessment = assessments.get(mid)
 
                     if assessment is not None and not assessment.should_modify:
@@ -323,12 +359,12 @@ class MorningBatchRunner:
                 await self._store_tailored_doc(db, mid, tailored, doc_type="cv")
                 done += 1
                 progress = 0.65 + 0.30 * (done / max(len(top_ids), 1))
-                await broadcast_status(f"CV {done}/{len(top_ids)} generated", progress=progress)
+                await self._broadcast_and_track(f"CV {done}/{len(top_ids)} generated", progress=progress)
         else:
             logger.warning("No base CV path configured — skipping CV pre-generation")
 
         # ── Step 5: Notify dashboard ─────────────────────────────────────
-        await broadcast_status(f"{len(top_ids)} applications ready for review", progress=1.0)
+        await self._broadcast_and_track(f"{len(top_ids)} applications ready for review", progress=1.0)
         logger.info("Morning batch complete — %d jobs ready", len(top_ids))
 
     # ------------------------------------------------------------------ #

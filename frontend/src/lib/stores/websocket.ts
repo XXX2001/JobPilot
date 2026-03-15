@@ -12,6 +12,18 @@ export const loginPrompt = writable<{ site: string; text: string } | null>(null)
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Callbacks invoked after a successful (re)connection
+const _onConnectCallbacks: Array<() => void> = [];
+
+/** Register a callback for WS (re)connections. Returns an unsubscribe function. */
+export function onWsConnect(cb: () => void): () => void {
+  _onConnectCallbacks.push(cb);
+  return () => {
+    const idx = _onConnectCallbacks.indexOf(cb);
+    if (idx !== -1) _onConnectCallbacks.splice(idx, 1);
+  };
+}
+
 export function connectWs() {
   if (typeof window === 'undefined') return;
 
@@ -20,10 +32,10 @@ export function connectWs() {
   }
 
   wsStatus.set('reconnecting');
-  
+
   const baseUrl = import.meta.env.VITE_API_BASE_URL ?? '';
   let wsUrl = 'ws://localhost:8000/ws';
-  
+
   if (baseUrl) {
     wsUrl = baseUrl.replace(/^http/, 'ws') + '/ws';
   } else if (typeof window !== 'undefined' && window.location.protocol) {
@@ -38,6 +50,10 @@ export function connectWs() {
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+      // Notify listeners (e.g. to re-fetch batch status)
+      for (const cb of _onConnectCallbacks) {
+        try { cb(); } catch {}
       }
     };
 

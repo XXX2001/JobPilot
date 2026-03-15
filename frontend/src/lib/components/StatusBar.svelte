@@ -33,7 +33,9 @@
 		{:else if $lastMessage.type === 'error'}
 			<span class="text-red-400">Error: {$lastMessage.data?.message ?? 'Unknown error'}</span>
 		{:else if $lastMessage.type === 'status'}
-			{#if $lastMessage.progress >= 1}
+			{#if $lastMessage.progress < 0}
+				<span class="flex-1 truncate text-red-400">{$lastMessage.message}</span>
+			{:else if $lastMessage.progress >= 1}
 				<span class="flex-1 truncate text-green-400">✨ {getBatchMessage('success')}</span>
 			{:else}
 				<span class="flex-1 truncate">{$lastMessage.message}</span>

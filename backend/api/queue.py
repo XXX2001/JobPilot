@@ -96,6 +96,18 @@ async def get_queue(db: DBSession):
     return QueueOut(matches=matches, total=len(matches))
 
 
+@router.get("/status")
+async def get_batch_status(request: Request):
+    """Return the current batch running state and last progress message."""
+    runner = getattr(request.app.state, "batch_runner", None)
+    if runner is None:
+        return {"running": False, "last_status": None}
+    return {
+        "running": runner.running,
+        "last_status": runner.last_status,
+    }
+
+
 @router.post("/refresh")
 async def refresh_queue(request: Request, db: DBSession):  # noqa: ARG001
     """Trigger a new morning batch run immediately (manual re-run).
@@ -107,6 +119,9 @@ async def refresh_queue(request: Request, db: DBSession):  # noqa: ARG001
     runner = getattr(request.app.state, "batch_runner", None)
     if runner is None:
         raise HTTPException(status_code=503, detail="Batch runner not available")
+
+    if runner.running:
+        raise HTTPException(status_code=409, detail="A search is already in progress")
 
     async def _run():
         try:

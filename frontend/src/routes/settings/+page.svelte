@@ -30,6 +30,9 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 		daily_limit: number;
 		min_match_score: number;
 		cv_modification_sensitivity?: string;
+		cv_tailoring_enabled?: boolean;
+		max_results_per_source?: number;
+		max_job_age_days?: number | null;
 	}
 
 	interface Sources {
@@ -106,6 +109,9 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 	let dailyLimit = $state(10);
 	let minMatchScore = $state(30);
 	let cvModificationSensitivity = $state<'conservative' | 'balanced' | 'aggressive'>('balanced');
+	let cvTailoringEnabled = $state(true);
+	let maxResultsPerSource = $state(20);
+	let maxJobAgeDays = $state<number | null>(null);
 	let searchLoading = $state(true);
 
 	// Sources
@@ -171,6 +177,9 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 			dailyLimit = s.daily_limit ?? 10;
 			minMatchScore = s.min_match_score ?? 30;
 			cvModificationSensitivity = (s.cv_modification_sensitivity as 'conservative' | 'balanced' | 'aggressive') ?? 'balanced';
+			cvTailoringEnabled = s.cv_tailoring_enabled ?? true;
+			maxResultsPerSource = s.max_results_per_source ?? 20;
+			maxJobAgeDays = s.max_job_age_days ?? null;
 		} catch {
 			// not yet configured
 		} finally {
@@ -287,7 +296,10 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 					remote_only: remoteOnly,
 					daily_limit: dailyLimit,
 					min_match_score: minMatchScore,
-					cv_modification_sensitivity: cvModificationSensitivity
+					cv_modification_sensitivity: cvModificationSensitivity,
+					cv_tailoring_enabled: cvTailoringEnabled,
+					max_results_per_source: maxResultsPerSource,
+					max_job_age_days: maxJobAgeDays || null
 				})
 			});
 			successMsg = 'Search settings saved.';
@@ -634,6 +646,34 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 						<input id="daily_limit" type="number" min="1" max="50" bind:value={dailyLimit}
 							class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm" />
 					</div>
+
+					<!-- Max results per source -->
+					<div class="space-y-1.5">
+						<label class="text-sm font-medium text-foreground/90" for="max_results">Max jobs per source</label>
+						<input id="max_results" type="number" min="5" max="100" step="5" bind:value={maxResultsPerSource}
+							class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm" />
+						<p class="text-[10px] text-muted-foreground">Limits results fetched from each source. Lower = fewer AI calls.</p>
+					</div>
+
+					<!-- Max job age -->
+					<div class="space-y-1.5">
+						<label class="text-sm font-medium text-foreground/90" for="max_age">Only recent jobs (days)</label>
+						<select id="max_age"
+							value={maxJobAgeDays ?? ''}
+							onchange={(e) => {
+								const v = (e.target as HTMLSelectElement).value;
+								maxJobAgeDays = v ? Number(v) : null;
+							}}
+							class="w-full text-sm px-3.5 py-2.5 bg-background/50 border border-border/60 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 transition-all shadow-sm">
+							<option value="">No limit</option>
+							<option value="1">Past 24 hours</option>
+							<option value="3">Past 3 days</option>
+							<option value="7">Past week</option>
+							<option value="14">Past 2 weeks</option>
+							<option value="30">Past month</option>
+						</select>
+						<p class="text-[10px] text-muted-foreground">Filters search results to recent postings only.</p>
+					</div>
 				</div>
 
 				<hr class="border-border/30" />
@@ -667,7 +707,28 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 
 				<hr class="border-border/30" />
 
-				<!-- CV Modification Sensitivity -->
+				<!-- AI CV Tailoring Toggle -->
+				<div class="flex items-center justify-between py-1">
+					<div class="space-y-0.5">
+						<label class="text-sm font-medium text-foreground/90" for="cv-tailoring-toggle">AI CV Tailoring</label>
+						<p class="text-xs text-muted-foreground">
+							When enabled, the system uses AI to adapt your CV for each job. Disable this to save API calls and always use your base CV as-is.
+						</p>
+					</div>
+					<button
+						id="cv-tailoring-toggle"
+						type="button"
+						role="switch"
+						aria-checked={cvTailoringEnabled}
+						onclick={() => cvTailoringEnabled = !cvTailoringEnabled}
+						class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/20 {cvTailoringEnabled ? 'bg-primary' : 'bg-muted-foreground/30'}"
+					>
+						<span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out {cvTailoringEnabled ? 'translate-x-5' : 'translate-x-0'}"></span>
+					</button>
+				</div>
+
+				<!-- CV Modification Sensitivity (only visible when tailoring is enabled) -->
+				{#if cvTailoringEnabled}
 				<div class="space-y-2">
 					<label class="text-sm font-medium text-foreground/90" for="cv-sensitivity">CV Modification Sensitivity</label>
 					<select
@@ -683,6 +744,7 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 						Controls how aggressively the system tailors your CV for each job.
 					</p>
 				</div>
+				{/if}
 			</div>
 
 			<div class="flex justify-end">

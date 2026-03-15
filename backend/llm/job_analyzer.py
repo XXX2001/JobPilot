@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 
+from backend.llm.cv_modifier import _strip_preamble
 from backend.llm.gemini_client import GeminiClient
 from backend.llm.job_context import JobContext
 from backend.llm.prompts import JOB_ANALYZER_PROMPT
@@ -22,7 +23,9 @@ class JobAnalyzer:
         job_title = sanitize_for_prompt(job.title, 300, "title")
         company = sanitize_for_prompt(job.company, 200, "company")
         job_description = sanitize_for_prompt(job.description, 2000, "description")
-        cv_text = sanitize_for_prompt(cv_content, 3000, "cv") if cv_content else "Not provided."
+        # Strip LaTeX preamble from CV before sending — saves tokens
+        cv_body = _strip_preamble(cv_content) if cv_content else ""
+        cv_text = sanitize_for_prompt(cv_body, 3000, "cv") if cv_body else "Not provided."
         prompt = JOB_ANALYZER_PROMPT.format(
             job_title=job_title,
             company=company,

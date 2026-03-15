@@ -72,6 +72,9 @@ class SearchSettingsOut(BaseModel):
     min_match_score: float
     countries: Optional[dict] = None
     cv_modification_sensitivity: str = "balanced"
+    cv_tailoring_enabled: bool = True
+    max_results_per_source: int = 20
+    max_job_age_days: Optional[int] = None
 
 
 class SearchSettingsUpdate(BaseModel):
@@ -89,6 +92,9 @@ class SearchSettingsUpdate(BaseModel):
     min_match_score: Optional[float] = None
     countries: Optional[dict] = None
     cv_modification_sensitivity: Optional[Literal["conservative", "balanced", "aggressive"]] = None
+    cv_tailoring_enabled: Optional[bool] = None
+    max_results_per_source: Optional[int] = None
+    max_job_age_days: Optional[int] = None
 
 
 class SourcesUpdate(BaseModel):
@@ -219,6 +225,9 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             min_match_score=body.min_match_score if body.min_match_score is not None else 30.0,
             countries=body.countries,
             cv_modification_sensitivity=body.cv_modification_sensitivity or "balanced",
+            cv_tailoring_enabled=body.cv_tailoring_enabled if body.cv_tailoring_enabled is not None else True,
+            max_results_per_source=body.max_results_per_source if body.max_results_per_source is not None else 20,
+            max_job_age_days=body.max_job_age_days,
         )
         db.add(ss)
     else:
@@ -250,6 +259,13 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
             ss.countries = body.countries
         if body.cv_modification_sensitivity is not None:
             ss.cv_modification_sensitivity = body.cv_modification_sensitivity
+        if body.cv_tailoring_enabled is not None:
+            ss.cv_tailoring_enabled = body.cv_tailoring_enabled
+        if body.max_results_per_source is not None:
+            ss.max_results_per_source = body.max_results_per_source
+        # max_job_age_days can be explicitly set to None (no limit)
+        if "max_job_age_days" in (body.model_fields_set or set()):
+            ss.max_job_age_days = body.max_job_age_days
 
     await db.commit()
     await db.refresh(ss)

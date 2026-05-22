@@ -1,0 +1,50 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Node / frontend artifacts (rebuilt in container)
+node_modules/
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+
+# Git / VCS
+.git/
+.gitignore
+.gitattributes
+
+# Local state — must NOT leak into the image
+data/
+bin/tectonic
+bin/tectonic.exe
+.env
+.env.local
+.env.*.local
+
+# Docs, tests, tooling (not needed at runtime)
+docs/
+tests/
+.codegraph/
+.sisyphus/
+.claude/
+.github/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Build artifacts
+*.log
+dist/
+build/

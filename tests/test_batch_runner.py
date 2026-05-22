@@ -1,4 +1,4 @@
-"""Tests for MorningBatchRunner."""
+"""Tests for BatchRunner."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.scheduler.morning_batch import MorningBatchRunner
+from backend.scheduler.batch_runner import BatchRunner
 from backend.models.schemas import RawJob, JobDetails
 from backend.matching.filters import JobFilters
 
@@ -25,7 +25,7 @@ class MockScraper:
     def __init__(self, jobs=None):
         self._jobs = jobs or []
 
-    async def run_morning_batch(self, **kwargs):  # noqa: ARG002
+    async def scrape_batch(self, **kwargs):  # noqa: ARG002
         return self._jobs
 
 
@@ -54,12 +54,12 @@ class MockCVPipeline:
 
 
 def _make_runner(jobs=None, score=80.0, cv_fail=False):
-    """Helper to build a MorningBatchRunner with mocked collaborators."""
+    """Helper to build a BatchRunner with mocked collaborators."""
     scraper = MockScraper(jobs=jobs or [_raw_job()])
     matcher = MockMatcher(score=score)
     cv_pipeline = MockCVPipeline(fail=cv_fail)
     db = AsyncMock()
-    runner = MorningBatchRunner(
+    runner = BatchRunner(
         scraper=scraper,
         matcher=matcher,
         cv_pipeline=cv_pipeline,
@@ -83,8 +83,8 @@ async def test_batch_runs_all_steps(tmp_path):
 
     # Patch heavy collaborators
     with (
-        patch("backend.scheduler.morning_batch.select"),
-        patch("backend.scheduler.morning_batch.broadcast_status", side_effect=fake_broadcast),
+        patch("backend.scheduler.batch_runner.select"),
+        patch("backend.scheduler.batch_runner.broadcast_status", side_effect=fake_broadcast),
         patch.object(runner, "_load_settings", new_callable=AsyncMock) as mock_settings,
         patch.object(runner, "_load_profile", new_callable=AsyncMock) as mock_profile,
         patch.object(runner, "_load_sources", new_callable=AsyncMock) as mock_sources,
@@ -92,8 +92,8 @@ async def test_batch_runs_all_steps(tmp_path):
             runner, "_store_matches", new_callable=AsyncMock, return_value=[1]
         ) as mock_store,
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
-        patch("backend.scheduler.morning_batch.DailyLimitGuard") as MockGuard,
-        patch("backend.scheduler.morning_batch.settings") as mock_cfg,
+        patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
+        patch("backend.scheduler.batch_runner.settings") as mock_cfg,
     ):
         # Point data dir at tmp_path so templates/ scan finds nothing → no CV generation
         mock_cfg.jobpilot_data_dir = str(tmp_path)
@@ -138,8 +138,8 @@ async def test_batch_cv_error_continues():
             runner, "_store_matches", new_callable=AsyncMock, return_value=[1]
         ) as mock_store,
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
-        patch("backend.scheduler.morning_batch.broadcast_status", new_callable=AsyncMock),
-        patch("backend.scheduler.morning_batch.DailyLimitGuard") as MockGuard,
+        patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
     ):
         settings_obj = MagicMock()
         settings_obj.keywords = ["python"]
@@ -184,8 +184,8 @@ async def test_batch_stops_cv_generation_at_daily_limit():
             runner, "_store_matches", new_callable=AsyncMock, return_value=list(range(1, 11))
         ) as mock_store,
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock) as mock_doc,
-        patch("backend.scheduler.morning_batch.broadcast_status", new_callable=AsyncMock),
-        patch("backend.scheduler.morning_batch.DailyLimitGuard") as MockGuard,
+        patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
     ):
         settings_obj = MagicMock()
         settings_obj.keywords = ["python"]
@@ -270,11 +270,11 @@ async def test_fit_assessments_run_concurrently():
             return_value=[1, 2, 3, 4, 5],
         ),
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
-        patch("backend.scheduler.morning_batch.broadcast_status", new_callable=AsyncMock),
-        patch("backend.scheduler.morning_batch.broadcast_job_assessment", new_callable=AsyncMock),
-        patch("backend.scheduler.morning_batch.DailyLimitGuard") as MockGuard,
+        patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner.broadcast_job_assessment", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
         # match_row lookup → return None so we don't try to set attrs on a Mock
-        patch("backend.scheduler.morning_batch.select"),
+        patch("backend.scheduler.batch_runner.select"),
         # Make the cv_path resolution succeed (the runner reads the file)
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.read_text", return_value="\\documentclass{article}\\begin{document}cv\\end{document}"),

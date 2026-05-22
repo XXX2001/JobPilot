@@ -19,8 +19,8 @@ returned row's ``status`` / ``notes`` once the apply finishes instead
 of inserting a fresh row.
 
 The non-atomic helpers (``remaining_today``, ``can_apply``,
-``assert_can_apply``) are retained for read-only use (e.g. the morning
-batch that pre-computes how many CVs to generate) — they are
+``assert_can_apply``) are retained for read-only use (e.g. the batch
+runner that pre-computes how many CVs to generate) — they are
 informational and must NOT be used as the gate before submitting an
 application.
 """

@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
         from backend.matching.embedder import Embedder
         from backend.matching.fit_engine import FitEngine
         from backend.matching.matcher import JobMatcher
-        from backend.scheduler.morning_batch import MorningBatchRunner
+        from backend.scheduler.batch_runner import BatchRunner
         from backend.scraping.adaptive_scraper import AdaptiveScraper
         from backend.scraping.adzuna_client import AdzunaClient
         from backend.scraping.deduplicator import JobDeduplicator
@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI):
         # DB factory for the batch runner (creates a new session each call)
         from backend.database import AsyncSessionLocal
 
-        batch_runner = MorningBatchRunner(
+        batch_runner = BatchRunner(
             scraper=orchestrator,
             matcher=matcher,
             cv_pipeline=cv_pipeline,

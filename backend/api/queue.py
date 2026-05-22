@@ -130,7 +130,7 @@ async def get_batch_status(request: Request) -> BatchStatusOut:
 
 @router.post("/refresh", response_model=RefreshResponse)
 async def refresh_queue(request: Request, db: DBSession) -> RefreshResponse:  # noqa: ARG001
-    """Trigger a new morning batch run immediately (manual re-run).
+    """Trigger a new batch run immediately (manual re-run).
 
     Runs the batch in a background task so the endpoint returns promptly.
     """

@@ -99,7 +99,7 @@ def test_parse_agent_result_missing_required_fields():
     assert isinstance(jobs, list)
 
 
-# ── ScrapingOrchestrator.run_morning_batch (mocked) ──────────────────────────
+# ── ScrapingOrchestrator.scrape_batch (mocked) ──────────────────────────
 
 
 class MockAdzuna:
@@ -152,7 +152,7 @@ async def test_orchestrator_merges_results():
         session_mgr=MockSession(),
         deduplicator=MockDedup(),
     )
-    jobs = await orch.run_morning_batch(
+    jobs = await orch.scrape_batch(
         keywords=["python"],
         filters=_make_filters(),
         sources=[],
@@ -170,7 +170,7 @@ async def test_orchestrator_api_failure_continues():
         session_mgr=MockSession(),
         deduplicator=MockDedup(),
     )
-    jobs = await orch.run_morning_batch(
+    jobs = await orch.scrape_batch(
         keywords=["python"],
         filters=_make_filters(),
         sources=[],
@@ -189,7 +189,7 @@ async def test_orchestrator_deduplication():
         session_mgr=MockSession(),
         deduplicator=MockDedup(),
     )
-    jobs = await orch.run_morning_batch(
+    jobs = await orch.scrape_batch(
         keywords=["python"],
         filters=_make_filters(),
         sources=[],

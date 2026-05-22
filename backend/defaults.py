@@ -16,7 +16,7 @@ MAX_LEN_PHONE: int = 30
 MAX_LEN_ADDITIONAL_ANSWERS: int = 10_000
 
 # ── Scheduler / Batch ───────────────────────────────────────────────────────
-CONCURRENCY_GEMINI: int = 3       # max concurrent Gemini calls in morning batch
+CONCURRENCY_GEMINI: int = 3       # max concurrent Gemini calls per batch run
 DAILY_LIMIT: int = 10             # fallback daily application limit
 MIN_MATCH_SCORE: float = 30.0     # fallback minimum match score threshold
 

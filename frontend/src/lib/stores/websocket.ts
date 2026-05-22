@@ -1,4 +1,11 @@
 import { writable, type Readable } from 'svelte/store';
+import type { ClientMessage } from '$lib/types/ws';
+// NOTE: the messages store is intentionally typed as `any[]` for now.
+// Tightening to `WSMessage[]` surfaces real pre-existing vocabulary drift
+// (FE-01 in docs/reports/2026-05-22-audit/04-frontend-audit.md) — see e.g.
+// StatusBar.svelte handling `scraping_progress` / `matching_progress` /
+// `tailoring_progress` which the backend never emits. Fix those separately,
+// then change this back to `WSMessage[]` to lock in the contract.
 
 export type WsStatus = 'connected' | 'disconnected' | 'reconnecting';
 
@@ -93,7 +100,7 @@ function scheduleReconnect() {
   }, 3000);
 }
 
-export function send(data: any) {
+export function send(data: ClientMessage | string) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(typeof data === 'string' ? data : JSON.stringify(data));
   }

@@ -5,10 +5,11 @@
 **Audit date:** 2026-05-22
 **Audit type:** read-only — no code changed.
 
-> **Follow-up commit (2026-05-22):** every finding rated *Should-fix* below
-> has been addressed. See the "Fix outcomes" section at the bottom of this
-> file for the per-finding result, freshly re-measured metrics, and the
-> remaining (genuinely external) test failures.
+> **Follow-up commits (2026-05-22):** every finding rated *Should-fix* below
+> has been addressed. The pytest suite is now **315 / 0 / 7** (passed / failed
+> / skipped), pyright sits at **63 / 7**, and the frontend stays at 0 errors.
+> See the "Fix outcomes" section at the bottom of this file for the
+> per-finding result and the freshly re-measured metrics.
 
 ---
 
@@ -368,27 +369,27 @@ The single warning is the same pre-existing a11y nit on
 
 ```
 $ uv run pytest -q
-6 failed, 306 passed, 7 skipped in ~21s
+315 passed, 7 skipped in ~22s
 ```
-Up from 297/15 to **306/6**. The six remaining failures are
-genuinely external scaffolding-style bugs unrelated to this sprint:
 
-| Test | Pre-existing? | Diagnosis |
-|------|---------------|-----------|
-| `test_scraping.py::test_orchestrator_merges_results` | Yes | Mock constructor mismatch for `AdaptiveScraper` / `BrowserSessionManager` / `JobDeduplicator` |
-| `test_scraping.py::test_orchestrator_deduplication` | Yes | Same |
-| `test_session_manager.py::test_list_sessions_empty` | Yes | Patches `BrowserConfig` attribute that no longer exists on `session_manager` module |
-| `test_session_manager.py::test_list_sessions_with_file` | Yes | Same |
-| `test_session_manager.py::test_existing_session_no_login_flow` | Yes | Same |
-| `test_session_manager.py::test_new_session_confirm_login_resolves` | Yes | Same |
+**The suite is now green — zero failures.** Up from 297/15 (PR-10) →
+306/6 (first follow-up) → **315/0** (this commit).
 
-These are tracked separately as part of the test-foundation backlog; no
-production code touches them.
+The six failures listed in the previous version of this section were
+fixed by rewriting the stale test scaffolding (no production code
+touched):
+
+| Test file | Fix |
+|-----------|-----|
+| `tests/test_session_manager.py` | Rewrote suite to match the current `BrowserSessionManager` API — drops the `BrowserConfig` patch (no longer imported by the production module) and replaces the legacy `SESSIONS_DIR`-only assumption with instance-level overrides covering both `SESSIONS_DIR` (legacy flat layout) and `PROFILES_DIR` (current canonical layout). Added 4 new tests covering the dual-layout `list_sessions()`, profile-dir wins, `clear_session()` for both layouts, and `cancel_login()`. Net: 11 tests, all green. |
+| `tests/test_scraping.py` | Extended `MockAdzuna.search()` to accept the `page`, `results_per_page`, and `max_days_old` kwargs that the orchestrator now forwards from `SearchSettings` (`scraping/orchestrator.py:170`). No behaviour change — the mock still returns `self._result`. |
 
 ### What's still open
 
-Only two recommended next steps remain:
-- **#3 / Pydantic V2 `Field(env=…)` cleanup** (deferred as Nice-to-have).
+Only two deferred items remain from §5 — both Nice-to-have, neither
+blocking:
+- **#8 / Pydantic V2 `Field(env=…)` cleanup** — defensive against the
+  V3 cliff; can be picked up when V3 lands.
 - **WS codegen (F-U4)** — only worth doing once we add a 4th producer.
 
 Everything else from §5 is landed.

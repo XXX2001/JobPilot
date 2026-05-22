@@ -107,7 +107,17 @@ class MockAdzuna:
         self._result = result or []
         self._fail = fail
 
-    async def search(self, keywords=None, filters=None, country="gb") -> list[RawJob]:
+    async def search(
+        self,
+        keywords=None,
+        filters=None,
+        country="gb",
+        page: int = 1,
+        results_per_page: int = 20,
+        max_days_old: int | None = None,
+    ) -> list[RawJob]:
+        # **kwargs would also work, but mirroring the real signature keeps
+        # the test honest if a kwarg renamed.
         if self._fail:
             raise RuntimeError("Adzuna API down")
         return self._result

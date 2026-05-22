@@ -2,26 +2,25 @@
 
 ## Purpose
 
-The `scheduler` package provides an APScheduler-based morning batch job that automates daily job discovery and CV pre-generation for JobPilot. It exists to remove the manual effort of checking job boards every morning: at a configured time the scheduler wakes up, scrapes all enabled job sources, scores and filters the raw results against the user's search preferences, persists the best matches to the database, and immediately pre-generates tailored CVs so they are ready before the user opens the dashboard. Without this module the application would be entirely reactive (search on demand); with it, JobPilot behaves as an autonomous job-hunting agent that works overnight.
+The `scheduler` package contains the on-demand batch pipeline that drives JobPilot's job-discovery and CV pre-generation workflow. Despite the package name, no APScheduler/cron machinery is wired up: runs are triggered explicitly by `POST /api/queue/refresh` (or any other caller of `BatchRunner.run_batch()`). The pipeline scrapes all enabled job sources, scores and filters results against the user's search preferences, persists the best matches to the database, runs a skill-gap fit assessment, and pre-generates tailored CVs so they are ready when the user opens the dashboard.
 
 ---
 
 ## Key Components
 
-### `morning_batch.py`
+### `batch_runner.py`
 
-Contains the `MorningBatchScheduler` class and two private helper functions. The class owns the full pipeline from "wake up" to "notify dashboard":
+Contains the `BatchRunner` class and two private helper functions. The class owns the full pipeline from "wake up" to "notify dashboard":
 
-1. **APScheduler lifecycle** — wraps an `AsyncIOScheduler` instance; `start()` registers the job under the `"morning_batch"` job ID with a `CronTrigger`, and `stop()` shuts the scheduler down gracefully.
-2. **Five-step pipeline** (`_run_batch_inner`) — scraping → matching → DB persistence → CV generation → WebSocket broadcast.
-3. **Deduplication** — jobs are fingerprinted by `MD5(company|title|location)` so repeated runs do not duplicate rows. Existing `Job` rows are updated with richer data (longer description, missing `apply_url`) rather than re-inserted.
-4. **Daily limit enforcement** — only the top N matches receive pre-generated CVs, where N = remaining application slots for today (queried via `DailyLimitGuard`).
-5. **Concurrency control** — CV generation is parallelised with `asyncio.gather`, capped at 3 concurrent Gemini API calls via a `asyncio.Semaphore`.
-6. **Graceful degradation** — APScheduler is imported inside a `try/except`; if the package is missing the scheduler is disabled but the rest of the application continues to run. The WebSocket broadcast is similarly wrapped.
+1. **Six-step pipeline** (`_run_batch_inner`) — load settings → scrape → rank → store → fit-assess → CV generation → WebSocket broadcast.
+2. **Deduplication** — jobs are fingerprinted by `MD5(company|title|location)` so repeated runs do not duplicate rows. Existing `Job` rows are updated with richer data (longer description, missing `apply_url`) rather than re-inserted.
+3. **Daily limit enforcement** — only the top N matches receive pre-generated CVs, where N = remaining application slots for today (queried via `DailyLimitGuard`).
+4. **Concurrency control** — fit assessment and CV generation are parallelised with `asyncio.gather`, capped by a `asyncio.Semaphore` (default `CONCURRENCY_GEMINI = 3`).
+5. **Graceful degradation** — the WebSocket broadcast is wrapped so a disconnected/missing client never crashes the pipeline.
 
 ### `__init__.py`
 
-Empty package marker (`# scheduler package`). Exports nothing; consumers import directly from `morning_batch`.
+Empty package marker (`# scheduler package`). Exports nothing; consumers import directly from `backend.scheduler.batch_runner`.
 
 ---
 
@@ -51,16 +50,18 @@ Resolution order:
 
 ---
 
-### `class MorningBatchScheduler`
+### `class BatchRunner`
 
 ```python
-class MorningBatchScheduler:
+class BatchRunner:
     def __init__(
         self,
         scraper: ScrapingOrchestrator,
         matcher: JobMatcher,
         cv_pipeline: CVPipeline,
         db_factory: Callable[[], AsyncSession],
+        embedder: Embedder | None = None,
+        fit_engine: FitEngine | None = None,
     ) -> None
 ```
 
@@ -72,29 +73,18 @@ class MorningBatchScheduler:
 | `matcher` | `JobMatcher` | Scores `JobDetails` objects against `JobFilters`. |
 | `cv_pipeline` | `CVPipeline` | Generates tailored LaTeX/PDF CVs. |
 | `db_factory` | `Callable[[], AsyncSession]` | Factory that returns a new async DB session per call. In production this is `AsyncSessionLocal` from `backend.database`. |
+| `embedder` | `Embedder \| None` | Optional Gemini-backed embedder; populated in production wiring (`backend.main.lifespan`). When present, enables the fit-assessment skill-gap path. |
+| `fit_engine` | `FitEngine \| None` | Optional skill-gap fit engine; paired with `embedder`. When present, `_assess_one` runs cosine-similarity-based gap assessment for each ranked match. |
 
 ---
 
-#### `MorningBatchScheduler.start(batch_time: str = "08:00") -> None`
+#### `BatchRunner.run_batch() -> None` *(async)*
 
-Registers the morning batch as a cron job and starts the APScheduler. Safe to call multiple times — the job is registered with `replace_existing=True`.
-
-- `batch_time` — wall-clock time in `HH:MM` format (24-hour). Defaults to `"08:00"`. The value used at runtime comes from `SearchSettings.batch_time` read by the API layer, not from this default.
-- No return value.
-- Logs a warning and returns early if APScheduler is not installed.
-
-#### `MorningBatchScheduler.stop() -> None`
-
-Shuts down the APScheduler without waiting for running jobs to finish (`wait=False`). No-op if the scheduler is not running.
-
----
-
-#### `MorningBatchScheduler.run_batch() -> None` *(async)*
-
-Public entry point for the full pipeline. Also callable manually (e.g. via `POST /api/queue/refresh`). Opens a DB session, delegates to `_run_batch_inner`, and ensures the session is closed even on failure.
+Public entry point for the full pipeline. Opens a DB session via `db_factory`, delegates to `_run_batch_inner`, and ensures the session is closed even on failure.
 
 - No parameters beyond `self`.
 - Exceptions are caught and logged; the method never raises to its caller.
+- Maintains `self.running` and `self.last_status` so reconnecting WebSocket clients can render the most recent state.
 
 ---
 
@@ -102,8 +92,9 @@ Public entry point for the full pipeline. Also callable manually (e.g. via `POST
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `_run_batch_task` | `() -> None` | Synchronous APScheduler entry point; wraps `run_batch()` in `asyncio.ensure_future`. |
-| `_run_batch_inner` | `(db: AsyncSession) -> None` *(async)* | Executes all five pipeline steps. |
+| `_broadcast_and_track` | `(message: str, progress: float) -> None` *(async)* | Constructs a `Status(message=, progress=)` model, broadcasts via `manager.broadcast`, and updates `self.last_status`. |
+| `_run_batch_inner` | `(db: AsyncSession) -> None` *(async)* | Executes all six pipeline steps. |
+| `_assess_one` | `(db, match_id, jd) -> tuple[int, FitAssessment \| None]` *(async)* | Runs the fit-assessment for a single match; returns `(match_id, FitAssessment)` or `(match_id, None)` when fit-engine is disabled or job has no description. Designed to be `asyncio.gather`-ed under a semaphore. |
 | `_load_settings` | `(db: AsyncSession) -> SearchSettings` *(async)* | Fetches the first `SearchSettings` row; returns safe defaults if none exists. |
 | `_load_profile` | `(db: AsyncSession) -> UserProfile \| None` *(async)* | Fetches the first `UserProfile` row. |
 | `_load_sources` | `(db: AsyncSession) -> list[JobSource]` *(async)* | Fetches all `JobSource` rows where `enabled = True`. |
@@ -122,7 +113,7 @@ DB (SearchSettings, UserProfile, JobSource)
         │
         ▼
 Step 1 — SCRAPE
-  ScrapingOrchestrator.run_morning_batch(keywords, filters, sources, location, countries)
+  ScrapingOrchestrator.scrape_batch(keywords, filters, sources, location, countries)
   → list[RawJob]                               [WebSocket: 5% progress]
 
         │
@@ -147,18 +138,29 @@ Step 3 — STORE MATCHES
 
         │
         ▼
-Step 4 — PRE-GENERATE TAILORED CVs
+Step 4 — FIT ASSESS  (only when embedder + fit_engine are wired)
+  Embedder.embed_cv_profile(cv_profile) — one batched call
+  For each (match_id, JobDetails) — up to CONCURRENCY_GEMINI concurrently:
+    _assess_one() → FitAssessment | None
+  Persist ats_score / gap_severity / fit_assessment_json on JobMatch rows
+  Broadcast per-job assessment via WebSocket (job_progress payload)
+                                                [WebSocket: 60% progress]
+
+        │
+        ▼
+Step 5 — PRE-GENERATE TAILORED CVs
   DailyLimitGuard(db, limit=daily_limit).remaining_today() → int remaining
   top_ids = match_ids[:remaining]
-  For each (match_id, JobDetails) — up to 3 concurrently:
-    CVPipeline.generate_tailored_cv(base_cv_path, job, output_dir)
+  For each (match_id, JobDetails) — up to CONCURRENCY_GEMINI concurrently:
+    CVPipeline.generate_tailored_cv(base_cv_path, job, output_dir,
+                                    fit_assessment=fit_assessment_or_none)
     Output dir: <jobpilot_data_dir>/cvs/<match_id>/
     _store_tailored_doc() → TailoredDocument row (tex_path, pdf_path, diff_json)
   → TailoredDocument rows written to DB        [WebSocket: 65%→95% progress]
 
         │
         ▼
-Step 5 — NOTIFY DASHBOARD
+Step 6 — NOTIFY DASHBOARD
   broadcast_status("N applications ready for review", progress=1.0)
   [WebSocket: 100% progress]
 ```
@@ -173,18 +175,17 @@ Step 5 — NOTIFY DASHBOARD
 
 **Writes to DB:**
 - `Job` rows — new listings discovered by the scraper.
-- `JobMatch` rows — link between a job and the batch run, carrying the match score.
+- `JobMatch` rows — link between a job and the batch run, carrying the match score, plus `ats_score` / `gap_severity` / `fit_assessment_json` when the fit-engine path runs.
 - `TailoredDocument` rows — paths to generated `.tex`/`.pdf` files plus structured diff data.
 
 ---
 
 ## Configuration
 
-All scheduling and filtering parameters are read from the `search_settings` database table (`SearchSettings` model in `backend/models/user.py`). None of these values require an application restart to take effect — they are loaded fresh at the start of every batch run.
+All filtering parameters are read from the `search_settings` database table (`SearchSettings` model in `backend/models/user.py`). None of these values require an application restart to take effect — they are loaded fresh at the start of every batch run.
 
 | Setting | Column | Type | Default | Description |
 |---------|--------|------|---------|-------------|
-| Batch time | `batch_time` | `str` (HH:MM) | `"08:00"` | Wall-clock time the cron job fires. Passed to `MorningBatchScheduler.start()` by the API layer. |
 | Daily limit | `daily_limit` | `int` | `10` | Maximum CV pre-generations (and applications) per calendar day. |
 | Minimum match score | `min_match_score` | `float` | `30.0` | Jobs scoring below this threshold are discarded after ranking. |
 | Keywords | `keywords` | JSON | `["python", "machine learning"]` | Include-list for scraping and scoring. Stored as `{"include": [...]}` or bare list. |
@@ -195,26 +196,17 @@ All scheduling and filtering parameters are read from the `search_settings` data
 | Excluded keywords | `excluded_keywords` | JSON | `null` | Keywords whose presence disqualifies a job. |
 | Excluded companies | `excluded_companies` | JSON | `null` | Company names to skip entirely. |
 
-**CV generation concurrency** is hardcoded to `asyncio.Semaphore(3)` (3 concurrent Gemini API calls) — this is not currently configurable via settings.
+**Concurrency** for both fit assessment and CV generation is governed by `CONCURRENCY_GEMINI` in `backend/defaults.py` (default `3`) — bounded by an `asyncio.Semaphore` to respect the Gemini rate limit.
 
-**APScheduler auto-start is disabled.** As of the current implementation (`backend/main.py` line 112–113), `scheduler.start()` is never called during application startup. The morning batch runs only when explicitly triggered via `POST /api/queue/refresh`, which calls `scheduler.run_batch()` directly.
+**No auto-start.** The batch runs only when explicitly triggered (the common path is `POST /api/queue/refresh`, which schedules `runner.run_batch()` on the event loop in the background). The `SearchSettings.batch_time` column is persisted and surfaced in the settings API but is currently unused at runtime.
 
 ---
 
 ## Known Limitations / TODOs
 
-1. **Auto-start removed.** The comment at `backend/main.py:112` reads `# APScheduler auto-start removed — batch runs only on user action`. The `start()` / `stop()` lifecycle methods and `CronTrigger` machinery are fully implemented but never activated in the current deployment. The module is effectively used as an on-demand runner only.
-
-2. **`batch_time` setting is unused at runtime.** `SearchSettings.batch_time` is persisted and surfaced in the settings API, but because auto-start is disabled the value has no effect. If auto-start is re-enabled, the API layer must read this column and pass it to `scheduler.start()`.
-
-3. **Hardcoded CV concurrency.** The `asyncio.Semaphore(3)` cap on concurrent Gemini calls in Step 4 is not exposed as a configurable setting.
-
-4. **Hardcoded fallback defaults in `_load_settings`.** When no `SearchSettings` row exists the method fabricates a row with `keywords=["python", "machine learning"]`, `daily_limit=10`, `batch_time="08:00"`, `min_match_score=30.0`. These defaults are not written to the DB, so they reappear on every call rather than being seeded once.
-
-5. **Single-user assumption.** All DB queries use `.limit(1)` for both `UserProfile` and `SearchSettings`. The scheduler has no concept of multiple users; adding multi-tenancy would require a significant redesign.
-
-6. **Only `doc_type="cv"` is pre-generated.** Cover letters (`doc_type="letter"`) are never pre-generated by the batch job; they must be generated on demand.
-
-7. **First location used as primary scraping target.** When multiple locations are configured, `location = filters.locations[0]` sends only the first to the scraper as a plain string; remaining locations in the list are not iterated.
-
-8. **`experience_min` / `experience_max` / `job_types` / `languages` not used.** These columns exist on `SearchSettings` and are stored, but `_run_batch_inner` never reads or passes them to `JobFilters` or the scraper.
+1. **No auto-scheduler.** APScheduler scaffolding was removed in the honesty pass. `SearchSettings.batch_time` is persisted but unused — re-enabling a cron would require wiring an `AsyncIOScheduler` (or equivalent) inside `backend.main.lifespan` and reading the column. Track this with the Gmail-integration spec which proposes a unified background-task layer.
+2. **Hardcoded fallback defaults in `_load_settings`.** When no `SearchSettings` row exists the method fabricates a row with `keywords=["python", "machine learning"]`, `daily_limit=10`, `min_match_score=30.0`. These defaults are not written to the DB, so they reappear on every call rather than being seeded once.
+3. **Single-user assumption.** All DB queries use `.limit(1)` for both `UserProfile` and `SearchSettings`. The scheduler has no concept of multiple users; adding multi-tenancy would require a significant redesign.
+4. **Only `doc_type="cv"` is pre-generated.** Cover letters (`doc_type="letter"`) are never pre-generated by the batch job; they must be generated on demand.
+5. **First location used as primary scraping target.** When multiple locations are configured, `location = filters.locations[0]` sends only the first to the scraper as a plain string; remaining locations in the list are not iterated.
+6. **`experience_min` / `experience_max` / `job_types` / `languages` not used.** These columns exist on `SearchSettings` and are stored, but `_run_batch_inner` never reads or passes them to `JobFilters` or the scraper.

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Index, Integer, String, Text
@@ -9,8 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 from backend.models.base import Base
 
 
-def _now():
-    return datetime.utcnow()
+def _now() -> datetime:
+    # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
+    # DB rows (stored naive in SQLite) remain comparable.
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class JobSource(Base):

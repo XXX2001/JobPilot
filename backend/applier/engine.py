@@ -22,7 +22,7 @@ from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
 from backend.config import settings
 from backend.defaults import DAILY_LIMIT, MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
-from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
+from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard, _utc_now
 from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.models.application import Application, ApplicationEvent
 
@@ -296,8 +296,6 @@ class ApplicationEngine:
         inserted.
         """
         try:
-            from datetime import datetime
-
             from sqlalchemy import select
 
             from backend.models.job import JobMatch
@@ -307,7 +305,7 @@ class ApplicationEngine:
             # module docstring for the vocabulary).
             is_success = result.status in SUCCESS_RESULT_STATUSES
             persisted_status = normalize_result_status(result.status)
-            applied_at_value = datetime.utcnow() if is_success else None
+            applied_at_value = _utc_now() if is_success else None
 
             if reserved_app_id is not None:
                 # Update the placeholder reserved by the daily-limit guard.
@@ -358,8 +356,12 @@ class ApplicationEngine:
                     match.status = "applied"
 
             await db.commit()
+            # %s for app.id — under mocked DBs (or before flush populates the
+            # PK) app.id can be None, and %d would raise inside the JSON log
+            # formatter, which the broad `except Exception` below would then
+            # turn into a spurious ApplicationRecordError.
             logger.info(
-                "Recorded application id=%d job_match_id=%d result=%s status=%s",
+                "Recorded application id=%s job_match_id=%d result=%s status=%s",
                 app.id,
                 job_match_id,
                 result.status,

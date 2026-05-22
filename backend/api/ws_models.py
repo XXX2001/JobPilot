@@ -33,6 +33,18 @@ class Status(BaseModel):
     progress: float = 0.0
 
 
+class SkillGap(BaseModel):
+    """One missing/under-represented skill inside a JobAssessment payload.
+
+    ``criticality`` is the skill-importance weight produced by the fit
+    engine (typically in ``[0, 1]``); the frontend renders it as a chip
+    intensity. It is a float on the wire, not a string.
+    """
+
+    skill: str
+    criticality: float
+
+
 class JobAssessment(BaseModel):
     """Per-job fit assessment broadcast after the matching/grading step.
 
@@ -47,7 +59,7 @@ class JobAssessment(BaseModel):
     gap_severity: float
     decision: str
     covered: list[str]
-    gaps: list[dict]
+    gaps: list[SkillGap]
 
 
 class ScrapingStatus(BaseModel):
@@ -170,6 +182,7 @@ __all__ = [
     "WSMessage",
     "Status",
     "JobAssessment",
+    "SkillGap",
     "ScrapingStatus",
     "MatchingStatus",
     "TailoringStatus",

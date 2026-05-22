@@ -402,10 +402,13 @@ async def apply_to_job(
         await db.execute(select(UserProfile).where(UserProfile.id == 1))
     ).scalar_one_or_none()
 
-    full_name = body.full_name or (profile.full_name if profile else "")
-    email = body.email or (profile.email if profile else "")
-    phone = body.phone or (profile.phone if profile else "")
-    location = body.location or (profile.location if profile else "")
+    # `profile.<col>` can be None when the DB row was partially filled,
+    # so coerce each chain to "" rather than letting None reach
+    # ApplicantInfo (whose fields are typed `str`).
+    full_name = body.full_name or (profile.full_name if profile else "") or ""
+    email = body.email or (profile.email if profile else "") or ""
+    phone = body.phone or (profile.phone if profile else "") or ""
+    location = body.location or (profile.location if profile else "") or ""
     additional_answers = body.additional_answers_json
     if not additional_answers and profile and profile.additional_info:
         import json as _json

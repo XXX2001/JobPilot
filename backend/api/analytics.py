@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 from typing import Optional
 
 from fastapi import APIRouter, Query
@@ -47,7 +51,7 @@ async def get_analytics_summary(db: DBSession):
     total_apps = (await db.execute(total_stmt)).scalar_one()
 
     # Applications this week (last 7 days)
-    week_ago = datetime.utcnow() - timedelta(days=7)
+    week_ago = _utc_now() - timedelta(days=7)
     week_stmt = (
         select(func.count()).select_from(Application).where(Application.created_at >= week_ago)
     )
@@ -88,7 +92,7 @@ async def get_analytics_trends(
     days: int = Query(30, ge=1, le=365),
 ):
     """Return applications per day for the last N days."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+    cutoff = _utc_now() - timedelta(days=days)
 
     # Fetch all applications within range
     stmt = select(Application.created_at).where(Application.created_at >= cutoff)
@@ -103,7 +107,7 @@ async def get_analytics_trends(
 
     # Fill in zero-count days for continuity
     trends: list[DailyTrend] = []
-    today = datetime.utcnow().date()
+    today = _utc_now().date()
     for i in range(days - 1, -1, -1):
         day = today - timedelta(days=i)
         day_str = day.strftime("%Y-%m-%d")

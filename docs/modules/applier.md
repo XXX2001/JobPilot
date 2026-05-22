@@ -536,7 +536,7 @@ All settings are loaded from environment variables (or `.env` file) via `backend
 
 **Hardcoded values:**
 
-- The daily limit defaults to `10` in three separate places: `ApplicationEngine.__init__`, `main.py`, and `morning_batch.py` line 264 (batch scheduler). These are not coordinated from a single source of truth.
+- The daily limit defaults to `10` in three separate places: `ApplicationEngine.__init__`, `main.py`, and `batch_runner.py` line 264 (batch scheduler). These are not coordinated from a single source of truth.
 - The confirm/cancel review timeout is hardcoded at 1800 seconds (30 minutes) in both `form_filler.py` and `auto_apply.py`. There is no setting to adjust it.
 - The CAPTCHA polling interval (2 s) and timeout (300 s) in `captcha_handler.py` are module-level constants with no env var override.
 - `_MAX_FORM_CHARS` (15,000) in `form_filler.py` is a fixed limit. Large forms may be truncated, causing Gemini to miss fields.

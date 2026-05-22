@@ -134,7 +134,10 @@ def test_broadcast_job_assessment_helper_emits_jobassessment_model():
     assert msg.gap_severity == pytest.approx(0.168)
     assert msg.decision == "modify"
     assert msg.covered == ["python", "django"]
-    assert msg.gaps == [{"skill": "kubernetes", "criticality": 0.8}]
+    # gaps are SkillGap models after PR-S4; compare field-wise.
+    assert len(msg.gaps) == 1
+    assert msg.gaps[0].skill == "kubernetes"
+    assert msg.gaps[0].criticality == pytest.approx(0.8)
 
 
 # ---------------------------------------------------------------------------

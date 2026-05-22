@@ -27,7 +27,7 @@ lab/company URLs — goes directly to Tier 2.
 
 The top-level coordinator. `ScrapingOrchestrator` is instantiated once at
 application startup with all dependencies injected (Adzuna client, scraper
-instances, session manager, deduplicator). Its `run_morning_batch()` method
+instances, session manager, deduplicator). Its `scrape_batch()` method
 drives the full pipeline in three sequential phases:
 
 - **Phase 1** — API sources (Adzuna): runs all `type="api"` sources in
@@ -317,10 +317,10 @@ class ScrapingOrchestrator:
 
 All constructor parameters are optional to allow partial injection and testing.
 
-**`run_morning_batch`**
+**`scrape_batch`**
 
 ```python
-async def run_morning_batch(
+async def scrape_batch(
     self,
     keywords: list[str] | None = None,
     filters: JobFilters | None = None,
@@ -465,7 +465,7 @@ Morning batch trigger
 └───────────────────┘
         │
         ▼
-  list[RawJob]  →  morning_batch.py  →  LLM scoring  →  DB storage
+  list[RawJob]  →  batch_runner.py  →  LLM scoring  →  DB storage
 ```
 
 **Session handling** (pre-Phase 2): for sites with `requires_login: True`,

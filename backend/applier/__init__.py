@@ -39,6 +39,10 @@ STATUS_PENDING = "pending"
 STATUS_APPLIED = "applied"
 STATUS_CANCELLED = "cancelled"
 STATUS_FAILED = "failed"
+# Post-submission lifecycle states. No writer persists these yet; they are
+# part of the canonical vocabulary so that PATCH validators
+# (CreateApplicationRequest / update_application) can accept them once the
+# lifecycle UI lands. Forward use only — do not grep-trace as dead code.
 STATUS_INTERVIEW = "interview"
 STATUS_OFFER = "offer"
 STATUS_REJECTED = "rejected"

@@ -366,7 +366,10 @@ async def test_browser_use_apply_parses_additional_answers_json(monkeypatch):
 
     captured_task: list[str] = []
 
-    def fake_agent(task, llm, browser):
+    def fake_agent(task, llm, browser, **_kwargs):
+        # **_kwargs absorbs forward-compatible kwargs the production Agent
+        # accepts (e.g. ``available_file_paths``) so an upstream call-site
+        # tweak doesn't silently break this regression test.
         captured_task.append(task)
         m = MagicMock()
         m.run = AsyncMock(return_value=MagicMock(final_result=MagicMock(return_value="")))

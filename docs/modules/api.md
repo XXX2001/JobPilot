@@ -23,7 +23,7 @@ Defines shared FastAPI dependency callables used across every router.
 - **`get_apply_engine(request)`** — retrieves the `ApplicationEngine` singleton from `app.state.apply_engine`.
 - **`get_cv_pipeline(request)`** — retrieves the `CVPipeline` singleton from `app.state.cv_pipeline`.
 - **`get_scraping_orchestrator(request)`** — retrieves the `ScrapingOrchestrator` singleton from `app.state.scraping_orchestrator`.
-- **`get_morning_scheduler(request)`** — retrieves the `MorningBatchScheduler` singleton from `app.state.morning_scheduler`.
+- **`get_morning_scheduler(request)`** — retrieves the `BatchRunner` singleton from `app.state.morning_scheduler`.
 
 All singletons are placed on `app.state` during the FastAPI lifespan in `backend/main.py` and accessed here without importing the concrete classes at module load time (guarded by `TYPE_CHECKING`).
 
@@ -993,7 +993,7 @@ Client messages route to handlers registered via `manager.register_handler(msg_t
 
 **External systems (via domain modules):**
 - `backend.applier.engine.ApplicationEngine` (`app.state.apply_engine`) — invoked by `POST /api/applications/{match_id}/apply`.
-- `backend.scheduler.morning_batch.MorningBatchScheduler` (`app.state.morning_scheduler`) — invoked by `POST /api/queue/refresh`.
+- `backend.scheduler.batch_runner.BatchRunner` (`app.state.morning_scheduler`) — invoked by `POST /api/queue/refresh`.
 - `backend.scraping.adzuna_client.AdzunaClient` — instantiated inline by `POST /api/jobs/search`.
 - `backend.latex.parser.LaTeXParser` — instantiated inline by `POST /api/documents/validate-template`.
 - Filesystem — reads PDF files for streaming; reads/deletes browser session state files in `JOBPILOT_DATA_DIR`.

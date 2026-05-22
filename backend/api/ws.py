@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - fallback for environments without fastap
             return None
 
 
-from backend.api.ws_models import JobAssessment, Pong, Status
+from backend.api.ws_models import JobAssessment, Pong, SkillGap, Status
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -106,20 +106,25 @@ manager = ConnectionManager()
 async def websocket_endpoint(websocket: WebSocket) -> None:
     client_id = await manager.connect(websocket)
     # Send current batch status to reconnecting clients
+    # Cold-start path: app.state or batch_runner may not exist yet.
+    # We log at debug so a noisy stack trace doesn't appear on every fresh
+    # connect, but a developer running with `LOG_LEVEL=debug` can see why
+    # the resume-state replay was skipped.
     try:
         app = websocket.app if hasattr(websocket, "app") else None
         runner = getattr(getattr(app, "state", None), "batch_runner", None) if app else None
         if runner and runner.running and runner.last_status:
             await websocket.send_text(manager._encode(runner.last_status))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("WS resume-state replay skipped: %s", exc)
     try:
         while True:
             try:
                 data = await websocket.receive_text()
             except WebSocketDisconnect:
                 break
-            except Exception:
+            except Exception as exc:
+                logger.debug("WS receive_text raised, looping: %s", exc)
                 continue
             try:
                 msg = json.loads(data)
@@ -134,8 +139,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         handler(msg)
                     except Exception as exc:
                         logger.debug("Handler for %s failed: %s", msg_type, exc)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("WS message dispatch failed: %s", exc)
     finally:
         manager.disconnect(client_id)
 
@@ -160,6 +165,8 @@ async def broadcast_job_assessment(
 
     Wraps the payload in a ``ws_models.JobAssessment`` (wire-format
     discriminator stays ``"job_progress"`` for backward compatibility).
+    ``gaps`` are accepted as plain dicts for caller convenience and validated
+    into ``SkillGap`` so the frontend contract stays tight.
     """
     await manager.broadcast(
         JobAssessment(
@@ -168,7 +175,7 @@ async def broadcast_job_assessment(
             gap_severity=round(gap_severity, 3),
             decision=decision,
             covered=covered,
-            gaps=gaps,
+            gaps=[SkillGap(**g) for g in gaps],
         )
     )
 

@@ -15,7 +15,7 @@ Everything stays on your machine. No data is sent to third-party servers except 
 - **Tailor your CV** automatically for every job, highlighting the most relevant skills
 - **Generate polished PDF CVs** from your template
 - **Help you apply** with manual, guided, or fully automated workflows
-- **Schedule daily searches** so new opportunities are waiting for you each morning
+- **Run on demand** -- trigger a fresh job-discovery batch any time from the dashboard
 
 ---
 
@@ -152,7 +152,7 @@ Once started, open your browser and go to: **http://localhost:8000**
 1. The setup wizard will guide you through the basics
 2. Upload your CV template (a `.tex` file)
 3. Set your job search preferences (location, keywords, etc.)
-4. Run your first search or wait for the automatic daily batch
+4. Click **Refresh queue** to run your first job-discovery batch
 
 ---
 
@@ -225,9 +225,12 @@ JOBPILOT_PORT=8000
 JOBPILOT_LOG_LEVEL=info
 JOBPILOT_DATA_DIR=./data
 JOBPILOT_SCRAPER_HEADLESS=true
+# Comma-separated CORS allow-list. Set this if you serve the UI from a host
+# other than the local dev defaults (e.g. behind a reverse proxy).
+JOBPILOT_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000
 
 # AI model settings
-GOOGLE_MODEL=gemini-2.0-flash
+GOOGLE_MODEL=gemini-3-flash-preview
 GOOGLE_MODEL_FALLBACKS=
 
 # Feature flags
@@ -273,7 +276,7 @@ backend/
   matching/    Job-CV scoring and skill analysis
   models/      Data models
   scraping/    Job site scrapers
-  scheduler/   Scheduled daily searches
+  scheduler/   On-demand batch pipeline (BatchRunner)
 frontend/      Web interface
 scripts/       Installer and utility scripts
 tests/         Automated tests

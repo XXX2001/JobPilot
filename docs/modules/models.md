@@ -326,13 +326,13 @@ No database-level `ON DELETE CASCADE` constraints exist anywhere in the schema. 
 
 ### Matching pipeline (morning batch)
 
-5. `scheduler/morning_batch.py` reads `SearchSettings` and `UserProfile` (singletons), then queries `Job` rows from the current batch.
+5. `scheduler/batch_runner.py` reads `SearchSettings` and `UserProfile` (singletons), then queries `Job` rows from the current batch.
 6. `matching/matcher.py` converts `Job` rows into `JobDetails` Pydantic objects and scores them.
 7. Matches above `min_match_score` are written as `JobMatch` rows.
 
 ### Document generation pipeline
 
-8. `morning_batch.py` passes top `JobMatch` rows to the LaTeX pipeline (`latex/pipeline.py`) and LLM CV editor, both of which consume `JobDetails`.
+8. `batch_runner.py` passes top `JobMatch` rows to the LaTeX pipeline (`latex/pipeline.py`) and LLM CV editor, both of which consume `JobDetails`.
 9. Generated `.tex`/`.pdf` paths and diffs are stored as `TailoredDocument` rows, linked by `job_match_id`.
 
 ### Application pipeline

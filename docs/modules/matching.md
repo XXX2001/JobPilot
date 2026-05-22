@@ -19,7 +19,7 @@ Files in this module:
 
 **File:** `backend/matching/matcher.py`
 
-Computes a composite relevance score [0, 100] for each scraped job against the user's search settings. Called by `MorningBatchRunner` after scraping and before CV pre-generation.
+Computes a composite relevance score [0, 100] for each scraped job against the user's search settings. Called by `BatchRunner` after scraping and before CV pre-generation.
 
 ### Weighted Sub-Scores
 

@@ -83,11 +83,11 @@ def test_add_application_event(test_app: TestClient):
 
     event_resp = test_app.post(
         f"/api/applications/{app_id}/events",
-        json={"event_type": "email_received", "details": "Got confirmation email"},
+        json={"event_type": "follow_up", "details": "Sent a polite nudge"},
     )
     assert event_resp.status_code == 201
     data = event_resp.json()
-    assert data["event_type"] == "email_received"
+    assert data["event_type"] == "follow_up"
     assert data["application_id"] == app_id
 
 

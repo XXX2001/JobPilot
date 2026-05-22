@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
+from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED
 from backend.models.application import Application, ApplicationEvent
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch
@@ -87,6 +88,26 @@ class CreateEventRequest(BaseModel):
     details: Optional[str] = None
 
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _expand_status_filter(status: Optional[str]) -> Optional[list[str]]:
+    """Translate a user-supplied status filter into the set of DB values
+    that should match.
+
+    Filtering by :data:`STATUS_APPLIED` also matches rows persisted under
+    the legacy aliases ``"manual"`` / ``"assisted"`` (see
+    ``backend.applier`` module docstring for the backward-compatibility
+    policy). All other values are matched verbatim. Returns ``None`` if
+    no filter was supplied.
+    """
+    if not status:
+        return None
+    if status == STATUS_APPLIED:
+        return [STATUS_APPLIED, *sorted(LEGACY_APPLIED_ALIASES)]
+    return [status]
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -120,8 +141,9 @@ async def list_applications(
         .outerjoin(JobMatch, Application.job_match_id == JobMatch.id)
         .outerjoin(Job, JobMatch.job_id == Job.id)
     )
-    if status:
-        stmt = stmt.where(Application.status == status)
+    status_filter = _expand_status_filter(status)
+    if status_filter is not None:
+        stmt = stmt.where(Application.status.in_(status_filter))
     stmt = stmt.order_by(Application.created_at.desc()).offset(skip).limit(limit)
 
     result = await db.execute(stmt)
@@ -159,8 +181,8 @@ async def list_applications(
 
     # Total count (with same filter)
     count_stmt = select(func.count()).select_from(Application)
-    if status:
-        count_stmt = count_stmt.where(Application.status == status)
+    if status_filter is not None:
+        count_stmt = count_stmt.where(Application.status.in_(status_filter))
     total = (await db.execute(count_stmt)).scalar_one()
 
     return ApplicationListOut(applications=app_outs, total=total)

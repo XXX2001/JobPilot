@@ -11,6 +11,11 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.applier import (
+    RESULT_CANCELLED,
+    SUCCESS_RESULT_STATUSES,
+    normalize_result_status,
+)
 from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
 from backend.config import settings
@@ -94,23 +99,37 @@ class ApplicationEngine:
         if applicant is None:
             applicant = ApplicantInfo()
 
-        # Enforce daily limit (skip for manual — user is in control)
+        # Atomically reserve a daily-limit slot before dispatching.
+        # reserve_slot() inserts a ``pending`` Application row and
+        # re-checks the count in one transaction, closing the TOCTOU
+        # race that existed when we did a separate read-then-check.
+        # MANUAL mode is exempt — the user opens the browser themselves
+        # so we don't reserve a slot until/unless they record success.
+        reserved_app_id: Optional[int] = None
         if mode != ApplyMode.MANUAL:
             guard = DailyLimitGuard(db=db, limit=self._daily_limit)
             try:
-                await guard.assert_can_apply()
+                reserved_app_id = await guard.reserve_slot(
+                    job_match_id=job_match_id,
+                    method=mode.value,
+                )
             except DailyLimitExceeded as exc:
                 logger.warning("Daily limit exceeded: %s", exc)
                 return ApplicationResult(
-                    status="cancelled",
+                    status=RESULT_CANCELLED,
                     method=mode.value,
                     message=str(exc),
                 )
 
         # Set up per-job events — guard against concurrent apply for same job
         if job_match_id in self._confirm_events:
+            # Release the daily-limit reservation we just claimed,
+            # otherwise the placeholder lingers as ``pending`` and
+            # permanently consumes one of today's slots.
+            if reserved_app_id is not None:
+                await self._release_reserved_slot(db, reserved_app_id)
             return ApplicationResult(
-                status="cancelled",
+                status=RESULT_CANCELLED,
                 method=mode.value,
                 message=f"Job {job_match_id} already has an application in progress.",
             )
@@ -126,18 +145,51 @@ class ApplicationEngine:
                 cv_pdf=cv_pdf,
                 letter_pdf=letter_pdf,
             )
+        except Exception:
+            # If dispatch crashes, release the reservation so the
+            # placeholder doesn't permanently consume a daily slot.
+            if reserved_app_id is not None:
+                await self._release_reserved_slot(db, reserved_app_id)
+            raise
         finally:
             self._confirm_events.pop(job_match_id, None)
             self._cancel_events.pop(job_match_id, None)
 
-        # Persist application record
+        # Persist application record — for non-manual modes this
+        # *updates* the placeholder row reserved above; for manual
+        # mode it inserts a fresh row.
         await self._record_application(
             db=db,
             job_match_id=job_match_id,
             result=result,
+            reserved_app_id=reserved_app_id,
         )
 
         return result
+
+    async def _release_reserved_slot(
+        self,
+        db: AsyncSession,
+        reserved_app_id: int,
+    ) -> None:
+        """Clear ``applied_at`` on a placeholder so it stops counting.
+
+        Used when the reservation was claimed but the apply never
+        completes (early return, dispatch crash). We don't DELETE so
+        any FK references / audit trail survive.
+        """
+        try:
+            from sqlalchemy import select
+
+            stmt = select(Application).where(Application.id == reserved_app_id)
+            app = (await db.execute(stmt)).scalar_one_or_none()
+            if app is not None:
+                app.status = RESULT_CANCELLED
+                app.applied_at = None
+                await db.commit()
+        except Exception as exc:
+            logger.error("Failed to release reserved slot %d: %s", reserved_app_id, exc)
+            await db.rollback()
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
@@ -189,8 +241,16 @@ class ApplicationEngine:
         db: AsyncSession,
         job_match_id: int,
         result: ApplicationResult,
+        reserved_app_id: Optional[int] = None,
     ) -> None:
-        """Persist the application and an initial lifecycle event."""
+        """Persist the application and an initial lifecycle event.
+
+        If ``reserved_app_id`` is provided (the common AUTO/ASSISTED
+        path), the placeholder row inserted by
+        :py:meth:`DailyLimitGuard.reserve_slot` is updated in place —
+        we never insert a duplicate. Otherwise (MANUAL) a fresh row is
+        inserted.
+        """
         try:
             from datetime import datetime
 
@@ -198,16 +258,51 @@ class ApplicationEngine:
 
             from backend.models.job import JobMatch
 
-            app = Application(
-                job_match_id=job_match_id,
-                method=result.method,
-                status=result.status,
-                applied_at=datetime.utcnow() if result.status in ("applied", "manual") else None,
-                notes=result.message or None,
-            )
-            db.add(app)
-            await db.flush()
+            # Translate the strategy-outcome status into the canonical
+            # persisted Application.status (see ``backend.applier``
+            # module docstring for the vocabulary).
+            is_success = result.status in SUCCESS_RESULT_STATUSES
+            persisted_status = normalize_result_status(result.status)
+            applied_at_value = datetime.utcnow() if is_success else None
 
+            if reserved_app_id is not None:
+                # Update the placeholder reserved by the daily-limit guard.
+                stmt = select(Application).where(Application.id == reserved_app_id)
+                app = (await db.execute(stmt)).scalar_one_or_none()
+                if app is None:
+                    # Defensive: placeholder vanished — fall back to insert.
+                    logger.warning(
+                        "Reserved application id=%d not found; inserting fresh row",
+                        reserved_app_id,
+                    )
+                    app = Application(
+                        job_match_id=job_match_id,
+                        method=result.method,
+                        status=persisted_status,
+                        applied_at=applied_at_value,
+                        notes=result.message or None,
+                    )
+                    db.add(app)
+                    await db.flush()
+                else:
+                    app.method = result.method
+                    app.status = persisted_status
+                    app.applied_at = applied_at_value
+                    app.notes = result.message or None
+            else:
+                app = Application(
+                    job_match_id=job_match_id,
+                    method=result.method,
+                    status=persisted_status,
+                    applied_at=applied_at_value,
+                    notes=result.message or None,
+                )
+                db.add(app)
+                await db.flush()
+
+            # Lifecycle event records the original strategy outcome
+            # (e.g. "manual"/"assisted") for richer history; the
+            # Application.status column holds the canonical value.
             event = ApplicationEvent(
                 application_id=app.id,
                 event_type=result.status,
@@ -216,7 +311,8 @@ class ApplicationEngine:
             db.add(event)
 
             # Update JobMatch status so the job is removed from the queue
-            if result.status in ("applied", "manual"):
+            # for every success outcome (applied / manual / assisted).
+            if is_success:
                 stmt = select(JobMatch).where(JobMatch.id == job_match_id)
                 match = (await db.execute(stmt)).scalar_one_or_none()
                 if match is not None:
@@ -224,10 +320,11 @@ class ApplicationEngine:
 
             await db.commit()
             logger.info(
-                "Recorded application id=%d job_match_id=%d status=%s",
+                "Recorded application id=%d job_match_id=%d result=%s status=%s",
                 app.id,
                 job_match_id,
                 result.status,
+                persisted_status,
             )
         except Exception as exc:
             logger.error("Failed to record application: %s", exc)

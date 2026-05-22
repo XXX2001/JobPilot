@@ -159,9 +159,9 @@ async def search_jobs(body: SearchRequest, db: DBSession):
             country=body.country,
             results_per_page=body.max_results,
         )
-    except Exception as exc:
-        logger.error("Adzuna search failed: %s", exc)
-        raise HTTPException(status_code=502, detail=f"Adzuna search failed: {exc}")
+    except Exception:
+        logger.exception("Adzuna search failed")
+        raise HTTPException(status_code=502, detail="Adzuna search failed")
 
     # Deduplicate
     unique_jobs = deduplicator.deduplicate(raw_jobs)

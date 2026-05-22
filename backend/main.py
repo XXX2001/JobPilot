@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
         letter_pipeline = LetterPipeline(cv_editor=cv_editor)
         adzuna = AdzunaClient()
         dedup = JobDeduplicator()
-        adaptive = AdaptiveScraper(gemini_api_key=settings.GOOGLE_API_KEY)
+        adaptive = AdaptiveScraper(gemini_api_key=settings.GOOGLE_API_KEY.get_secret_value())
         session_mgr = BrowserSessionManager()
         scrapling = ScraplingFetcher(gemini_client=gemini) if settings.SCRAPLING_ENABLED else None
         orchestrator = ScrapingOrchestrator(
@@ -88,7 +88,7 @@ async def lifespan(app: FastAPI):
         from backend.defaults import DAILY_LIMIT
 
         apply_engine = ApplicationEngine(
-            api_key=settings.GOOGLE_API_KEY,
+            api_key=settings.GOOGLE_API_KEY.get_secret_value(),
             daily_limit=DAILY_LIMIT,
         )
 
@@ -165,10 +165,12 @@ async def lifespan(app: FastAPI):
 
 app: Any = FastAPI(lifespan=lifespan, redirect_slashes=False)  # type: ignore[arg-type]
 
-# Allow all origins for development
+# CORS: restrict to configured origins. Default covers local dev hosts;
+# production deployments override via JOBPILOT_ALLOWED_ORIGINS.
+_allowed_origins = [o.strip() for o in settings.jobpilot_allowed_origins.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -235,10 +237,10 @@ if _LaTeXErr is not None:
 
     @app.exception_handler(_LaTeXErr)
     async def _latex_error_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.warning("LaTeX compilation error: %s", exc)
+        logger.warning("LaTeX compilation error: %s", exc, exc_info=True)
         return JSONResponse(
             status_code=422,
-            content={"error": str(exc), "code": "latex_compile_error"},
+            content={"error": "LaTeX compilation failed", "code": "latex_compile_error"},
         )
 
 

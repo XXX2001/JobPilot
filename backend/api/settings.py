@@ -276,22 +276,21 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
 @router.get("/sources")
 async def get_sources():
     """Return which API sources are configured (keys masked)."""
+    adzuna_app_id = settings.ADZUNA_APP_ID
+    adzuna_key = settings.ADZUNA_APP_KEY.get_secret_value()
+    gemini_key = settings.GOOGLE_API_KEY.get_secret_value()
+    placeholder = ("", "placeholder")
     return {
         "adzuna": {
             "configured": bool(
-                getattr(settings, "ADZUNA_APP_ID", "") not in (None, "", "placeholder")
-                and getattr(settings, "ADZUNA_APP_KEY", "") not in (None, "", "placeholder")
+                adzuna_app_id not in placeholder and adzuna_key not in placeholder
             ),
             "app_id_hint": (
-                (settings.ADZUNA_APP_ID[:4] + "****")
-                if getattr(settings, "ADZUNA_APP_ID", "") not in (None, "", "placeholder")
-                else None
+                (adzuna_app_id[:4] + "****") if adzuna_app_id not in placeholder else None
             ),
         },
         "gemini": {
-            "configured": bool(
-                getattr(settings, "GOOGLE_API_KEY", "") not in (None, "", "placeholder")
-            ),
+            "configured": bool(gemini_key not in placeholder),
         },
     }
 
@@ -482,8 +481,9 @@ async def get_credentials(db: DBSession):
             try:
                 from cryptography.fernet import Fernet
 
-                if settings.CREDENTIAL_KEY:
-                    f = Fernet(settings.CREDENTIAL_KEY.encode())
+                cred_key = settings.CREDENTIAL_KEY.get_secret_value()
+                if cred_key:
+                    f = Fernet(cred_key.encode())
                     decrypted = f.decrypt(cred_row.encrypted_email.encode()).decode()
                     masked = _mask_email(decrypted)
                 else:
@@ -509,7 +509,8 @@ async def save_credential(site_name: str, body: CredentialUpdate, db: DBSession)
         raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
     if not SITE_CONFIGS[site_name].get("requires_login", False):
         raise HTTPException(status_code=400, detail=f"Site {site_name} does not require login.")
-    if not settings.CREDENTIAL_KEY:
+    cred_key = settings.CREDENTIAL_KEY.get_secret_value()
+    if not cred_key:
         raise HTTPException(
             status_code=400,
             detail="CREDENTIAL_KEY is not set. Add a Fernet key to your .env file.",
@@ -517,7 +518,7 @@ async def save_credential(site_name: str, body: CredentialUpdate, db: DBSession)
 
     from cryptography.fernet import Fernet
 
-    f = Fernet(settings.CREDENTIAL_KEY.encode())
+    f = Fernet(cred_key.encode())
     enc_email = f.encrypt(body.email.encode()).decode()
     enc_pass = f.encrypt(body.password.encode()).decode()
 

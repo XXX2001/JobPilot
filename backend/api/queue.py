@@ -249,6 +249,6 @@ async def enrich_job_description(match_id: int, db: DBSession, request: Request)
 
     except HTTPException:
         raise
-    except Exception as exc:
-        logger.warning("Failed to enrich description for match_id=%d: %s", match_id, exc)
-        raise HTTPException(status_code=502, detail=f"Enrichment failed: {exc}")
+    except Exception:
+        logger.warning("Failed to enrich description for match_id=%d", match_id, exc_info=True)
+        raise HTTPException(status_code=502, detail="Enrichment failed")

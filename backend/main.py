@@ -53,6 +53,8 @@ async def lifespan(app: FastAPI):
         from backend.llm.cv_modifier import CVModifier
         from backend.llm.gemini_client import GeminiClient
         from backend.llm.job_analyzer import JobAnalyzer
+        from backend.matching.embedder import Embedder
+        from backend.matching.fit_engine import FitEngine
         from backend.matching.matcher import JobMatcher
         from backend.scheduler.morning_batch import MorningBatchRunner
         from backend.scraping.adaptive_scraper import AdaptiveScraper
@@ -98,6 +100,8 @@ async def lifespan(app: FastAPI):
             matcher=matcher,
             cv_pipeline=cv_pipeline,
             db_factory=AsyncSessionLocal,
+            fit_engine=FitEngine(),
+            embedder=Embedder(gemini_client=gemini),
         )
 
         # Store on app.state for dependency injection

@@ -42,16 +42,6 @@ except Exception:
         pass
 
 
-try:
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore
-    from apscheduler.triggers.cron import CronTrigger  # type: ignore
-
-    _APSCHEDULER_AVAILABLE = True
-except ImportError:
-    _APSCHEDULER_AVAILABLE = False
-    AsyncIOScheduler = None  # type: ignore
-    CronTrigger = None  # type: ignore
-
 def _extract_json_list(value: Any, key: str) -> list[str]:
     """Extract a list from a JSON column that may be a list or a dict.
 
@@ -118,7 +108,6 @@ class MorningBatchRunner:
         self._matcher = matcher
         self._cv_pipeline = cv_pipeline
         self._db_factory = db_factory
-        self._scheduler = AsyncIOScheduler() if _APSCHEDULER_AVAILABLE else None
         self._fit_engine = fit_engine or FitEngine()
         self._embedder = embedder
         self._cv_parser = CVParser()

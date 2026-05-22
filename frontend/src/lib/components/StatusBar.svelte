@@ -1,4 +1,8 @@
 <script lang="ts">
+	// TODO FE-01: This handler reads message types ("scraping_progress", "matching_progress",
+	// "tailoring_progress") that the backend NEVER emits — backend uses *_status. Also reads
+	// msg.data?.{source,found,matched,company,message} which don't exist in the typed models.
+	// See backend/api/ws_models.py for the actual wire contract. Fix in the FE-bugs follow-up PR.
 	import { messages, wsStatus } from '$lib/stores/websocket';
 	import { derived } from 'svelte/store';
 	import { getBatchMessage } from '$lib/utils/easterEggs';

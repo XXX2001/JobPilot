@@ -49,6 +49,10 @@
 		}
 	}
 
+	// TODO FE-12: This handler NEVER sends the file's bytes — it builds `uploads/${file.name}`
+	// and PUTs the string path to /api/settings/profile. The backend gets a path that points
+	// nowhere on the server's disk. Fix in the FE-bugs follow-up PR (needs a new backend
+	// endpoint /api/documents/cv that accepts multipart/form-data).
 	async function handleFileUpload(file: File) {
 		if (!file.name.endsWith('.tex')) {
 			error = 'Please upload a .tex file.';

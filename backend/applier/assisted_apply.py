@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
-from backend.applier import RESULT_ASSISTED, RESULT_CANCELLED
+from backend.applier import RESULT_ASSISTED, RESULT_FAILED
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import settings
 from backend.security.sanitizer import sanitize_url
@@ -185,12 +185,14 @@ class AssistedApplyStrategy:
                 pass
             # Do NOT return a success "assisted" result — the agent
             # never finished pre-filling, so there is nothing for the
-            # user to review. Surface the failure to the caller.
+            # user to review. Surface the failure to the caller. This
+            # is a crash, not a user/limit cancellation, so the status
+            # is RESULT_FAILED (not RESULT_CANCELLED).
             return ApplicationResult(
-                status=RESULT_CANCELLED,
+                status=RESULT_FAILED,
                 method="assisted",
                 message=(
-                    "Assisted apply failed before form pre-fill completed: "
+                    "Assisted apply crashed before form pre-fill completed: "
                     f"{exc}"
                 ),
             )

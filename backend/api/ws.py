@@ -66,29 +66,17 @@ class ConnectionManager:
 
     @staticmethod
     def _encode(message: Any) -> str:
-        """Serialize *message* to JSON.
+        """Serialize a wire-message model to JSON.
 
-        Accepts (in priority order):
-          1. A Pydantic ``BaseModel`` (uses ``model_dump_json``).
-          2. A ``dict`` already shaped like a wire message (json.dumps).
-          3. Any other JSON-serializable value (json.dumps with default=str).
-
-        All outgoing payloads SHOULD be Pydantic models from ``ws_models`` —
-        the dict path exists only as a defensive fallback for legacy
-        callers and the reconnect-replay of ``runner.last_status``.
+        Every payload sent over the WebSocket MUST be a Pydantic model from
+        ``ws_models`` (which provides ``model_dump_json``). Callers that
+        previously passed raw ``dict``s should construct the matching model
+        instead. The runtime contract is enforced by the ``model_dump_json``
+        call; the parameter type is ``Any`` because ``ws_models.BaseModel``
+        carries a stubbed fallback class that pyright cannot reconcile with
+        ``pydantic.BaseModel`` at type-check time.
         """
-        dump = getattr(message, "model_dump_json", None)
-        if callable(dump):
-            try:
-                result = dump()
-                if isinstance(result, str):
-                    return result
-            except Exception:
-                pass
-        try:
-            return json.dumps(message)
-        except Exception:
-            return json.dumps(message, default=str)
+        return message.model_dump_json()
 
     async def broadcast(self, message: Any) -> None:
         payload = self._encode(message)
@@ -122,7 +110,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         app = websocket.app if hasattr(websocket, "app") else None
         runner = getattr(getattr(app, "state", None), "batch_runner", None) if app else None
         if runner and runner.running and runner.last_status:
-            await websocket.send_text(json.dumps(runner.last_status))
+            await websocket.send_text(manager._encode(runner.last_status))
     except Exception:
         pass
     try:

@@ -42,6 +42,28 @@ class Settings(BaseSettings):
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
     APPLY_TIER1_ENABLED: bool = Field(True, env="APPLY_TIER1_ENABLED")
 
+    def is_configured(self, field_name: str) -> bool:
+        """Return True if *field_name* holds a real, non-placeholder value.
+
+        Centralises the "is this credential set?" check so callers don't
+        have to know whether the underlying attribute is a plain ``str`` or
+        a ``SecretStr`` (a SecretStr instance is never equal to a plain
+        string, so naive ``value not in ("", "placeholder")`` comparisons
+        always return True — masking missing credentials).
+        """
+        raw = getattr(self, field_name, None)
+        if raw is None:
+            return False
+        if hasattr(raw, "get_secret_value"):
+            try:
+                raw = raw.get_secret_value()
+            except Exception:
+                return False
+        if not isinstance(raw, str):
+            # Unexpected non-string scalar — treat truthy as configured.
+            return bool(raw)
+        return raw not in ("", "placeholder")
+
 
 settings = Settings()
 

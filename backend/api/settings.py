@@ -314,20 +314,18 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
 async def get_sources() -> SourcesOut:
     """Return which API sources are configured (keys masked)."""
     adzuna_app_id = settings.ADZUNA_APP_ID
-    adzuna_key = settings.ADZUNA_APP_KEY.get_secret_value()
-    gemini_key = settings.GOOGLE_API_KEY.get_secret_value()
-    placeholder = ("", "placeholder")
+    adzuna_id_set = settings.is_configured("ADZUNA_APP_ID")
+    adzuna_key_set = settings.is_configured("ADZUNA_APP_KEY")
+    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
     return SourcesOut(
         adzuna=SourceProviderStatus(
-            configured=bool(
-                adzuna_app_id not in placeholder and adzuna_key not in placeholder
-            ),
+            configured=bool(adzuna_id_set and adzuna_key_set),
             app_id_hint=(
-                (adzuna_app_id[:4] + "****") if adzuna_app_id not in placeholder else None
+                (adzuna_app_id[:4] + "****") if adzuna_id_set else None
             ),
         ),
         gemini=GeminiProviderStatus(
-            configured=bool(gemini_key not in placeholder),
+            configured=gemini_key_set,
         ),
     )
 
@@ -348,10 +346,9 @@ async def update_sources(body: SourcesUpdate) -> SourcesUpdateResponse:
 @router.get("/status", response_model=SetupStatus)
 async def get_setup_status(db: DBSession):
     """Return setup completeness flags."""
-    gemini_key_set = bool(getattr(settings, "GOOGLE_API_KEY", "") not in (None, "", "placeholder"))
-    adzuna_key_set = bool(
-        getattr(settings, "ADZUNA_APP_ID", "") not in (None, "", "placeholder")
-        and getattr(settings, "ADZUNA_APP_KEY", "") not in (None, "", "placeholder")
+    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
+    adzuna_key_set = settings.is_configured("ADZUNA_APP_ID") and settings.is_configured(
+        "ADZUNA_APP_KEY"
     )
     tectonic_name = "tectonic.exe" if platform.system() == "Windows" else "tectonic"
     tectonic_found = (PROJECT_ROOT / "bin" / tectonic_name).exists() or shutil.which(

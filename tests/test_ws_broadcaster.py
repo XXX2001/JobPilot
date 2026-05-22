@@ -67,21 +67,6 @@ def test_broadcast_encodes_pydantic_model_as_json():
     assert msg.type == "status"
 
 
-def test_broadcast_encodes_legacy_dict_for_back_compat():
-    """Dicts still serialize — used by the reconnect-replay of last_status."""
-    mgr = ConnectionManager()
-    fake = _FakeWS()
-    mgr.active_connections["c1"] = fake  # type: ignore[assignment]
-
-    asyncio.run(
-        mgr.broadcast({"type": "status", "message": "raw", "progress": 0.1})
-    )
-
-    msg = _validate_payload(fake.sent[0])
-    assert isinstance(msg, Status)
-    assert msg.message == "raw"
-
-
 def test_send_to_unknown_client_is_noop():
     mgr = ConnectionManager()
     # No connection registered — must not raise.

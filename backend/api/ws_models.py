@@ -25,57 +25,106 @@ except Exception:
         return float
 
 
+class Status(BaseModel):
+    """Generic batch-progress status message (Phase 1/2/3 narration)."""
+
+    type: Literal["status"] = "status"
+    message: str
+    progress: float = 0.0
+
+
+class JobAssessment(BaseModel):
+    """Per-job fit assessment broadcast after the matching/grading step.
+
+    NOTE: legacy wire format used `type="job_progress"`. We keep that
+    discriminator so the value-on-the-wire is unchanged for any external
+    listener; the Python class name is updated to reflect intent.
+    """
+
+    type: Literal["job_progress"] = "job_progress"
+    match_id: int
+    ats_score: float
+    gap_severity: float
+    decision: str
+    covered: list[str]
+    gaps: list[dict]
+
+
 class ScrapingStatus(BaseModel):
-    type: Literal["scraping_status"]
+    type: Literal["scraping_status"] = "scraping_status"
     message: str
     source: str
     progress: float
 
 
 class MatchingStatus(BaseModel):
-    type: Literal["matching_status"]
+    type: Literal["matching_status"] = "matching_status"
     count: int
 
 
 class TailoringStatus(BaseModel):
-    type: Literal["tailoring_status"]
+    type: Literal["tailoring_status"] = "tailoring_status"
     job_id: int
     progress: float
 
 
 class ApplyReview(BaseModel):
-    type: Literal["apply_review"]
+    type: Literal["apply_review"] = "apply_review"
     job_id: int
     filled_fields: dict[str, str]
     screenshot_base64: str | None = None
 
 
 class ApplyResult(BaseModel):
-    type: Literal["apply_result"]
+    type: Literal["apply_result"] = "apply_result"
     job_id: int
     status: str
     method: str
 
 
 class LoginRequired(BaseModel):
-    type: Literal["login_required"]
+    type: Literal["login_required"] = "login_required"
     site: str
     browser_window_title: str
 
 
 class LoginConfirmed(BaseModel):
-    type: Literal["login_confirmed"]
+    type: Literal["login_confirmed"] = "login_confirmed"
     site: str
 
 
+class CaptchaDetected(BaseModel):
+    """Emitted when the scraper or applier hits a CAPTCHA / block page."""
+
+    type: Literal["captcha_detected"] = "captcha_detected"
+    site: str
+    job_id: int | None = None
+    message: str
+
+
+class CaptchaResolved(BaseModel):
+    """Emitted when the user clears the CAPTCHA (or we time out)."""
+
+    type: Literal["captcha_resolved"] = "captcha_resolved"
+    job_id: int | None = None
+
+
+class Pong(BaseModel):
+    """Server reply to a client `ping`."""
+
+    type: Literal["pong"] = "pong"
+
+
 class ErrorMessage(BaseModel):
-    type: Literal["error"]
+    type: Literal["error"] = "error"
     message: str
     code: str
 
 
 WSMessage = Annotated[
     Union[
+        Status,
+        JobAssessment,
         ScrapingStatus,
         MatchingStatus,
         TailoringStatus,
@@ -83,6 +132,9 @@ WSMessage = Annotated[
         ApplyResult,
         LoginRequired,
         LoginConfirmed,
+        CaptchaDetected,
+        CaptchaResolved,
+        Pong,
         ErrorMessage,
     ],
     Field(discriminator="type"),
@@ -116,6 +168,8 @@ ClientMessage = Annotated[
 
 __all__ = [
     "WSMessage",
+    "Status",
+    "JobAssessment",
     "ScrapingStatus",
     "MatchingStatus",
     "TailoringStatus",
@@ -123,6 +177,9 @@ __all__ = [
     "ApplyResult",
     "LoginRequired",
     "LoginConfirmed",
+    "CaptchaDetected",
+    "CaptchaResolved",
+    "Pong",
     "ErrorMessage",
     "ClientMessage",
     "ConfirmSubmit",

@@ -34,6 +34,8 @@ except Exception:  # pragma: no cover - fallback for environments without fastap
             return None
 
 
+from backend.api.ws_models import JobAssessment, Pong, Status
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -62,12 +64,34 @@ class ConnectionManager:
     def disconnect(self, client_id: str) -> None:
         self.active_connections.pop(client_id, None)
 
-    async def broadcast(self, message) -> None:
-        try:
-            payload = message.model_dump_json()
-        except Exception:
-            payload = json.dumps(message)
+    @staticmethod
+    def _encode(message: Any) -> str:
+        """Serialize *message* to JSON.
 
+        Accepts (in priority order):
+          1. A Pydantic ``BaseModel`` (uses ``model_dump_json``).
+          2. A ``dict`` already shaped like a wire message (json.dumps).
+          3. Any other JSON-serializable value (json.dumps with default=str).
+
+        All outgoing payloads SHOULD be Pydantic models from ``ws_models`` —
+        the dict path exists only as a defensive fallback for legacy
+        callers and the reconnect-replay of ``runner.last_status``.
+        """
+        dump = getattr(message, "model_dump_json", None)
+        if callable(dump):
+            try:
+                result = dump()
+                if isinstance(result, str):
+                    return result
+            except Exception:
+                pass
+        try:
+            return json.dumps(message)
+        except Exception:
+            return json.dumps(message, default=str)
+
+    async def broadcast(self, message: Any) -> None:
+        payload = self._encode(message)
         to_remove: list[str] = []
         for cid, ws in list(self.active_connections.items()):
             try:
@@ -77,11 +101,8 @@ class ConnectionManager:
         for cid in to_remove:
             self.disconnect(cid)
 
-    async def send_to(self, client_id: str, message) -> None:
-        try:
-            payload = message.model_dump_json()
-        except Exception:
-            payload = json.dumps(message)
+    async def send_to(self, client_id: str, message: Any) -> None:
+        payload = self._encode(message)
         ws = self.active_connections.get(client_id)
         if not ws:
             return
@@ -118,7 +139,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     continue
                 msg_type = msg.get("type")
                 if msg_type == "ping":
-                    await websocket.send_text(json.dumps({"type": "pong"}))
+                    await websocket.send_text(Pong().model_dump_json())
                 elif msg_type in manager._message_handlers:
                     handler = manager._message_handlers[msg_type]
                     try:
@@ -131,8 +152,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         manager.disconnect(client_id)
 
 async def broadcast_status(message: str, progress: float = 0.0) -> None:
-    """Broadcast a status update to all connected WebSocket clients."""
-    await manager.broadcast({"type": "status", "message": message, "progress": progress})
+    """Broadcast a status update to all connected WebSocket clients.
+
+    Wraps the payload in a ``ws_models.Status`` so the wire format is
+    guaranteed to validate against the discriminated ``WSMessage`` union.
+    """
+    await manager.broadcast(Status(message=message, progress=progress))
 
 
 async def broadcast_job_assessment(
@@ -143,16 +168,21 @@ async def broadcast_job_assessment(
     covered: list[str],
     gaps: list[dict],
 ) -> None:
-    """Broadcast per-job fit assessment to all connected WebSocket clients."""
-    await manager.broadcast({
-        "type": "job_progress",
-        "match_id": match_id,
-        "ats_score": round(ats_score, 1),
-        "gap_severity": round(gap_severity, 3),
-        "decision": decision,
-        "covered": covered,
-        "gaps": gaps,
-    })
+    """Broadcast per-job fit assessment to all connected WebSocket clients.
+
+    Wraps the payload in a ``ws_models.JobAssessment`` (wire-format
+    discriminator stays ``"job_progress"`` for backward compatibility).
+    """
+    await manager.broadcast(
+        JobAssessment(
+            match_id=match_id,
+            ats_score=round(ats_score, 1),
+            gap_severity=round(gap_severity, 3),
+            decision=decision,
+            covered=covered,
+            gaps=gaps,
+        )
+    )
 
 
 __all__ = ["ConnectionManager", "manager", "router", "broadcast_status", "broadcast_job_assessment"]

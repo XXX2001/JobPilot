@@ -51,6 +51,26 @@ class QueueOut(BaseModel):
     total: int
 
 
+class BatchStatusOut(BaseModel):
+    running: bool
+    last_status: Optional[str] = None
+
+
+class RefreshResponse(BaseModel):
+    status: str
+    message: str
+
+
+class MatchStatusUpdateOut(BaseModel):
+    match_id: int
+    status: str
+
+
+class EnrichmentResponse(BaseModel):
+    status: str  # "enriched" | "no_change"
+    description: str
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -96,20 +116,20 @@ async def get_queue(db: DBSession):
     return QueueOut(matches=matches, total=len(matches))
 
 
-@router.get("/status")
-async def get_batch_status(request: Request):
+@router.get("/status", response_model=BatchStatusOut)
+async def get_batch_status(request: Request) -> BatchStatusOut:
     """Return the current batch running state and last progress message."""
     runner = getattr(request.app.state, "batch_runner", None)
     if runner is None:
-        return {"running": False, "last_status": None}
-    return {
-        "running": runner.running,
-        "last_status": runner.last_status,
-    }
+        return BatchStatusOut(running=False, last_status=None)
+    return BatchStatusOut(
+        running=runner.running,
+        last_status=runner.last_status,
+    )
 
 
-@router.post("/refresh")
-async def refresh_queue(request: Request, db: DBSession):  # noqa: ARG001
+@router.post("/refresh", response_model=RefreshResponse)
+async def refresh_queue(request: Request, db: DBSession) -> RefreshResponse:  # noqa: ARG001
     """Trigger a new morning batch run immediately (manual re-run).
 
     Runs the batch in a background task so the endpoint returns promptly.
@@ -130,7 +150,7 @@ async def refresh_queue(request: Request, db: DBSession):  # noqa: ARG001
             logger.error("Batch run error: %s", exc)
 
     asyncio.create_task(_run())
-    return {"status": "started", "message": "Job search triggered in background"}
+    return RefreshResponse(status="started", message="Job search triggered in background")
 
 
 @router.get("/{match_id}", response_model=QueueMatchOut)
@@ -165,8 +185,8 @@ async def get_match(match_id: int, db: DBSession):
     )
 
 
-@router.patch("/{match_id}/skip")
-async def skip_match(match_id: int, db: DBSession):
+@router.patch("/{match_id}/skip", response_model=MatchStatusUpdateOut)
+async def skip_match(match_id: int, db: DBSession) -> MatchStatusUpdateOut:
     """Mark a queue match as skipped."""
     stmt = select(JobMatch).where(JobMatch.id == match_id)
     match = (await db.execute(stmt)).scalar_one_or_none()
@@ -174,15 +194,17 @@ async def skip_match(match_id: int, db: DBSession):
         raise HTTPException(status_code=404, detail=f"Match {match_id} not found")
     match.status = "skipped"
     await db.commit()
-    return {"match_id": match_id, "status": "skipped"}
+    return MatchStatusUpdateOut(match_id=match_id, status="skipped")
 
 
 class StatusUpdate(BaseModel):
     status: str
 
 
-@router.patch("/{match_id}/status")
-async def update_match_status(match_id: int, body: StatusUpdate, db: DBSession):
+@router.patch("/{match_id}/status", response_model=MatchStatusUpdateOut)
+async def update_match_status(
+    match_id: int, body: StatusUpdate, db: DBSession
+) -> MatchStatusUpdateOut:
     """Update the status of a queue match (new, skipped, applying, applied)."""
     allowed = {"new", "skipped", "applying", "applied", "rejected"}
     if body.status not in allowed:
@@ -195,11 +217,13 @@ async def update_match_status(match_id: int, body: StatusUpdate, db: DBSession):
         raise HTTPException(status_code=404, detail=f"Match {match_id} not found")
     match.status = body.status
     await db.commit()
-    return {"match_id": match_id, "status": body.status}
+    return MatchStatusUpdateOut(match_id=match_id, status=body.status)
 
 
-@router.post("/{match_id}/enrich-description")
-async def enrich_job_description(match_id: int, db: DBSession, request: Request):
+@router.post("/{match_id}/enrich-description", response_model=EnrichmentResponse)
+async def enrich_job_description(
+    match_id: int, db: DBSession, request: Request
+) -> EnrichmentResponse:
     """Fetch the full job description from the job URL using Gemini.
 
     Used on-demand when a job's stored description is short or missing.
@@ -243,9 +267,9 @@ async def enrich_job_description(match_id: int, db: DBSession, request: Request)
             logger.info(
                 "Enriched description for job_id=%d (%d chars)", job.id, len(job.description)
             )
-            return {"status": "enriched", "description": job.description}
+            return EnrichmentResponse(status="enriched", description=job.description)
         else:
-            return {"status": "no_change", "description": job.description or ""}
+            return EnrichmentResponse(status="no_change", description=job.description or "")
 
     except HTTPException:
         raise

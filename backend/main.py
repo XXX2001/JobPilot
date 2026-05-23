@@ -271,6 +271,8 @@ try:
     import backend.api.applications as applications  # type: ignore
     import backend.api.applications_export as applications_export  # type: ignore
     import backend.api.documents as documents  # type: ignore
+    import backend.api.correspondence as correspondence  # type: ignore
+    import backend.api.gmail as gmail  # type: ignore
     import backend.api.gmail_auth as gmail_auth  # type: ignore
     import backend.api.jobs as jobs  # type: ignore
     import backend.api.queue as queue  # type: ignore
@@ -286,6 +288,8 @@ try:
     app.include_router(api_settings.router)
     app.include_router(analytics.router)
     app.include_router(gmail_auth.router)
+    app.include_router(gmail.router)
+    app.include_router(correspondence.router)
     # ws.py is present but may not register routes yet
     app.include_router(ws.router)
 except Exception as e:

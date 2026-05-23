@@ -4,6 +4,40 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## 2026-05-23 — NX sprint (nx-1, nx-2)
+
+**Scope.** Two PRs covering the remaining improvement items from the 2026-05-23 report's Top-10 list that don't need new infrastructure: an apply-flow finite-state-machine extract (nx-1) and a "Today" dashboard replacing the queue-as-home (nx-2). Gmail Phase 1 is owned by the product owner separately; the `scan_overdue` periodic trigger remains deferred (no scheduler in current architecture).
+
+**Outcomes.**
+- **Tests:** 362 passed / 0 failed / 7 skipped (was 341/0/7 at sprint start — +21 new tests)
+- **Pyright (basic mode):** 39 errors / 8 warnings — backend errors *improved by one* (the `union-attr` ignore on `browser.stop()` is gone after typing `ApplyContext.browser: Optional[BrowserSession]`); the +1 warning is the same `reportUnsupportedDunderAll` pattern that already covers the other `api/__init__.py` entries (now extended to `"today"`).
+- **Frontend:** 0 TS errors, 0 svelte-check errors, 1 pre-existing a11y warning unchanged.
+
+### nx-1 — Apply-flow FSM extract
+
+[`backend/applier/state.py`](backend/applier/state.py), [`backend/applier/recorder.py`](backend/applier/recorder.py), [`backend/applier/engine.py`](backend/applier/engine.py), [`tests/test_apply_state.py`](tests/test_apply_state.py)
+- New `Statechart` driver in `backend/applier/state.py` — plain Python dataclasses + an async `run(ctx) -> (status, method, message)` driver. No third-party FSM library.
+- 10 states: `Reserved → CaptchaCheck → Filling → AwaitingConfirm → Submitting → Recording → {Applied | Cancelled | Failed | RemoteSubmittedLocalFailed}`. The four middle states are wired as pass-through hooks today (the strategy internals still do the actual work); they exist for observability and future per-state interception.
+- New `backend/applier/recorder.py` — `ApplicationRecorder` collaborator extracted from `engine.py`, consolidating `_record_application` + `release_reserved_slot` in one place.
+- Compensation paths preserved exactly: `Cancelled` → release slot; `Failed` → release + close browser; `RemoteSubmittedLocalFailed` → record `ApplicationEvent(event_type="db_write_failed")`. The RSLF condition was broadened to fire on any exception from the recorder after a successful remote-submit (not just `ApplicationRecordError`).
+- 16 new tests in `tests/test_apply_state.py` covering driver semantics, every terminal path, idempotent compensation, and a 3-test pipeline walk through every middle state.
+- **Deferred to a follow-up:** full collapse of `auto_apply.py` / `assisted_apply.py` (currently 439 + 287 LOC of 80% duplication) into thin "build state graph + run" orchestrators. The blocker is the existing tests in `test_apply_engine.py` that reference strategy internals — needs a coordinated test-and-strategy rewrite, not part of this sprint.
+- Merge commit `b12c43f` (`Merge nx-1-apply-flow-fsm`).
+
+### nx-2 — Today dashboard
+
+[`backend/api/today.py`](backend/api/today.py), [`backend/models/user.py`](backend/models/user.py), [`alembic/versions/e3a1f2b8c9d7_add_last_dashboard_seen_at_to_userprofile.py`](alembic/versions/e3a1f2b8c9d7_add_last_dashboard_seen_at_to_userprofile.py), [`frontend/src/routes/+page.svelte`](frontend/src/routes/+page.svelte), [`frontend/src/routes/queue/+page.svelte`](frontend/src/routes/queue/+page.svelte), [`frontend/src/lib/components/{NewMatchesFeed,BlockedActionsStrip,WeekStats}.svelte`](frontend/src/lib/components/), [`tests/test_today.py`](tests/test_today.py)
+- New `GET /api/today` returning `TodayOut` with three sections: `new_matches`, `blocked_actions`, `week_stats`. Single DB transaction reads `UserProfile.last_dashboard_seen_at`, computes all counts, then commits the new timestamp — no race between two fast calls.
+- **New matches** grouped High-confidence (≥80) / Worth reviewing (60-79) / Skipped automatically (<60). "Since last visit" = since `last_dashboard_seen_at`, falling back to "last 24 h" on first load.
+- **Blocked actions** narrowly defined: (a) sites with `SiteCredential` rows that lack a valid session per `BrowserSessionManager`, (b) applications in `pending`/`awaiting_submit`, (c) `JobMatch.status='selected'` matches >24 h old with no `Application` row.
+- **Week stats**: applications submitted (7-day rolling), daily-limit usage today, response rate placeholder (`"— (requires Gmail integration)"` until Gmail Phase 1 lands).
+- The existing queue view moves to `/queue` (pure relocation; behavior identical). Layout nav gets a "Queue" link; the Today page has a "Classic queue →" link.
+- New Alembic migration `e3a1f2b8c9d7` adds nullable `UserProfile.last_dashboard_seen_at: DateTime` column.
+- 5 new tests cover status, response shape, empty-state per section, and the response-rate placeholder string.
+- Merge commit `3415256` (`Merge nx-2-today-dashboard`).
+
+---
+
 ## 2026-05-23 — Quick-wins sprint (qw-1 .. qw-7)
 
 **Scope.** 7 PRs landed in one sprint, each designed to ship in a day or less. The sprint targeted the top-7 forward-looking improvements from the 2026-05-23 improvements report: two dead-code deletions, two backend behaviour gaps (CV upload bytes + upsert safety), two user-facing features (daily-limit meter + follow-up reminders), one data-portability feature (CSV export), and one ergonomics win (global hotkeys). Every PR was self-contained with its own tests and frontend wire-up; no stacking dependencies between PRs.

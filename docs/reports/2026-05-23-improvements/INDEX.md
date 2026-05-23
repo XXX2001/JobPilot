@@ -32,8 +32,8 @@ Ordered by combination of **user value** × **effort to ship**.
 | 6 | **PG-3** | Application portfolio CSV/PDF export *(Shipped 2026-05-23)* | PG-3 | S | Required for unemployment-benefit reporting in EU. Pure read-side join. |
 | 7 | **BE-R3** | `_upsert_singleton` helper for settings endpoints *(Shipped 2026-05-23)* | BE-R3 | S | Same field-by-field upsert × 2 today. Prevents the exact bug fixed in PR-10 (F-Q4 bonus). |
 | 8 | **PG-INT-1** | Gmail integration Phase 1 (read-only sync) | PG-Int-1 | M | Already designed in [`../2026-05-22-audit/03-gmail-integration-design.md`](../2026-05-22-audit/03-gmail-integration-design.md). 3× user-perceived value of any other single feature. |
-| 9 | **UX-BET** | "Today" dashboard replaces raw queue as `/` | UX-3 | M | Re-frames product from "tool I trigger" to "ritual I check daily". Earns the open-tab. |
-| 10 | **BE-R4** | Extract apply-flow state machine (`backend/applier/state.py`) | BE-1bet | L | Deletes ~400 LOC, eliminates the "did we release/close/rollback?" bug class. Foundation for everything else apply-side. |
+| 9 | **UX-BET** | "Today" dashboard replaces raw queue as `/` *(Shipped 2026-05-23)* | UX-3 | M | Re-frames product from "tool I trigger" to "ritual I check daily". Earns the open-tab. |
+| 10 | **BE-R4** | Extract apply-flow state machine (`backend/applier/state.py`) *(Shipped 2026-05-23 — foundation; strategy collapse deferred to follow-up sprint)* | BE-1bet | L | Deletes ~400 LOC, eliminates the "did we release/close/rollback?" bug class. Foundation for everything else apply-side. |
 
 ---
 

@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+import re
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
@@ -115,6 +117,11 @@ class SetupStatus(BaseModel):
     base_cv_uploaded: bool
     setup_complete: bool
 
+
+class CvUploadResponse(BaseModel):
+    path: str
+    filename: str
+    size_bytes: int
 
 class SourceProviderStatus(BaseModel):
     configured: bool
@@ -386,6 +393,105 @@ async def get_setup_status(db: DBSession):
         tectonic_found=bool(tectonic_found),
         base_cv_uploaded=base_cv_uploaded,
         setup_complete=setup_complete,
+    )
+
+
+_ALLOWED_CV_EXTENSIONS = {".tex", ".cls"}
+_MAX_CV_SIZE_BYTES = 1 * 1024 * 1024  # 1 MB
+
+def _sanitize_cv_filename(raw_filename: str) -> str:
+    """Slug a user-supplied filename, preserving extension.
+
+    Raises ValueError if the name contains path-traversal sequences before
+    or after slugging, or if the slugged stem is empty.
+    """
+    # Defence layer 1: reject any input containing '..' or a directory separator
+    if ".." in raw_filename or "/" in raw_filename or "\\" in raw_filename:
+        raise ValueError("Path traversal detected in filename")
+
+    p = Path(raw_filename)
+    stem = p.stem
+    suffix = p.suffix.lower()  # normalise extension case
+
+    # Slug the stem: replace anything that is not alphanumeric / . / - / _
+    slug = re.sub(r"[^a-zA-Z0-9._\-]", "_", stem)
+    if not slug.replace("_", ""):
+        # stem is all underscores (was all special chars) — reject
+        raise ValueError("Filename is empty after sanitisation")
+
+    return slug + suffix
+
+
+@router.post("/profile/cv-upload", response_model=CvUploadResponse)
+async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResponse:
+    """Accept a multipart .tex/.cls upload, persist it, and update UserProfile.base_cv_path."""
+    raw_filename = file.filename or ""
+
+    # --- Path-traversal guard (pre-slug) ---
+    if ".." in raw_filename or "/" in raw_filename or "\\" in raw_filename:
+        raise HTTPException(status_code=400, detail="Filename contains path-traversal sequences.")
+
+    # --- Extension check ---
+    ext = Path(raw_filename).suffix.lower()
+    if ext not in _ALLOWED_CV_EXTENSIONS:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(sorted(_ALLOWED_CV_EXTENSIONS))}",
+        )
+
+    # --- Read bytes (check size AFTER reading — file.size can be None) ---
+    data = await file.read()
+    if len(data) > _MAX_CV_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(data)} bytes). Maximum allowed size is {_MAX_CV_SIZE_BYTES} bytes (1 MB).",
+        )
+
+    # --- Sanitise filename ---
+    try:
+        safe_name = _sanitize_cv_filename(raw_filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # --- Write to data/templates/ ---
+    templates_dir = DATA_DIR / "templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = templates_dir / safe_name
+
+    # Defence layer 2: verify resolved path is a descendant of templates_dir
+    try:
+        dest.resolve().relative_to(templates_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Resolved path escapes templates directory.")
+
+    dest.write_bytes(data)
+
+    # --- Update UserProfile.base_cv_path ---
+    relative_path = f"templates/{safe_name}"
+    stmt = select(UserProfile).where(UserProfile.id == 1)
+    result = await db.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if profile is None:
+        profile = UserProfile(
+            id=1,
+            full_name="",
+            email="",
+            base_cv_path=str(dest),
+        )
+        db.add(profile)
+    else:
+        profile.base_cv_path = str(dest)
+        profile.updated_at = _utc_now()
+
+    await db.commit()
+    logger.info("CV uploaded: path=%s size=%d", dest, len(data))
+
+    return CvUploadResponse(
+        path=relative_path,
+        filename=safe_name,
+        size_bytes=len(data),
     )
 
 

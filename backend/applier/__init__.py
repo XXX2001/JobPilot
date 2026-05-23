@@ -73,6 +73,19 @@ SUCCESS_RESULT_STATUSES: frozenset[str] = frozenset({
 })
 
 
+class ApplicationRecordError(RuntimeError):
+    """Raised when persisting an :class:`Application` row fails.
+
+    The remote application submission may have already succeeded — we
+    only failed to write the local DB record. Callers must surface a
+    *failure* result to the user so they don't believe the submission
+    was tracked; the reserved daily-limit placeholder should be marked
+    ``cancelled``/``failed`` rather than left as ``pending``.
+
+    See the EH-07 typed-exception guideline in the standards backlog.
+    """
+
+
 def normalize_result_status(result_status: str) -> str:
     """Map a strategy ``ApplicationResult.status`` to the canonical
     persisted :class:`Application.status` value.
@@ -91,6 +104,7 @@ def normalize_result_status(result_status: str) -> str:
 
 __all__ = [
     "APPLICATION_STATUSES",
+    "ApplicationRecordError",
     "LEGACY_APPLIED_ALIASES",
     "SUCCESS_STATUSES",
     "SUCCESS_RESULT_STATUSES",

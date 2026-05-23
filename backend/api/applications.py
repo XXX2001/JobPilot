@@ -409,7 +409,18 @@ async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request
 
         try:
             additional_answers = _json.dumps(profile.additional_info)
-        except Exception:
+        except (TypeError, ValueError) as exc:
+            # EH-03: surface bad profile data instead of silently dropping it.
+            # additional_info is a JSON column but may contain non-serializable
+            # objects (e.g. datetime) that slipped past upstream validation.
+            logger.warning(
+                "Could not serialize UserProfile.additional_info for profile_id=%s "
+                "match_id=%d: %s — falling back to empty string",
+                getattr(profile, "id", "?"),
+                match_id,
+                exc,
+                exc_info=True,
+            )
             additional_answers = ""
 
     # Inject profile fields into additional_answers so the agent can use them
@@ -418,7 +429,17 @@ async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request
 
         try:
             answers_dict = _json2.loads(additional_answers) if additional_answers else {}
-        except Exception:
+        except (TypeError, ValueError, _json2.JSONDecodeError) as exc:
+            # EH-03: surface malformed JSON so we can debug bad profile/credential
+            # data instead of silently coercing to {} and losing custom answers.
+            logger.warning(
+                "Could not parse additional_answers JSON for profile_id=%s "
+                "match_id=%d: %s — falling back to empty dict",
+                getattr(profile, "id", "?"),
+                match_id,
+                exc,
+                exc_info=True,
+            )
             answers_dict = {}
         changed = False
         if profile.linkedin_url and "linkedin_url" not in answers_dict:

@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from urllib.parse import urlparse
 
+from backend.applier import RESULT_ASSISTED, RESULT_CANCELLED
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import settings
 from backend.security.sanitizer import sanitize_url
@@ -175,15 +176,28 @@ class AssistedApplyStrategy:
             result = await agent.run()
             logger.info("[Tier 2 assisted] Agent completed for %s", apply_url)
         except Exception as exc:
-            logger.error("Assisted apply agent failed for %s: %s", apply_url, exc)
+            logger.exception(
+                "Assisted apply agent failed for %s: %s", apply_url, exc
+            )
             try:
                 await browser.stop()
             except Exception:
                 pass
+            # Do NOT return a success "assisted" result — the agent
+            # never finished pre-filling, so there is nothing for the
+            # user to review. Surface the failure to the caller.
+            return ApplicationResult(
+                status=RESULT_CANCELLED,
+                method="assisted",
+                message=(
+                    "Assisted apply failed before form pre-fill completed: "
+                    f"{exc}"
+                ),
+            )
 
         # Browser stays open — user reviews and submits manually
         return ApplicationResult(
-            status="assisted",
+            status=RESULT_ASSISTED,
             method="assisted",
             message=(
                 "Form pre-filled via Gemini agent. Please review the open browser "

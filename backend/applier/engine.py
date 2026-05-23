@@ -12,7 +12,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier import (
+    ApplicationRecordError,
     RESULT_CANCELLED,
+    RESULT_FAILED,
     SUCCESS_RESULT_STATUSES,
     normalize_result_status,
 )
@@ -158,12 +160,30 @@ class ApplicationEngine:
         # Persist application record — for non-manual modes this
         # *updates* the placeholder row reserved above; for manual
         # mode it inserts a fresh row.
-        await self._record_application(
-            db=db,
-            job_match_id=job_match_id,
-            result=result,
-            reserved_app_id=reserved_app_id,
-        )
+        try:
+            await self._record_application(
+                db=db,
+                job_match_id=job_match_id,
+                result=result,
+                reserved_app_id=reserved_app_id,
+            )
+        except ApplicationRecordError as exc:
+            # The remote apply may have already submitted, but we
+            # failed to persist the DB row. We MUST NOT report success
+            # to the caller; the user needs to know the local record is
+            # missing. Mark the reserved placeholder (if any) as
+            # cancelled so it doesn't permanently consume a daily slot.
+            if reserved_app_id is not None:
+                await self._release_reserved_slot(db, reserved_app_id)
+            return ApplicationResult(
+                status=RESULT_FAILED,
+                method=result.method,
+                message=(
+                    "Application may have been submitted to the remote site, "
+                    "but recording it locally failed: "
+                    f"{exc}. Please verify on the job site and retry if needed."
+                ),
+            )
 
         return result
 
@@ -327,8 +347,11 @@ class ApplicationEngine:
                 persisted_status,
             )
         except Exception as exc:
-            logger.error("Failed to record application: %s", exc)
+            logger.exception("Failed to record application")
             await db.rollback()
+            raise ApplicationRecordError(
+                "application was submitted but DB write failed"
+            ) from exc
 
 
 __all__ = [

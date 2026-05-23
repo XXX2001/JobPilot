@@ -137,7 +137,10 @@ async def test_engine_manual_apply_records_application():
     engine = _make_engine()
 
     db = AsyncMock(spec=AsyncSession)
-    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=0)  # can apply
+    # MANUAL mode skips reserve_slot entirely, so the only DB read is
+    # the JobMatch lookup inside _record_application. Returning None
+    # there is fine — the engine just doesn't flip a queue row.
+    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
     db.flush = AsyncMock()
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
@@ -154,6 +157,35 @@ async def test_engine_manual_apply_records_application():
     assert result.status == "manual"
     assert result.method == "manual"
     db.commit.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_engine_db_commit_failure_returns_failed():
+    """If _record_application can't persist, apply() must surface
+    a non-success status (EH-01)."""
+    engine = _make_engine()
+
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+    db.flush = AsyncMock()
+    db.rollback = AsyncMock()
+    db.add = MagicMock()
+    # Make commit blow up — simulates a DB-write failure after the
+    # webbrowser.open succeeded.
+    db.commit = AsyncMock(side_effect=RuntimeError("DB exploded"))
+
+    with patch("backend.applier.manual_apply.webbrowser.open"):
+        result = await engine.apply(
+            job_match_id=1,
+            mode=ApplyMode.MANUAL,
+            db=db,
+            apply_url="https://jobs.example.com/1",
+        )
+
+    # Engine must NOT claim success when the DB write failed.
+    assert result.status == "failed"
+    assert result.method == "manual"
+    db.rollback.assert_awaited()
 
 
 @pytest.mark.asyncio

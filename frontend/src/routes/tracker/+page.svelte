@@ -9,8 +9,10 @@
 	import { getEmptyState, getRejectionMilestone } from '$lib/utils/easterEggs';
 
 	let applications = $state<Application[]>([]);
+	let followUpApplications = $state<Application[]>([]);
 	let loading = $state(true);
 	let error = $state('');
+	let activeTab = $state<'all' | 'follow_up'>('all');
 
 	const appEmptyMessage = $derived(applications.length === 0 ? getEmptyState('applications') : '');
 	let milestoneToast = $state<{ message: string; emoji: string; isSpecial: boolean } | null>(null);
@@ -19,8 +21,14 @@
 		loading = true;
 		error = '';
 		try {
-			const data = await apiFetch<{ applications: Application[]; total: number }>('/api/applications');
-			applications = data.applications ?? [];
+			const [allData, fuData] = await Promise.all([
+				apiFetch<{ applications: Application[]; total: number }>('/api/applications'),
+				apiFetch<{ applications: Application[]; total: number }>(
+					'/api/applications?needs_follow_up=true'
+				)
+			]);
+			applications = allData.applications ?? [];
+			followUpApplications = fuData.applications ?? [];
 		} catch (e: any) {
 			error = e.message ?? 'Failed to load applications';
 		} finally {
@@ -77,6 +85,10 @@
 			if (statusMap[event_type]) {
 				handleUpdate(new CustomEvent('update', { detail: { id, status: statusMap[event_type] } }));
 			}
+			// If a follow_up event was logged, refresh follow-up list so the count badge updates.
+			if (event_type === 'follow_up') {
+				load();
+			}
 		} catch (err: any) {
 			error = err.message ?? 'Failed to add event';
 		}
@@ -112,6 +124,33 @@
 	</button>
 </div>
 
+<!-- Tabs -->
+<div class="flex gap-1 mb-4 border-b border-border">
+	<button
+		onclick={() => (activeTab = 'all')}
+		class="px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors {activeTab === 'all'
+			? 'bg-background border border-b-background border-border -mb-px text-foreground'
+			: 'text-muted-foreground hover:text-foreground'}"
+	>
+		All Applications
+	</button>
+	<button
+		onclick={() => (activeTab = 'follow_up')}
+		class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t-md transition-colors {activeTab === 'follow_up'
+			? 'bg-background border border-b-background border-border -mb-px text-foreground'
+			: 'text-muted-foreground hover:text-foreground'}"
+	>
+		Needs follow-up
+		{#if followUpApplications.length > 0}
+			<span
+				class="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-semibold bg-orange-500 text-white"
+			>
+				{followUpApplications.length}
+			</span>
+		{/if}
+	</button>
+</div>
+
 {#if error}
 	<div class="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2 mb-4">
 		<AlertCircle size={13} />
@@ -120,30 +159,57 @@
 	</div>
 {/if}
 
-{#if loading}
-	<div class="flex gap-3 h-80">
-		{#each Array(5) as _}
-			<div class="w-60 flex-shrink-0 bg-muted rounded-lg animate-pulse"></div>
-		{/each}
-	</div>
-{:else if applications.length === 0}
-	<div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
-		<FloatingEmoji emoji="📋" />
-		<p class="text-muted-foreground text-sm font-medium">{appEmptyMessage}</p>
-		<p class="text-muted-foreground text-xs">Apply to jobs from the Job Queue to see them here.</p>
-		<a
-			href="/"
-			class="mt-2 text-xs px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-		>
-			Go to Job Queue
-		</a>
-	</div>
+{#if activeTab === 'all'}
+	{#if loading}
+		<div class="flex gap-3 h-80">
+			{#each Array(5) as _}
+				<div class="w-60 flex-shrink-0 bg-muted rounded-lg animate-pulse"></div>
+			{/each}
+		</div>
+	{:else if applications.length === 0}
+		<div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
+			<FloatingEmoji emoji="📋" />
+			<p class="text-muted-foreground text-sm font-medium">{appEmptyMessage}</p>
+			<p class="text-muted-foreground text-xs">Apply to jobs from the Job Queue to see them here.</p>
+			<a
+				href="/"
+				class="mt-2 text-xs px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+			>
+				Go to Job Queue
+			</a>
+		</div>
+	{:else}
+		<div class="h-[calc(100vh-220px)]">
+			<KanbanBoard
+				{applications}
+				on:update={handleUpdate}
+				on:addEvent={handleAddEvent}
+			/>
+		</div>
+	{/if}
 {:else}
-	<div class="h-[calc(100vh-180px)]">
-		<KanbanBoard
-			{applications}
-			on:update={handleUpdate}
-			on:addEvent={handleAddEvent}
-		/>
-	</div>
+	<!-- Needs follow-up tab -->
+	{#if loading}
+		<div class="flex gap-3 h-80">
+			{#each Array(3) as _}
+				<div class="w-60 flex-shrink-0 bg-muted rounded-lg animate-pulse"></div>
+			{/each}
+		</div>
+	{:else if followUpApplications.length === 0}
+		<div class="flex flex-col items-center justify-center py-20 gap-3 text-center">
+			<FloatingEmoji emoji="✅" />
+			<p class="text-muted-foreground text-sm font-medium">All caught up!</p>
+			<p class="text-muted-foreground text-xs">
+				No applications are waiting for a follow-up right now.
+			</p>
+		</div>
+	{:else}
+		<div class="h-[calc(100vh-220px)]">
+			<KanbanBoard
+				applications={followUpApplications}
+				on:update={handleUpdate}
+				on:addEvent={handleAddEvent}
+			/>
+		</div>
+	{/if}
 {/if}

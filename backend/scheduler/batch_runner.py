@@ -174,6 +174,17 @@ class BatchRunner:
             min_score=float(settings_row.min_match_score),
         )
 
+        # ── Follow-up scan (lazy trigger) ────────────────────────────────
+        try:
+            from backend.applier.follow_up import scan_overdue  # noqa: PLC0415
+
+            _fu_count = await scan_overdue(db)
+            logger.info("Batch follow-up scan: %d event(s) created", _fu_count)
+        except Exception as _fu_exc:
+            logger.warning(
+                "follow_up.scan_overdue failed at batch start (non-fatal): %s", _fu_exc
+            )
+
         # ── Step 1: Scrape ───────────────────────────────────────────────
         await self._broadcast_and_track("Searching for jobs…", progress=0.05)
         location = filters.locations[0] if filters.locations else ""

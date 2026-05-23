@@ -35,12 +35,13 @@ def app_with_gmail(monkeypatch):
     # those tables before the smoke run so the smoke owns its world.
     async def _wipe():
         from sqlalchemy import delete
-        from backend.database import AsyncSessionLocal as _S
+        from backend.database import AsyncSessionLocal as _S, init_db as _init
         from backend.models.gmail import (
             ApplicationCorrespondence,
             GmailCredential,
             GmailMessage,
         )
+        await _init()  # ensure tables exist when smoke runs standalone
         async with _S() as session:
             await session.execute(delete(ApplicationCorrespondence))
             await session.execute(delete(GmailMessage))

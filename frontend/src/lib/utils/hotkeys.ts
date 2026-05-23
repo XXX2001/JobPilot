@@ -111,6 +111,7 @@ export function handle(event: KeyboardEvent): void {
   const inInput =
     focused instanceof HTMLInputElement ||
     focused instanceof HTMLTextAreaElement ||
+    focused instanceof HTMLSelectElement ||
     (focused instanceof HTMLElement && focused.isContentEditable);
 
   // In an input field, only Escape is intercepted (to blur the field).

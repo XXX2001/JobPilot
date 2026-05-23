@@ -76,6 +76,8 @@
 	let hotkeyHandle: BindingHandle | null = null;
 
 	onMount(() => {
+		// NOTE: Queue page + CVReviewPanel both register at route '/'.
+		// Each binding's action MUST self-guard on phase/panelPhase to avoid cross-firing.
 		hotkeyHandle = register('/', {
 			'1':         { label: 'Approve CV changes →',      action: () => { if (panelPhase === 'review') decide('approved'); } },
 			'2':         { label: 'Use base CV →',             action: () => { if (panelPhase === 'review') decide('base_cv'); } },

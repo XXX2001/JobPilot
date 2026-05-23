@@ -226,13 +226,16 @@
 		// On WS reconnect (e.g. after page refresh), re-sync batch status
 		unsubWsConnect = onWsConnect(syncBatchStatus);
 
+		// NOTE: Queue page + CVReviewPanel both register at route '/'.
+		// Each binding's action MUST self-guard on phase/panelPhase to avoid cross-firing.
 		hotkeyHandle = register('/', {
-			j:     { label: 'Move focus down',      action: focusNext },
-			k:     { label: 'Move focus up',        action: focusPrev },
-			a:     { label: 'Set focused card → Auto',   action: () => setFocusedMode('auto') },
-			m:     { label: 'Set focused card → Manual', action: () => setFocusedMode('manual') },
-			s:     { label: 'Set focused card → Skip',   action: () => setFocusedMode('skip') },
-			Enter: { label: 'Review & apply',        action: () => { if (activeMatches.length > 0 && phase === 'select') proceedToReview(); } }
+			j:      { label: 'Move focus down',      action: focusNext },
+			k:      { label: 'Move focus up',        action: focusPrev },
+			a:      { label: 'Set focused card → Auto',   action: () => setFocusedMode('auto') },
+			m:      { label: 'Set focused card → Manual', action: () => setFocusedMode('manual') },
+			s:      { label: 'Set focused card → Skip',   action: () => setFocusedMode('skip') },
+			Enter:  { label: 'Review & apply',        action: () => { if (activeMatches.length > 0 && phase === 'select') proceedToReview(); } },
+			Escape: { label: 'Clear card focus',      action: () => { if (phase === 'select') focusedIndex = -1; } }
 		}, { group: 'Job Queue' });
 	});
 

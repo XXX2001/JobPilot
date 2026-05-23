@@ -87,7 +87,7 @@ async def export_applications(
     rows = result.all()
 
     # ── Batch-fetch events, then find the most-recent per application ────────
-    app_ids = [app.id for app, _jm, _j in rows]
+    app_ids = [app.id for app, *_ in rows]
 
     # last_event_by_app: app_id → ApplicationEvent with greatest event_date
     last_event_by_app: dict[int, ApplicationEvent] = {}

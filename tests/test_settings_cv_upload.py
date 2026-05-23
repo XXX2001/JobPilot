@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import httpx
 import pytest
 from starlette.testclient import TestClient
 
@@ -17,7 +18,7 @@ def _tex_file(content: bytes = b"\\documentclass{article}\\begin{document}Hello\
     return ("cv.tex", content, "text/plain")
 
 
-def _upload(client: TestClient, filename: str, content: bytes, mimetype: str = "text/plain") -> object:
+def _upload(client: TestClient, filename: str, content: bytes, mimetype: str = "text/plain") -> httpx.Response:
     """POST a multipart upload to the cv-upload endpoint."""
     return client.post(
         "/api/settings/profile/cv-upload",

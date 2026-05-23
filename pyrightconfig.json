@@ -1,4 +1,24 @@
 {
-  "typeCheckingMode": "off",
-  "reportMissingImports": false
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.12",
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": [
+    "backend",
+    "tests",
+    "scripts",
+    "start.py"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv",
+    ".codegraph",
+    "alembic/versions",
+    "bin",
+    "data",
+    "docs",
+    "frontend"
+  ],
+  "reportMissingTypeStubs": false
 }

@@ -19,6 +19,7 @@ dependencies = [
     "alembic>=1.13",
     "scrapling[fetchers]>=0.4",
     "markdownify>=0.14",
+    "apscheduler>=3.10",
 ]
 
 [project.scripts]

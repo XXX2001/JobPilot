@@ -4,6 +4,11 @@ from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.session import BrowserSession
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
+from backend.models.gmail import (
+    ApplicationCorrespondence,
+    GmailCredential,
+    GmailMessage,
+)
 
 __all__ = [
     "Base",
@@ -17,4 +22,7 @@ __all__ = [
     "ApplicationEvent",
     "BrowserSession",
     "SiteCredential",
+    "GmailCredential",
+    "GmailMessage",
+    "ApplicationCorrespondence",
 ]

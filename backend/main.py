@@ -189,6 +189,14 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("WS handler registration failed (non-fatal): %s", exc)
 
+    # ── Gmail token manager singleton ────────────────────────────────────
+    try:
+        from backend.gmail.auth import GmailTokenManager
+
+        app.state.gmail_token_manager = GmailTokenManager()
+    except Exception as exc:
+        logger.warning("GmailTokenManager init failed (non-fatal): %s", exc)
+
     yield
 
     # Shutdown
@@ -215,6 +223,7 @@ try:
     import backend.api.applications as applications  # type: ignore
     import backend.api.applications_export as applications_export  # type: ignore
     import backend.api.documents as documents  # type: ignore
+    import backend.api.gmail_auth as gmail_auth  # type: ignore
     import backend.api.jobs as jobs  # type: ignore
     import backend.api.queue as queue  # type: ignore
     import backend.api.settings as api_settings  # type: ignore
@@ -228,6 +237,7 @@ try:
     app.include_router(documents.router)
     app.include_router(api_settings.router)
     app.include_router(analytics.router)
+    app.include_router(gmail_auth.router)
     # ws.py is present but may not register routes yet
     app.include_router(ws.router)
 except Exception as e:

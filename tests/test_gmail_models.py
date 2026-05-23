@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import inspect, select, text
+from sqlalchemy.exc import IntegrityError
 
 from backend.database import AsyncSessionLocal, engine, init_db
+from backend.models.gmail import GmailCredential, GmailMessage
 
 
 @pytest.fixture(autouse=True)
@@ -31,8 +35,6 @@ async def test_applications_last_correspondence_at_column_added():
 
 async def test_gmail_credential_roundtrip():
     """A GmailCredential row roundtrips through the session."""
-    from backend.models.gmail import GmailCredential
-
     async with AsyncSessionLocal() as session:
         row = GmailCredential(
             email_address="user@example.com",
@@ -53,13 +55,7 @@ async def test_gmail_credential_roundtrip():
 
 async def test_gmail_message_unique_constraint():
     """Inserting the same gmail_message_id twice raises."""
-    from sqlalchemy.exc import IntegrityError
-
-    from backend.models.gmail import GmailMessage
-
     async with AsyncSessionLocal() as session:
-        from datetime import datetime, timezone
-
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         session.add(GmailMessage(
             gmail_message_id="m-1", gmail_thread_id="t-1",

@@ -3,13 +3,25 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, Index, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
 
 
 def _now() -> datetime:
+    # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
+    # DB rows (stored naive in SQLite) remain comparable.
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
@@ -73,13 +85,23 @@ class GmailMessage(Base):
 
 
 class ApplicationCorrespondence(Base):
-    """Many-to-many link Application <-> GmailMessage."""
+    """Association object linking an Application to a GmailMessage with link-quality metadata."""
 
     __tablename__ = "application_correspondence"
+    __table_args__ = (
+        Index("ix_application_correspondence_app_created",
+              "application_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    application_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
-    gmail_message_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    application_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("applications.id", ondelete="CASCADE"),
+        index=True, nullable=False,
+    )
+    message_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("gmail_messages.id", ondelete="CASCADE"),
+        index=True, nullable=False,
+    )
     gmail_thread_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     direction: Mapped[str] = mapped_column(String, nullable=False)  # "inbound" | "outbound"
     link_confidence: Mapped[float] = mapped_column(Float, nullable=False)

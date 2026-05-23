@@ -267,13 +267,23 @@ class GmailMessage(Base):
 
 
 class ApplicationCorrespondence(Base):
-    """Many-to-many link Application ↔ GmailMessage."""
+    """Association object linking an Application to a GmailMessage with link-quality metadata."""
 
     __tablename__ = "application_correspondence"
+    __table_args__ = (
+        Index("ix_application_correspondence_app_created",
+              "application_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    application_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
-    gmail_message_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    application_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("applications.id", ondelete="CASCADE"),
+        index=True, nullable=False,
+    )
+    message_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("gmail_messages.id", ondelete="CASCADE"),
+        index=True, nullable=False,
+    )
     gmail_thread_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
     direction: Mapped[str] = mapped_column(String, nullable=False)  # "inbound" | "outbound"
     link_confidence: Mapped[float] = mapped_column(Float, nullable=False)
@@ -288,9 +298,9 @@ In `backend/models/__init__.py`, add the import line **after** the existing `use
 
 ```python
 from backend.models.gmail import (
-    ApplicationCorrespondence,
     GmailCredential,
     GmailMessage,
+    ApplicationCorrespondence,
 )
 ```
 
@@ -2189,7 +2199,7 @@ class LinkBody(BaseModel):
 
 @router.get("/unlinked", response_model=UnlinkedListOut)
 async def list_unlinked(db: DBSession) -> UnlinkedListOut:
-    linked_subq = select(ApplicationCorrespondence.gmail_message_id)
+    linked_subq = select(ApplicationCorrespondence.message_id)
     stmt = (
         select(GmailMessage)
         .where(and_(
@@ -2208,7 +2218,7 @@ async def list_for_application(application_id: int, db: DBSession) -> Correspond
     stmt = (
         select(GmailMessage)
         .join(ApplicationCorrespondence,
-              ApplicationCorrespondence.gmail_message_id == GmailMessage.id)
+              ApplicationCorrespondence.message_id == GmailMessage.id)
         .where(ApplicationCorrespondence.application_id == application_id)
         .order_by(GmailMessage.received_at.asc())
     )
@@ -2235,7 +2245,7 @@ async def link(body: LinkBody, db: DBSession) -> CorrespondenceLinkOut:
 
     link_row = ApplicationCorrespondence(
         application_id=body.application_id,
-        gmail_message_id=body.gmail_message_id,
+        message_id=body.gmail_message_id,
         gmail_thread_id=msg.gmail_thread_id,
         direction="inbound",
         link_confidence=1.0,
@@ -3433,7 +3443,7 @@ Gaps: matcher / FSM / auto-adapt are Phase-2/3 by design — correctly excluded.
 
 **Type consistency:**
 - `GmailCredential.history_id` is `Optional[str]` (Task 1) — used consistently as `str | None` in API (Task 7) and in `GmailSyncStatus` (Task 8).
-- `GmailMessage.id` is the FK target in `ApplicationCorrespondence.gmail_message_id` (both `int`) — consistent across Task 1 and Task 7 (`LinkBody.gmail_message_id: int`).
+- `GmailMessage.id` is the FK target in `ApplicationCorrespondence.message_id` (both `int`) — consistent across Task 1 and Task 7 (`LinkBody.gmail_message_id: int`, mapped to `message_id` on insert).
 - `classify(...)` returns `(category: str, confidence: float, vendor: Optional[str])` (Task 4) — same signature used by `_persist_one` in Task 5.
 - WS variant discriminators `"gmail_sync_status"` and `"gmail_message_received"` match exactly between `ws_models.py` (Task 8) and `frontend/src/lib/types/ws.ts` (Task 11).
 

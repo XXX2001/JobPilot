@@ -5,9 +5,9 @@ from backend.models.job import Job, JobMatch, JobSource
 from backend.models.session import BrowserSession
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.models.gmail import (
-    ApplicationCorrespondence,
     GmailCredential,
     GmailMessage,
+    ApplicationCorrespondence,
 )
 
 __all__ = [

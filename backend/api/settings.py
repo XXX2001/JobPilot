@@ -5,19 +5,23 @@ import platform
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, Type, TypeVar
 
 import re
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import DBSession
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
+from backend.models.base import Base
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.scraping.site_prompts import SITE_CONFIGS
+
+_T = TypeVar("_T", bound=Base)
 
 
 def _utc_now() -> datetime:
@@ -25,6 +29,48 @@ def _utc_now() -> datetime:
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _upsert_singleton(
+    db: AsyncSession,
+    model_cls: Type[_T],
+    row_id: int,
+    body: BaseModel,
+    defaults: dict[str, Any],
+) -> _T:
+    """Fetch-or-create a singleton DB row, then apply only the fields present in *body*.
+
+    Uses ``body.model_dump(exclude_unset=True)`` — the standard Pydantic v2
+    PATCH-like pattern — so fields absent from the JSON request body are never
+    written and cannot clobber existing DB values (F-Q4 bug class).  Fields
+    explicitly sent as ``null`` *are* included because they are set; this
+    correctly supports clearing nullable columns (e.g. ``max_job_age_days``).
+
+    ``defaults`` provides the create-path column values for fields whose
+    first-run value differs from None/falsy (e.g. ``daily_limit=10``).
+    On update, only the fields present in *body* are applied — defaults
+    are ignored.
+    """
+    stmt = select(model_cls).where(getattr(model_cls, "id") == row_id)
+    result = await db.execute(stmt)
+    row: _T | None = result.scalar_one_or_none()
+
+    updates = body.model_dump(exclude_unset=True)
+
+    if row is None:
+        # Merge defaults with whatever was sent in the body (body wins).
+        merged = {**defaults, **updates, "id": row_id}
+        row = model_cls(**merged)  # type: ignore[call-arg]
+        db.add(row)
+        # Note: on create, timestamps rely on each model's ORM-level `default=` column.
+    else:
+        for field, value in updates.items():
+            setattr(row, field, value)
+        setattr(row, "updated_at", _utc_now())
+
+    await db.commit()
+    await db.refresh(row)
+    return row
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], redirect_slashes=False)
 
@@ -192,50 +238,13 @@ async def get_profile(db: DBSession):
 @router.put("/profile", response_model=ProfileOut)
 async def update_profile(body: ProfileUpdate, db: DBSession):
     """Create or update the user profile (upsert, id=1)."""
-    stmt = select(UserProfile).where(UserProfile.id == 1)
-    result = await db.execute(stmt)
-    profile = result.scalar_one_or_none()
-
-    if profile is None:
-        profile = UserProfile(
-            id=1,
-            full_name=body.full_name or "",
-            email=body.email or "",
-            phone=body.phone,
-            location=body.location,
-            linkedin_url=body.linkedin_url,
-            driver_license=body.driver_license,
-            mobility=body.mobility,
-            base_cv_path=body.base_cv_path,
-            base_letter_path=body.base_letter_path,
-            additional_info=body.additional_info,
-        )
-        db.add(profile)
-    else:
-        if body.full_name is not None:
-            profile.full_name = body.full_name
-        if body.email is not None:
-            profile.email = body.email
-        if body.phone is not None:
-            profile.phone = body.phone
-        if body.location is not None:
-            profile.location = body.location
-        if body.linkedin_url is not None:
-            profile.linkedin_url = body.linkedin_url
-        if body.driver_license is not None:
-            profile.driver_license = body.driver_license
-        if body.mobility is not None:
-            profile.mobility = body.mobility
-        if body.base_cv_path is not None:
-            profile.base_cv_path = body.base_cv_path
-        if body.base_letter_path is not None:
-            profile.base_letter_path = body.base_letter_path
-        if body.additional_info is not None:
-            profile.additional_info = body.additional_info
-        profile.updated_at = _utc_now()
-
-    await db.commit()
-    await db.refresh(profile)
+    profile = await _upsert_singleton(
+        db,
+        UserProfile,
+        row_id=1,
+        body=body,
+        defaults={"full_name": body.full_name or "", "email": body.email or ""},
+    )
     logger.info("Profile updated for user id=1")
     return ProfileOut.model_validate(profile)
 
@@ -258,71 +267,22 @@ async def get_search_settings(db: DBSession):
 @router.put("/search", response_model=SearchSettingsOut)
 async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
     """Create or update search settings (upsert, id=1)."""
-    stmt = select(SearchSettings).where(SearchSettings.id == 1)
-    result = await db.execute(stmt)
-    ss = result.scalar_one_or_none()
-
-    if ss is None:
-        ss = SearchSettings(
-            id=1,
-            keywords=body.keywords or {"include": []},
-            excluded_keywords=body.excluded_keywords,
-            locations=body.locations,
-            salary_min=body.salary_min,
-            experience_min=body.experience_min,
-            experience_max=body.experience_max,
-            remote_only=body.remote_only if body.remote_only is not None else False,
-            job_types=body.job_types,
-            languages=body.languages,
-            excluded_companies=body.excluded_companies,
-            daily_limit=body.daily_limit if body.daily_limit is not None else 10,
-            min_match_score=body.min_match_score if body.min_match_score is not None else 30.0,
-            countries=body.countries,
-            cv_modification_sensitivity=body.cv_modification_sensitivity or "balanced",
-            cv_tailoring_enabled=body.cv_tailoring_enabled if body.cv_tailoring_enabled is not None else True,
-            max_results_per_source=body.max_results_per_source if body.max_results_per_source is not None else 20,
-            max_job_age_days=body.max_job_age_days,
-        )
-        db.add(ss)
-    else:
-        if body.keywords is not None:
-            ss.keywords = body.keywords
-        if body.excluded_keywords is not None:
-            ss.excluded_keywords = body.excluded_keywords
-        if body.locations is not None:
-            ss.locations = body.locations
-        if body.salary_min is not None:
-            ss.salary_min = body.salary_min
-        if body.experience_min is not None:
-            ss.experience_min = body.experience_min
-        if body.experience_max is not None:
-            ss.experience_max = body.experience_max
-        if body.remote_only is not None:
-            ss.remote_only = body.remote_only
-        if body.job_types is not None:
-            ss.job_types = body.job_types
-        if body.languages is not None:
-            ss.languages = body.languages
-        if body.excluded_companies is not None:
-            ss.excluded_companies = body.excluded_companies
-        if body.daily_limit is not None:
-            ss.daily_limit = body.daily_limit
-        if body.min_match_score is not None:
-            ss.min_match_score = body.min_match_score
-        if body.countries is not None:
-            ss.countries = body.countries
-        if body.cv_modification_sensitivity is not None:
-            ss.cv_modification_sensitivity = body.cv_modification_sensitivity
-        if body.cv_tailoring_enabled is not None:
-            ss.cv_tailoring_enabled = body.cv_tailoring_enabled
-        if body.max_results_per_source is not None:
-            ss.max_results_per_source = body.max_results_per_source
-        # max_job_age_days can be explicitly set to None (no limit)
-        if "max_job_age_days" in (body.model_fields_set or set()):
-            ss.max_job_age_days = body.max_job_age_days
-
-    await db.commit()
-    await db.refresh(ss)
+    # daily_limit default matches DailyLimitGuard.__init__ default (10).
+    ss = await _upsert_singleton(
+        db,
+        SearchSettings,
+        row_id=1,
+        body=body,
+        defaults={
+            "keywords": {"include": []},
+            "remote_only": False,
+            "daily_limit": 10,
+            "min_match_score": 30.0,
+            "cv_modification_sensitivity": "balanced",
+            "cv_tailoring_enabled": True,
+            "max_results_per_source": 20,
+        },
+    )
     logger.info("Search settings updated")
     return SearchSettingsOut.model_validate(ss)
 

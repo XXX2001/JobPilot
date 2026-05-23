@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from starlette.testclient import TestClient
 
 
@@ -225,6 +224,68 @@ def test_get_search_settings_after_upsert(test_app: TestClient):
     )
     resp = test_app.get("/api/settings/search")
     assert resp.status_code == 200
+
+
+# ─── F-Q4 regression: partial PUT must not clobber unset fields ───────────────
+
+
+def test_profile_partial_put_preserves_phone(test_app: TestClient) -> None:
+    """PUT /api/settings/profile omitting 'phone' must not overwrite an existing phone value.
+
+    This is the F-Q4 bug class: a field-by-field `if field is not None` guard
+    (or equivalently exclude_unset=True) must prevent a later partial PUT from
+    resetting previously-set optional fields to None.
+    """
+    # Step 1: set phone via a full PUT
+    r1 = test_app.put(
+        "/api/settings/profile",
+        json={"full_name": "Alice", "email": "alice@example.com", "phone": "+1-800-555-0100"},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["phone"] == "+1-800-555-0100"
+
+    # Step 2: PUT again WITHOUT phone field — phone must be preserved
+    r2 = test_app.put(
+        "/api/settings/profile",
+        json={"full_name": "Alice Updated", "email": "alice@example.com"},
+    )
+    assert r2.status_code == 200
+
+    # Step 3: GET and confirm phone survived
+    r3 = test_app.get("/api/settings/profile")
+    assert r3.status_code == 200
+    assert r3.json()["phone"] == "+1-800-555-0100", (
+        "phone was clobbered to None by a partial PUT that omitted the field"
+    )
+
+
+def test_search_partial_put_preserves_daily_limit(test_app: TestClient) -> None:
+    """PUT /api/settings/search omitting 'daily_limit' must not reset it to the default.
+
+    Same F-Q4 bug class applied to SearchSettings: a subsequent partial PUT
+    that omits daily_limit must keep the previously-saved value.
+    """
+    # Step 1: create settings with a non-default daily_limit
+    r1 = test_app.put(
+        "/api/settings/search",
+        json={"keywords": {"include": ["rust"]}, "daily_limit": 42},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["daily_limit"] == 42
+
+    # Step 2: PUT again WITHOUT daily_limit — it must stay 42, not fall back to 10
+    r2 = test_app.put(
+        "/api/settings/search",
+        json={"keywords": {"include": ["rust", "go"]}},
+    )
+    assert r2.status_code == 200
+
+    # Step 3: GET and confirm daily_limit survived
+    r3 = test_app.get("/api/settings/search")
+    assert r3.status_code == 200
+    assert r3.json()["daily_limit"] == 42, (
+        "daily_limit was reset to default by a partial PUT that omitted the field"
+    )
 
 
 # ─── Analytics ────────────────────────────────────────────────────────────────

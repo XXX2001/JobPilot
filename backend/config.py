@@ -1,6 +1,7 @@
+import sys
 from pathlib import Path
 
-from pydantic import Field, SecretStr  # type: ignore
+from pydantic import Field, SecretStr, ValidationError  # type: ignore
 from pydantic_settings import (
     BaseSettings,  # type: ignore
     SettingsConfigDict,  # type: ignore
@@ -42,8 +43,62 @@ class Settings(BaseSettings):
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
     APPLY_TIER1_ENABLED: bool = Field(True, env="APPLY_TIER1_ENABLED")
 
+    def is_configured(self, field_name: str) -> bool:
+        """Return True if *field_name* holds a real, non-placeholder value.
 
-settings = Settings()
+        Centralises the "is this credential set?" check so callers don't
+        have to know whether the underlying attribute is a plain ``str`` or
+        a ``SecretStr`` (a SecretStr instance is never equal to a plain
+        string, so naive ``value not in ("", "placeholder")`` comparisons
+        always return True — masking missing credentials).
+        """
+        raw = getattr(self, field_name, None)
+        if raw is None:
+            return False
+        if hasattr(raw, "get_secret_value"):
+            try:
+                raw = raw.get_secret_value()
+            except Exception:
+                return False
+        if not isinstance(raw, str):
+            # Unexpected non-string scalar — treat truthy as configured.
+            return bool(raw)
+        return raw not in ("", "placeholder")
+
+
+def _load_settings() -> "Settings":
+    """Instantiate Settings, printing a friendly hint on validation failure.
+
+    Pydantic's default ValidationError dump is intimidating for a first-time
+    user who just forgot to fill in their .env. Trade it for a concise
+    "missing X" banner plus a pointer to .env.example, then exit non-zero
+    so the launcher script (and Docker healthcheck) can detect the failure.
+    """
+    try:
+        return Settings()
+    except ValidationError as exc:
+        missing = sorted({
+            ".".join(str(p) for p in e.get("loc", ()))
+            for e in exc.errors()
+            if e.get("type") == "missing"
+        })
+        sys.stderr.write("\nJobPilot configuration error\n")
+        sys.stderr.write("─" * 32 + "\n")
+        if missing:
+            sys.stderr.write(
+                "The following required environment variables are not set:\n"
+            )
+            for name in missing:
+                sys.stderr.write(f"  • {name}\n")
+            sys.stderr.write(
+                "\nCopy .env.example to .env and fill them in, then re-run.\n"
+            )
+        else:
+            sys.stderr.write(f"{exc}\n")
+        sys.exit(1)
+
+
+settings = _load_settings()
 
 # Auto-generate CREDENTIAL_KEY if not set, and persist it to .env so it
 # survives restarts.  This runs once on first launch — no installer needed.

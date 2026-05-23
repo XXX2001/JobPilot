@@ -24,7 +24,7 @@ depends_on: Union[str, Sequence[str], None] = None
 # (index_name, table_name, [columns]) — kept in a list so upgrade/downgrade
 # stay in lockstep and naming is deterministic.
 _INDEXES: list[tuple[str, str, list[str]]] = [
-    # job_sources: filtered by name/type, and morning_batch filters enabled=True.
+    # job_sources: filtered by name/type, and the batch runner filters enabled=True.
     ("ix_job_sources_name", "job_sources", ["name"]),
     ("ix_job_sources_type", "job_sources", ["type"]),
     ("ix_job_sources_enabled", "job_sources", ["enabled"]),

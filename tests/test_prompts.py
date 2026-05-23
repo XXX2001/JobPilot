@@ -47,7 +47,7 @@ Python, R, HACCP, GMP, aseptic sampling, qPCR, cell culture, ISO 17025
 SAMPLE_LETTER_CONTENT = (
     "...\n"
     "% --- JOBPILOT:LETTER:PARA:START ---\n"
-    + ("Je suis ravi de postuler à ce poste. " * 60) + "\n"
+    + ("Je suis ravi de postuler à ce poste. " * 130) + "\n"
     "% --- JOBPILOT:LETTER:PARA:END ---\n"
     "..."
 )
@@ -67,11 +67,12 @@ JOB_B = {
     "job_description_excerpt": "Looking for ML engineer with PyTorch, MLOps.",
 }
 
-# Cache-eligibility threshold. Gemini's implicit cache requires ~1024 tokens of
-# common prefix; at ~4 chars/token that's ~4000 chars. We assert a slightly
-# more conservative 2000 chars to leave headroom — the real CV is the dominant
-# contributor and it sits comfortably above 4000 chars in production.
-MIN_SHARED_PREFIX_CHARS = 2000
+# Cache-eligibility threshold. Gemini's implicit prompt cache only triggers
+# when consecutive requests share a prefix of ~1024+ tokens. At a conservative
+# ~4 chars/token that's ~4096 chars; we assert 4500 to keep headroom above
+# the documented minimum so a regression that shrinks the shared prefix below
+# the cache threshold fails the test instead of silently disabling caching.
+MIN_SHARED_PREFIX_CHARS = 4500
 
 
 def _shared_prefix_len(a: str, b: str) -> int:
@@ -159,28 +160,47 @@ def test_cv_modifier_from_assessment_prompt_has_invariant_prefix() -> None:
 
 
 @pytest.mark.parametrize(
-    "template,extra_kwargs",
+    "template,invariant_key,variable_keys",
     [
         (
             MOTIVATION_LETTER_PROMPT,
-            {"letter_content": SAMPLE_LETTER_CONTENT},
+            "letter_content",
+            ("job_title", "company", "job_description", "job_description_excerpt"),
         ),
         (
             JOB_ANALYZER_PROMPT,
-            {"cv_content": SAMPLE_CV},
+            "cv_content",
+            ("job_title", "company", "job_description", "job_description_excerpt"),
         ),
+        (
+            CV_MODIFIER_SKILL,
+            "cv_tex",
+            ("job_context_md",),
+        ),
+        (
+            CV_MODIFIER_FROM_ASSESSMENT,
+            "cv_tex",
+            ("gaps_section", "covered_section"),
+        ),
+    ],
+    ids=[
+        "motivation_letter",
+        "job_analyzer",
+        "cv_modifier_skill",
+        "cv_modifier_from_assessment",
     ],
 )
 def test_no_variable_placeholder_precedes_invariant_data(
-    template: str, extra_kwargs: dict[str, str]
+    template: str, invariant_key: str, variable_keys: tuple[str, ...]
 ) -> None:
-    """Structural check: in the raw template, no `{job_*}` / `{company}` /
-    `{job_description*}` placeholder appears before the invariant data
-    placeholder (`{cv_content}` or `{letter_content}`).
+    """Structural check: in the raw template, no per-call variable placeholder
+    appears before the invariant data placeholder (the CV body or letter body).
+
+    Putting variable placeholders ahead of the invariant CV/letter content
+    breaks Gemini's implicit prefix cache (LLM-01).
     """
-    invariant_key = next(iter(extra_kwargs))  # "cv_content" or "letter_content"
     invariant_idx = template.index("{" + invariant_key + "}")
-    for var_key in ("job_title", "company", "job_description", "job_description_excerpt"):
+    for var_key in variable_keys:
         placeholder = "{" + var_key + "}"
         if placeholder not in template:
             continue

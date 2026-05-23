@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
@@ -55,7 +55,7 @@ class CVDiffResponse(BaseModel):
 
 class RegenerateResponse(BaseModel):
     match_id: int
-    status: str
+    status: Literal["queued"]
     message: str
 
 

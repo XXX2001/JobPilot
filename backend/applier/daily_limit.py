@@ -28,11 +28,15 @@ application.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED, STATUS_PENDING
 from backend.models.application import Application
@@ -119,7 +123,7 @@ class DailyLimitGuard:
             job_match_id=job_match_id,
             method=method,
             status=STATUS_PENDING,
-            applied_at=datetime.utcnow(),
+            applied_at=_utc_now(),
         )
         self.db.add(placeholder)
         # flush() issues the INSERT, which takes SQLite's RESERVED

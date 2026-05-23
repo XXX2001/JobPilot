@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import platform
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -16,6 +16,11 @@ from backend.config import DATA_DIR, PROJECT_ROOT, settings
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.scraping.site_prompts import SITE_CONFIGS
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 
 logger = logging.getLogger(__name__)
 
@@ -171,8 +176,8 @@ async def get_profile(db: DBSession):
             base_cv_path=None,
             base_letter_path=None,
             additional_info=None,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=_utc_now(),
+            updated_at=_utc_now(),
         )
     return ProfileOut.model_validate(profile)
 
@@ -185,13 +190,18 @@ async def update_profile(body: ProfileUpdate, db: DBSession):
     profile = result.scalar_one_or_none()
 
     if profile is None:
-        # Create with required fields
-        full_name = body.full_name or ""
-        email = body.email or ""
         profile = UserProfile(
             id=1,
-            full_name=full_name,
-            email=email,
+            full_name=body.full_name or "",
+            email=body.email or "",
+            phone=body.phone,
+            location=body.location,
+            linkedin_url=body.linkedin_url,
+            driver_license=body.driver_license,
+            mobility=body.mobility,
+            base_cv_path=body.base_cv_path,
+            base_letter_path=body.base_letter_path,
+            additional_info=body.additional_info,
         )
         db.add(profile)
     else:
@@ -215,7 +225,7 @@ async def update_profile(body: ProfileUpdate, db: DBSession):
             profile.base_letter_path = body.base_letter_path
         if body.additional_info is not None:
             profile.additional_info = body.additional_info
-        profile.updated_at = datetime.utcnow()
+        profile.updated_at = _utc_now()
 
     await db.commit()
     await db.refresh(profile)
@@ -314,20 +324,18 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
 async def get_sources() -> SourcesOut:
     """Return which API sources are configured (keys masked)."""
     adzuna_app_id = settings.ADZUNA_APP_ID
-    adzuna_key = settings.ADZUNA_APP_KEY.get_secret_value()
-    gemini_key = settings.GOOGLE_API_KEY.get_secret_value()
-    placeholder = ("", "placeholder")
+    adzuna_id_set = settings.is_configured("ADZUNA_APP_ID")
+    adzuna_key_set = settings.is_configured("ADZUNA_APP_KEY")
+    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
     return SourcesOut(
         adzuna=SourceProviderStatus(
-            configured=bool(
-                adzuna_app_id not in placeholder and adzuna_key not in placeholder
-            ),
+            configured=bool(adzuna_id_set and adzuna_key_set),
             app_id_hint=(
-                (adzuna_app_id[:4] + "****") if adzuna_app_id not in placeholder else None
+                (adzuna_app_id[:4] + "****") if adzuna_id_set else None
             ),
         ),
         gemini=GeminiProviderStatus(
-            configured=bool(gemini_key not in placeholder),
+            configured=gemini_key_set,
         ),
     )
 
@@ -348,10 +356,9 @@ async def update_sources(body: SourcesUpdate) -> SourcesUpdateResponse:
 @router.get("/status", response_model=SetupStatus)
 async def get_setup_status(db: DBSession):
     """Return setup completeness flags."""
-    gemini_key_set = bool(getattr(settings, "GOOGLE_API_KEY", "") not in (None, "", "placeholder"))
-    adzuna_key_set = bool(
-        getattr(settings, "ADZUNA_APP_ID", "") not in (None, "", "placeholder")
-        and getattr(settings, "ADZUNA_APP_KEY", "") not in (None, "", "placeholder")
+    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
+    adzuna_key_set = settings.is_configured("ADZUNA_APP_ID") and settings.is_configured(
+        "ADZUNA_APP_KEY"
     )
     tectonic_name = "tectonic.exe" if platform.system() == "Windows" else "tectonic"
     tectonic_found = (PROJECT_ROOT / "bin" / tectonic_name).exists() or shutil.which(
@@ -577,7 +584,7 @@ async def save_credential(
     else:
         row.encrypted_email = enc_email
         row.encrypted_password = enc_pass
-        row.updated_at = datetime.utcnow()
+        row.updated_at = _utc_now()
 
     await db.commit()
     return CredentialSaveResponse(site_name=site_name, saved=True)

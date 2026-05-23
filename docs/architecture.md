@@ -39,7 +39,7 @@ graph TD
             CV_PIPELINE["CVPipeline"]
             LETTER_PIPELINE["LetterPipeline"]
             APPLY_ENGINE["ApplicationEngine"]
-            SCHEDULER["MorningBatchScheduler"]
+            SCHEDULER["BatchRunner"]
             SESSION_MGR["BrowserSessionManager"]
         end
 
@@ -143,11 +143,11 @@ graph TD
 
 ### Morning Batch Flow
 
-1. **Trigger** — The user clicks "Scan for Jobs" in the UI, which fires `POST /api/queue/refresh`. The `queue.py` router retrieves the `MorningBatchScheduler` singleton from `app.state` and spawns `scheduler.run_batch()` as an `asyncio.create_task()`, returning `{"status": "started"}` immediately.
+1. **Trigger** — The user clicks "Scan for Jobs" in the UI, which fires `POST /api/queue/refresh`. The `queue.py` router retrieves the `BatchRunner` singleton from `app.state` and spawns `scheduler.run_batch()` as an `asyncio.create_task()`, returning `{"status": "started"}` immediately.
 
 2. **Settings load** — `_run_batch_inner` opens a DB session and reads the single `SearchSettings` row (keywords, locations, countries, salary_min, min_match_score, daily_limit, batch_time) and the single `UserProfile` row (base_cv_path). All enabled `JobSource` rows are also fetched. A WebSocket `scraping_status` broadcast marks 5% progress.
 
-3. **Scraping — Phase 1 (API sources)** — `ScrapingOrchestrator.run_morning_batch()` runs all `type="api"` sources (currently only Adzuna) in parallel via `asyncio.gather`. `AdzunaClient.search()` calls the Adzuna REST API, maps results to `RawJob` objects, and returns them.
+3. **Scraping — Phase 1 (API sources)** — `ScrapingOrchestrator.scrape_batch()` runs all `type="api"` sources (currently only Adzuna) in parallel via `asyncio.gather`. `AdzunaClient.search()` calls the Adzuna REST API, maps results to `RawJob` objects, and returns them.
 
 4. **Scraping — Phase 2 (browser sources)** — For each `type="browser"` source (LinkedIn, Indeed, Google Jobs, Welcome to the Jungle, Glassdoor), and for each keyword, the orchestrator attempts Tier 1 first: `ScraplingFetcher.scrape_job_listings()` fetches the page HTML via Scrapling's stealthy HTTP client, cleans it to ≤30,000 characters of markdown, and calls `GeminiClient.generate_text()` once to extract structured JSON. If Tier 1 returns zero results or raises, the orchestrator falls back to Tier 2: `AdaptiveScraper.scrape_job_listings()` launches a browser-use agent backed by Gemini, navigates the board autonomously (up to 20 steps, 180 s), and returns parsed `RawJob` objects. WebSocket progress messages are broadcast between sources (35%–60%).
 
@@ -227,7 +227,7 @@ graph TD
 
 **Applier (`backend/applier/`)** — Executes job applications. `ApplicationEngine` enforces the daily limit, prevents concurrent in-flight applies to the same job, and dispatches to the correct strategy. `AutoApplyStrategy` (Tier 1: `PlaywrightFormFiller`; Tier 2: browser-use agent) pauses before submission for user review via WebSocket. `AssistedApplyStrategy` fills the form and leaves the browser open for manual submission. `ManualApplyStrategy` opens the URL in the system browser. `CaptchaHandler` detects and manages CAPTCHA challenges during apply flows.
 
-**Scheduler (`backend/scheduler/`)** — `MorningBatchScheduler` orchestrates the full five-step batch pipeline (scrape → match → store → pre-generate CVs → notify). Although it wraps an `AsyncIOScheduler` with a configurable `CronTrigger`, auto-start is currently disabled; the batch runs only on explicit user action via `POST /api/queue/refresh`. CV pre-generation is parallelised with a concurrency cap of 3 via `asyncio.Semaphore`.
+**Scheduler (`backend/scheduler/`)** — `BatchRunner` orchestrates the full five-step batch pipeline (scrape → match → store → pre-generate CVs → notify). Although it wraps an `AsyncIOScheduler` with a configurable `CronTrigger`, auto-start is currently disabled; the batch runs only on explicit user action via `POST /api/queue/refresh`. CV pre-generation is parallelised with a concurrency cap of 3 via `asyncio.Semaphore`.
 
 **Frontend (`frontend/`)** — A SvelteKit 5 (Svelte runes) single-page application. Pages are: Job Queue (daily matches, apply buttons, WebSocket review modal), Job Detail (apply actions, CV diff view), Tracker (Kanban board of application outcomes), CV Manager (template upload, tailored CV history), Settings (six-tab hub for profile/search/sites/credentials/sources/system), Analytics (stats cards and daily trend chart). All HTTP calls go through a typed `apiFetch<T>` helper; the WebSocket connection is shared via a Svelte store with automatic 3-second reconnect.
 
@@ -407,11 +407,11 @@ graph TD
 
 - **Tectonic for LaTeX compilation**: Tectonic is a self-contained LaTeX engine that downloads packages on demand and produces clean PDF output without requiring a full TeX distribution to be pre-installed. This makes dependency management simpler for a local tool. The compiler is wrapped as an async subprocess so compilation does not block the event loop.
 
-- **No authentication layer**: The system is explicitly designed as a local single-user tool. Every API endpoint is fully unauthenticated. CORS is fully open (`allow_origins=["*"]`) with credentials allowed, which is a known development-only configuration that browsers reject in production. Network-level access control (binding to `127.0.0.1`) is the only security boundary.
+- **No authentication layer**: The system is explicitly designed as a local single-user tool. Every API endpoint is fully unauthenticated. CORS is locked down to the origins listed in `JOBPILOT_ALLOWED_ORIGINS` (default `localhost:5173,localhost:8000` for local dev); production deployments on a non-default origin must set this env var. Network-level access control (binding to `127.0.0.1`) is the primary security boundary.
 
 - **Marker-based LaTeX editing**: Rather than parsing LaTeX ASTs, CV tailoring uses two complementary approaches: `CVApplicator` applies verbatim substring replacements (safe because it checks that the exact text exists and introduces no new LaTeX commands), while `LaTeXInjector` uses `% --- JOBPILOT:<MARKER>:START/END ---` comment pairs to delimit sections. This avoids the complexity and fragility of a full LaTeX parser while remaining safe enough for automated edits.
 
-- **APScheduler present but auto-start disabled**: The full `CronTrigger` scheduling infrastructure is implemented but `scheduler.start()` is never called during the lifespan startup. Batch runs are on-demand only via `POST /api/queue/refresh`. This was a deliberate removal noted in a comment in `main.py`, likely to give users explicit control over when scraping occurs.
+- **On-demand batch runs only**: The `BatchRunner` pipeline runs when `POST /api/queue/refresh` is called (which schedules `runner.run_batch()` on the event loop). APScheduler scaffolding was removed in the honesty pass — there is no cron-based scheduling today. Re-introducing time-based batches would mean wiring an `AsyncIOScheduler` from the lifespan and reading `SearchSettings.batch_time`.
 
 - **Fernet symmetric encryption for site credentials**: Login credentials (email + password) for job boards are encrypted at rest using Fernet (AES-128 CBC with HMAC-SHA256) keyed by `CREDENTIAL_KEY`. The encryption key is stored in the `.env` file, meaning local filesystem access is the security boundary for both the key and the database.
 

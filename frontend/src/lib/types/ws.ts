@@ -32,7 +32,7 @@ export interface JobAssessmentMsg {
 	gap_severity: number;
 	decision: string;
 	covered: string[];
-	gaps: Array<{ skill: string; criticality: string }>;
+	gaps: Array<{ skill: string; criticality: number }>;
 }
 
 export interface ScrapingStatusMsg {

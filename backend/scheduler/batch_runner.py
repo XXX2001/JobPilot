@@ -30,6 +30,8 @@ from backend.models.user import SearchSettings, UserProfile
 
 logger = logging.getLogger(__name__)
 
+from backend.api.ws_models import Status
+
 try:
     from backend.api.ws import broadcast_job_assessment, broadcast_status  # type: ignore
 except Exception:
@@ -114,7 +116,7 @@ class BatchRunner:
         self._job_extractor = JobSkillExtractor()
         # Batch state tracking
         self.running: bool = False
-        self.last_status: dict[str, Any] | None = None
+        self.last_status: Status | None = None
 
     # ------------------------------------------------------------------ #
     #  Public batch runner                                                 #
@@ -122,7 +124,7 @@ class BatchRunner:
 
     async def _broadcast_and_track(self, message: str, progress: float) -> None:
         """Broadcast status and track it for reconnecting clients."""
-        self.last_status = {"type": "status", "message": message, "progress": progress}
+        self.last_status = Status(message=message, progress=progress)
         await broadcast_status(message, progress=progress)
 
     async def run_batch(self) -> None:

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from backend.api.deps import DBSession
+from backend.api.ws_models import Status
 from backend.models.job import Job, JobMatch
 
 logger = logging.getLogger(__name__)
@@ -19,7 +20,7 @@ router = APIRouter(prefix="/api/queue", tags=["queue"], redirect_slashes=False)
 # ─── Response schemas ─────────────────────────────────────────────────────────
 
 
-class JobOut(BaseModel):
+class QueueJobOut(BaseModel):
     id: int
     title: str
     company: str
@@ -43,7 +44,7 @@ class QueueMatchOut(BaseModel):
     status: str
     batch_date: Optional[date] = None
     matched_at: datetime
-    job: JobOut  # nested — matches frontend's match.job.title etc.
+    job: QueueJobOut  # nested — matches frontend's match.job.title etc.
 
 
 class QueueOut(BaseModel):
@@ -53,21 +54,21 @@ class QueueOut(BaseModel):
 
 class BatchStatusOut(BaseModel):
     running: bool
-    last_status: Optional[str] = None
+    last_status: Optional[Status] = None
 
 
 class RefreshResponse(BaseModel):
-    status: str
+    status: Literal["started"]
     message: str
 
 
 class MatchStatusUpdateOut(BaseModel):
     match_id: int
-    status: str
+    status: Literal["new", "skipped", "applying", "applied", "rejected"]
 
 
 class EnrichmentResponse(BaseModel):
-    status: str  # "enriched" | "no_change"
+    status: Literal["enriched", "no_change"]
     description: str
 
 
@@ -96,7 +97,7 @@ async def get_queue(db: DBSession):
                 status=match.status,
                 batch_date=match.batch_date,
                 matched_at=match.matched_at,
-                job=JobOut(
+                job=QueueJobOut(
                     id=job.id,
                     title=job.title,
                     company=job.company,
@@ -168,7 +169,7 @@ async def get_match(match_id: int, db: DBSession):
         status=match.status,
         batch_date=match.batch_date,
         matched_at=match.matched_at,
-        job=JobOut(
+        job=QueueJobOut(
             id=job.id,
             title=job.title,
             company=job.company,
@@ -198,19 +199,18 @@ async def skip_match(match_id: int, db: DBSession) -> MatchStatusUpdateOut:
 
 
 class StatusUpdate(BaseModel):
-    status: str
+    status: Literal["new", "skipped", "applying", "applied", "rejected"]
 
 
 @router.patch("/{match_id}/status", response_model=MatchStatusUpdateOut)
 async def update_match_status(
     match_id: int, body: StatusUpdate, db: DBSession
 ) -> MatchStatusUpdateOut:
-    """Update the status of a queue match (new, skipped, applying, applied)."""
-    allowed = {"new", "skipped", "applying", "applied", "rejected"}
-    if body.status not in allowed:
-        raise HTTPException(
-            status_code=422, detail=f"Invalid status '{body.status}'. Allowed: {allowed}"
-        )
+    """Update the status of a queue match (new, skipped, applying, applied).
+
+    Pydantic enforces the allowed-status vocabulary at request-validation
+    time, so any out-of-range value returns 422 before reaching the handler.
+    """
     stmt = select(JobMatch).where(JobMatch.id == match_id)
     match = (await db.execute(stmt)).scalar_one_or_none()
     if match is None:

@@ -235,14 +235,7 @@ async def health(response: Response) -> HealthOut:
     tectonic_bin = PROJECT_ROOT / "bin" / tectonic_name
     tectonic = tectonic_bin.exists() or shutil.which("tectonic") is not None
 
-    raw_key: Any = getattr(settings, "GOOGLE_API_KEY", "")
-    # Settings may wrap secrets in SecretStr; unwrap defensively before comparing.
-    if hasattr(raw_key, "get_secret_value"):
-        try:
-            raw_key = raw_key.get_secret_value()
-        except Exception:
-            raw_key = ""
-    gemini_key_set = raw_key not in (None, "", "placeholder")
+    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
 
     # ── DB ping ────────────────────────────────────────────────────────────
     # Use the shared AsyncSessionLocal so we go through the existing pool

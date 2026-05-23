@@ -7,7 +7,6 @@ import sys
 import tempfile
 from pathlib import Path
 import pytest
-import unittest.mock as mock
 
 # Ensure project root is in sys.path so tests can import backend package
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,26 +42,6 @@ def test_app():
 
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client
-
-
-@pytest.fixture
-def mock_gemini():
-    """Mock google.generativeai.GenerativeModel to avoid real API calls."""
-    patcher = mock.patch("google.generativeai.GenerativeModel")
-    MockModel = patcher.start()
-
-    instance = MockModel.return_value
-
-    class DummyResponse:
-        def __init__(self, text: str):
-            self.text = text
-
-    instance.generate_content.return_value = DummyResponse("mocked response")
-
-    try:
-        yield MockModel
-    finally:
-        patcher.stop()
 
 
 @pytest.fixture

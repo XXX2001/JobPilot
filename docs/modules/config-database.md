@@ -75,7 +75,7 @@ app: FastAPI = FastAPI(lifespan=lifespan, redirect_slashes=False)
 
 | Middleware | Configuration |
 |---|---|
-| `CORSMiddleware` | `allow_origins=["*"]`, `allow_credentials=True`, `allow_methods=["*"]`, `allow_headers=["*"]` — fully open, intended for development. |
+| `CORSMiddleware` | `allow_origins` parsed from `JOBPILOT_ALLOWED_ORIGINS` (comma-separated; default `http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000`), `allow_credentials=True`, `allow_methods=["*"]`, `allow_headers=["*"]`. |
 
 **Routers registered**
 
@@ -125,7 +125,7 @@ All handlers are registered conditionally — if the respective module cannot be
 | `app.state.scraping_orchestrator` | `ScrapingOrchestrator` | Coordinates all scraping strategies. |
 | `app.state.matcher` | `JobMatcher` | Scores and filters jobs against the user profile. |
 | `app.state.apply_engine` | `ApplicationEngine` | Orchestrates job application submission. |
-| `app.state.morning_scheduler` | `MorningBatchScheduler` | Scheduled batch job (scrape + match + apply). |
+| `app.state.batch_runner` | `BatchRunner` | On-demand batch pipeline (scrape + match + fit-assess + CV pre-generation). Triggered by `POST /api/queue/refresh`. |
 
 **Lifespan WebSocket handlers registered**
 
@@ -193,11 +193,11 @@ Master reference for all environment variables read by the application.
 
 - **`daily_limit` is hardcoded** — `ApplicationEngine` is constructed with `daily_limit=10` in `main.py` (line 88). There is no corresponding `Settings` field or environment variable, making it impossible to adjust without a code change.
 
-- **CORS is fully open** — `allow_origins=["*"]` with `allow_credentials=True` is explicitly noted as being for development. This combination is rejected by most browsers in production (credentials require explicit origins, not a wildcard). There is no mechanism to restrict origins via configuration.
+- **CORS is configurable via `JOBPILOT_ALLOWED_ORIGINS`** — Comma-separated list of allowed origins. The default value matches local dev hosts (`localhost:5173`, `localhost:8000`). Production deployments on a non-default origin must set this env var explicitly; otherwise the browser will silently reject the cross-origin call.
 
 - **`JOBPILOT_DATA_DIR` is relative by default** — The default `"./data"` is resolved relative to the process working directory, not the project root, which can cause the data directory to be created in unexpected locations depending on how Uvicorn is launched.
 
-- **APScheduler auto-start was removed** — A comment in `main.py` (line 112) documents that the `MorningBatchScheduler` no longer starts automatically. Batch jobs only run via `POST /api/queue/refresh`. There is no cron-based or time-based scheduling in place.
+- **No auto-scheduler** — The `BatchRunner` is on-demand only. Batch jobs run when `POST /api/queue/refresh` is called (which schedules `runner.run_batch()` in the background). The APScheduler scaffolding that previously lived in `morning_batch.py` was removed during the PR-1 honesty pass; reintroducing time-based scheduling would require wiring an `AsyncIOScheduler` from `lifespan`.
 
 - **Seed data hardcodes `country: "fr"`** — In `_seed_default_sources()`, all seeded `JobSource` rows receive `config={"country": "fr"}` (line 93 of `database.py`). This is not driven by any configuration value.
 

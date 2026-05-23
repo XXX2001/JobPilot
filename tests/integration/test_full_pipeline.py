@@ -184,7 +184,7 @@ def test_manual_apply_flow(client: TestClient):
     # 3. Add a lifecycle event
     event_resp = client.post(
         f"/api/applications/{app_id}/events",
-        json={"event_type": "confirmation_email", "details": "Got email from recruiter"},
+        json={"event_type": "follow_up", "details": "Got email from recruiter"},
     )
     assert event_resp.status_code == 201
 

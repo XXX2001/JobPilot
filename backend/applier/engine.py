@@ -22,7 +22,7 @@ from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
 from backend.config import settings
 from backend.defaults import DAILY_LIMIT, MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
-from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
+from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard, _utc_now
 from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.models.application import Application, ApplicationEvent
 
@@ -129,7 +129,14 @@ class ApplicationEngine:
             # otherwise the placeholder lingers as ``pending`` and
             # permanently consumes one of today's slots.
             if reserved_app_id is not None:
-                await self._release_reserved_slot(db, reserved_app_id)
+                try:
+                    await self._release_reserved_slot(db, reserved_app_id)
+                except Exception:
+                    # Already logged with traceback inside the helper;
+                    # swallow here so the user still gets a clean cancelled
+                    # response. The lingering placeholder will be visible
+                    # in the DB for manual cleanup.
+                    pass
             return ApplicationResult(
                 status=RESULT_CANCELLED,
                 method=mode.value,
@@ -151,7 +158,13 @@ class ApplicationEngine:
             # If dispatch crashes, release the reservation so the
             # placeholder doesn't permanently consume a daily slot.
             if reserved_app_id is not None:
-                await self._release_reserved_slot(db, reserved_app_id)
+                try:
+                    await self._release_reserved_slot(db, reserved_app_id)
+                except Exception:
+                    # Already logged inside the helper. Don't shadow
+                    # the original dispatch exception we're about to
+                    # re-raise.
+                    pass
             raise
         finally:
             self._confirm_events.pop(job_match_id, None)
@@ -174,7 +187,12 @@ class ApplicationEngine:
             # missing. Mark the reserved placeholder (if any) as
             # cancelled so it doesn't permanently consume a daily slot.
             if reserved_app_id is not None:
-                await self._release_reserved_slot(db, reserved_app_id)
+                try:
+                    await self._release_reserved_slot(db, reserved_app_id)
+                except Exception:
+                    # Already logged inside the helper. Preserve the
+                    # ApplicationRecordError context for the response.
+                    pass
             return ApplicationResult(
                 status=RESULT_FAILED,
                 method=result.method,
@@ -207,9 +225,15 @@ class ApplicationEngine:
                 app.status = RESULT_CANCELLED
                 app.applied_at = None
                 await db.commit()
-        except Exception as exc:
-            logger.error("Failed to release reserved slot %d: %s", reserved_app_id, exc)
+        except Exception:
+            # EH-01: log with traceback and propagate. Callers wrap this
+            # in nested try/except where they need to preserve a parent
+            # exception's context (e.g. ApplicationRecordError).
+            logger.exception(
+                "Failed to release reserved slot %d", reserved_app_id
+            )
             await db.rollback()
+            raise
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
@@ -272,8 +296,6 @@ class ApplicationEngine:
         inserted.
         """
         try:
-            from datetime import datetime
-
             from sqlalchemy import select
 
             from backend.models.job import JobMatch
@@ -283,32 +305,27 @@ class ApplicationEngine:
             # module docstring for the vocabulary).
             is_success = result.status in SUCCESS_RESULT_STATUSES
             persisted_status = normalize_result_status(result.status)
-            applied_at_value = datetime.utcnow() if is_success else None
+            applied_at_value = _utc_now() if is_success else None
 
             if reserved_app_id is not None:
                 # Update the placeholder reserved by the daily-limit guard.
                 stmt = select(Application).where(Application.id == reserved_app_id)
                 app = (await db.execute(stmt)).scalar_one_or_none()
                 if app is None:
-                    # Defensive: placeholder vanished — fall back to insert.
-                    logger.warning(
-                        "Reserved application id=%d not found; inserting fresh row",
-                        reserved_app_id,
+                    # The placeholder we reserved is gone. Do NOT silently
+                    # INSERT a fresh row — that would double-count this job
+                    # against the daily limit (one phantom + one fresh).
+                    # Surface the invariant break to the caller; the
+                    # ApplicationRecordError handler upstream releases the
+                    # (already-missing) slot and returns RESULT_FAILED.
+                    raise ApplicationRecordError(
+                        "reserved daily-limit placeholder vanished before record "
+                        "(concurrent DB modification?)"
                     )
-                    app = Application(
-                        job_match_id=job_match_id,
-                        method=result.method,
-                        status=persisted_status,
-                        applied_at=applied_at_value,
-                        notes=result.message or None,
-                    )
-                    db.add(app)
-                    await db.flush()
-                else:
-                    app.method = result.method
-                    app.status = persisted_status
-                    app.applied_at = applied_at_value
-                    app.notes = result.message or None
+                app.method = result.method
+                app.status = persisted_status
+                app.applied_at = applied_at_value
+                app.notes = result.message or None
             else:
                 app = Application(
                     job_match_id=job_match_id,
@@ -339,13 +356,22 @@ class ApplicationEngine:
                     match.status = "applied"
 
             await db.commit()
+            # %s for app.id — under mocked DBs (or before flush populates the
+            # PK) app.id can be None, and %d would raise inside the JSON log
+            # formatter, which the broad `except Exception` below would then
+            # turn into a spurious ApplicationRecordError.
             logger.info(
-                "Recorded application id=%d job_match_id=%d result=%s status=%s",
+                "Recorded application id=%s job_match_id=%d result=%s status=%s",
                 app.id,
                 job_match_id,
                 result.status,
                 persisted_status,
             )
+        except ApplicationRecordError:
+            # Already a typed application-record failure (e.g. vanished
+            # placeholder) — roll back and let it propagate untouched.
+            await db.rollback()
+            raise
         except Exception as exc:
             logger.exception("Failed to record application")
             await db.rollback()

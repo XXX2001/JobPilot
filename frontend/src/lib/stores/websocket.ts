@@ -1,5 +1,5 @@
 import { writable, type Readable } from 'svelte/store';
-import type { ClientMessage } from '$lib/types/ws';
+import { asWSMessage, type ClientMessage } from '$lib/types/ws';
 // NOTE: the messages store is intentionally typed as `any[]` for now.
 // Tightening to `WSMessage[]` surfaces real pre-existing vocabulary drift
 // (FE-01 in docs/reports/2026-05-22-audit/04-frontend-audit.md) — see e.g.
@@ -66,7 +66,12 @@ export function connectWs() {
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        const parsed = JSON.parse(event.data);
+        const data = asWSMessage(parsed);
+        if (data === null) {
+          console.warn('Unknown WS message type:', parsed);
+          return;
+        }
         _messages.update(msgs => [...msgs.slice(-199), data]);
         if (data.type === 'login_required') {
           loginPrompt.set({
@@ -100,9 +105,9 @@ function scheduleReconnect() {
   }, 3000);
 }
 
-export function send(data: ClientMessage | string) {
+export function send(data: ClientMessage): void {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(typeof data === 'string' ? data : JSON.stringify(data));
+    ws.send(JSON.stringify(data));
   }
 }
 

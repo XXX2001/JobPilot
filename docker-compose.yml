@@ -41,6 +41,9 @@ services:
       JOBPILOT_PORT: "8000"
       JOBPILOT_DATA_DIR: /app/data
       JOBPILOT_SCRAPER_HEADLESS: "true"
+      # CORS allow-list. If you front this container with a reverse proxy on a
+      # different host, add that origin (comma-separated) here or via .env.
+      JOBPILOT_ALLOWED_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000"
     volumes:
       # Persist SQLite DB, logs, CVs, browser sessions across container restarts.
       - ./data:/app/data

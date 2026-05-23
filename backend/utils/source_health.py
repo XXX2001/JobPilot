@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass
@@ -63,7 +67,7 @@ class SourceHealthMonitor:
         rec = self.get(source_name)
         rec.total_runs += 1
         rec.successful_runs += 1
-        rec.last_success = datetime.utcnow()
+        rec.last_success = _utc_now()
         rec._job_counts.append(jobs_found)
         # Keep only last 10 runs for avg
         if len(rec._job_counts) > 10:
@@ -75,7 +79,7 @@ class SourceHealthMonitor:
         rec = self.get(source_name)
         rec.total_runs += 1
         rec.failed_runs += 1
-        rec.last_failure = datetime.utcnow()
+        rec.last_failure = _utc_now()
         rec.last_error = error[:500]  # truncate long errors
         logger.warning("Source %s: failure — %s", source_name, error[:200])
 

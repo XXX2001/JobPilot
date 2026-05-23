@@ -16,6 +16,15 @@ from backend.gmail.client import GmailRestClient
 from backend.gmail.credentials import load_credential
 from backend.models.gmail import GmailMessage
 
+try:
+    from backend.api.ws import (
+        broadcast_gmail_message_received,
+        broadcast_gmail_sync_status,
+    )
+except Exception:
+    async def broadcast_gmail_sync_status(*a, **k) -> None: ...
+    async def broadcast_gmail_message_received(*a, **k) -> None: ...
+
 logger = logging.getLogger(__name__)
 
 _CONCURRENCY = 10
@@ -91,6 +100,9 @@ class GmailSyncWorker:
 
             if not msg_ids:
                 await self._update_cursor(email, new_history_id)
+                await broadcast_gmail_sync_status(
+                    messages_synced=0, progress=1.0, last_history_id=new_history_id,
+                )
                 return 0
 
             payloads = await asyncio.gather(*(self._safe_get(client, mid) for mid in msg_ids))
@@ -103,6 +115,9 @@ class GmailSyncWorker:
                 inserted += 1
 
         await self._update_cursor(email, new_history_id)
+        await broadcast_gmail_sync_status(
+            messages_synced=inserted, progress=1.0, last_history_id=new_history_id,
+        )
         return inserted
 
     async def _first_run_ids(
@@ -181,6 +196,13 @@ class GmailSyncWorker:
             except IntegrityError:
                 await session.rollback()
                 return False
+        await broadcast_gmail_message_received(
+            gmail_message_id=row.gmail_message_id,
+            from_address=row.from_address,
+            subject=row.subject,
+            category=row.category,
+            category_confidence=row.category_confidence,
+        )
         return True
 
     async def _update_cursor(self, email: str, new_history_id: Optional[str]) -> None:

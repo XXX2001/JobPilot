@@ -12,6 +12,7 @@
 | [Architecture](architecture.md) | Developers | System overview, component diagram, request lifecycles, DB schema |
 | [API Reference](api-reference.md) | Developers / Integrators | All REST endpoints + WebSocket protocol |
 | [File Map](file-map.md) | Developers | Every backend file, its responsibility, internal deps, callers |
+| [File Map (frontend)](frontend-file-map.md) | Developers | Every SvelteKit file, its responsibility, internal deps, backend endpoints used |
 | [Code Review](code-review.md) | Project / QA | Production-readiness findings: security, reliability, quality (38 findings) |
 
 ## Reports & Audits

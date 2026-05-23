@@ -218,10 +218,12 @@ try:
     import backend.api.jobs as jobs  # type: ignore
     import backend.api.queue as queue  # type: ignore
     import backend.api.settings as api_settings  # type: ignore
+    import backend.api.today as today  # type: ignore
     import backend.api.ws as ws  # type: ignore
 
     app.include_router(jobs.router)
     app.include_router(queue.router)
+    app.include_router(today.router)
     # Export router first so /export is not shadowed by /{id} on applications router
     app.include_router(applications_export.router)
     app.include_router(applications.router)

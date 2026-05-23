@@ -29,6 +29,7 @@ class UserProfile(Base):
     base_cv_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     base_letter_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_info: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_dashboard_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

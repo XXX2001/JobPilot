@@ -69,7 +69,8 @@ def _resolve_cv_path(profile_row: Any, data_dir: Path) -> Path | None:
     A warning is logged whenever we fall back to auto-detection.
     """
     if profile_row and profile_row.base_cv_path:
-        candidate = Path(profile_row.base_cv_path)
+        raw = Path(profile_row.base_cv_path)
+        candidate = raw if raw.is_absolute() else data_dir / raw
         if candidate.exists():
             return candidate
 

@@ -54,17 +54,22 @@ def test_cv_upload_file_exists_on_disk(test_app: TestClient):
 
 
 def test_cv_upload_sets_profile_base_cv_path(test_app: TestClient):
-    """After upload, GET /api/settings/profile should show the new base_cv_path."""
+    """After upload, GET /api/settings/profile should show the new base_cv_path.
+
+    The stored value must be the RELATIVE path (relative to data_dir) — equal to
+    what the upload response returned in ``path``.
+    """
     content = b"\\documentclass{article}\\begin{document}Profile CV\\end{document}"
     resp = _upload(test_app, "profile_cv.tex", content)
     assert resp.status_code == 200, resp.text
-    uploaded_path = resp.json()["path"]
+    uploaded_path = resp.json()["path"]  # e.g. "templates/profile_cv.tex"
 
     profile_resp = test_app.get("/api/settings/profile")
     assert profile_resp.status_code == 200
     profile = profile_resp.json()
     assert profile["base_cv_path"] is not None
-    assert uploaded_path in profile["base_cv_path"] or profile["base_cv_path"].endswith(uploaded_path)
+    # Stored value must be exactly the relative path returned by the upload
+    assert profile["base_cv_path"] == uploaded_path
 
 
 def test_cv_upload_cls_extension_allowed(test_app: TestClient):
@@ -148,3 +153,46 @@ def test_cv_upload_rejects_empty_filename_after_sanitize(test_app: TestClient):
     # the important traversal guards above are what matter.
     # Just check that the request doesn't crash the server:
     assert resp.status_code in (200, 400), resp.text
+
+
+# ---------------------------------------------------------------------------
+# Atomic write: rollback on DB failure
+# ---------------------------------------------------------------------------
+
+def test_cv_upload_rolls_back_on_db_failure(test_app: TestClient, monkeypatch):
+    """If the DB commit fails, neither dest nor dest_tmp should remain on disk."""
+    import pytest
+    from unittest.mock import AsyncMock, patch
+
+    content = b"\\documentclass{article}\\begin{document}Rollback CV\\end{document}"
+    filename = "rollback_cv.tex"
+
+    data_dir = Path(os.environ["JOBPILOT_DATA_DIR"])
+    dest = data_dir / "templates" / filename
+    dest_tmp = dest.with_suffix(dest.suffix + ".tmp")
+
+    # Patch the DB session's commit to raise inside the endpoint
+    original_commit = None
+
+    async def _failing_commit(self_or_none=None):
+        raise RuntimeError("Simulated DB commit failure")
+
+    with patch(
+        "backend.api.settings.DBSession",
+        side_effect=None,
+    ):
+        pass  # We'll monkeypatch at the session level instead
+
+    # Use monkeypatch on the AsyncSession.commit method
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    monkeypatch.setattr(AsyncSession, "commit", _failing_commit)
+
+    resp = _upload(test_app, filename, content)
+
+    # The endpoint should return a 500 (unhandled RuntimeError becomes 500)
+    assert resp.status_code == 500, resp.text
+
+    # Neither the final dest nor the temp file should exist
+    assert not dest.exists(), f"Dest file should not exist after rollback: {dest}"
+    assert not dest_tmp.exists(), f"Temp file should not exist after rollback: {dest_tmp}"

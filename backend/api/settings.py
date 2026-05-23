@@ -379,7 +379,9 @@ async def get_setup_status(db: DBSession):
 
     base_cv_uploaded = False
     if profile and profile.base_cv_path:
-        base_cv_uploaded = Path(profile.base_cv_path).exists()
+        cv_p = Path(profile.base_cv_path)
+        resolved = cv_p if cv_p.is_absolute() else DATA_DIR / cv_p
+        base_cv_uploaded = resolved.exists()
 
     if not base_cv_uploaded:
         templates_dir = DATA_DIR / "templates"
@@ -465,10 +467,12 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
     except ValueError:
         raise HTTPException(status_code=400, detail="Resolved path escapes templates directory.")
 
-    dest.write_bytes(data)
+    # --- Atomic write: write to a .tmp file first; rename only after DB commit ---
+    dest_tmp = dest.with_suffix(dest.suffix + ".tmp")
+    dest_tmp.write_bytes(data)
 
-    # --- Update UserProfile.base_cv_path ---
-    relative_path = f"templates/{safe_name}"
+    # --- Update UserProfile.base_cv_path (relative to data_dir) ---
+    relative_path = str(dest.relative_to(DATA_DIR))
     stmt = select(UserProfile).where(UserProfile.id == 1)
     result = await db.execute(stmt)
     profile = result.scalar_one_or_none()
@@ -478,14 +482,21 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
             id=1,
             full_name="",
             email="",
-            base_cv_path=str(dest),
+            base_cv_path=relative_path,
         )
         db.add(profile)
     else:
-        profile.base_cv_path = str(dest)
+        profile.base_cv_path = relative_path
         profile.updated_at = _utc_now()
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        dest_tmp.unlink(missing_ok=True)
+        raise
+    else:
+        dest_tmp.rename(dest)
+
     logger.info("CV uploaded: path=%s size=%d", dest, len(data))
 
     return CvUploadResponse(

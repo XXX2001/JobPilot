@@ -4,6 +4,7 @@
 	import '../app.css';
 	import { wsStatus, connectWs } from '$lib/stores/websocket';
 	import { dailyLimit, limitColour } from '$lib/stores/dailyLimit';
+	import { toasts, dismissToast } from '$lib/stores/toast';
 	import { onMount } from 'svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import LoginRequiredModal from '$lib/components/LoginRequiredModal.svelte';
@@ -55,6 +56,47 @@
 
 <LoginRequiredModal />
 <HotkeyHelp />
+
+<!-- Global toast stack (top-right). Populated via pushToast() in $lib/stores/toast. -->
+{#if $toasts.length > 0}
+	<div class="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm">
+		{#each $toasts as t (t.id)}
+			<div
+				role="status"
+				class="rounded-lg border px-4 py-3 shadow-lg backdrop-blur-sm bg-card/95 animate-fade-in-up
+					{t.kind === 'success'
+						? 'border-emerald-500/30'
+						: t.kind === 'warning'
+							? 'border-amber-500/30'
+							: t.kind === 'error'
+								? 'border-red-500/30'
+								: 'border-border'}"
+			>
+				<div class="flex items-start gap-3">
+					<div class="flex-1 min-w-0">
+						<p class="text-sm font-medium leading-snug text-foreground break-words">{t.message}</p>
+						{#if t.href}
+							<a
+								href={t.href}
+								class="mt-1 inline-block text-xs text-primary hover:underline"
+								onclick={() => dismissToast(t.id)}
+							>
+								{t.hrefLabel ?? 'Open'}
+							</a>
+						{/if}
+					</div>
+					<button
+						onclick={() => dismissToast(t.id)}
+						class="text-muted-foreground hover:text-foreground text-xs flex-shrink-0 mt-0.5 transition-colors"
+						aria-label="Dismiss notification"
+					>
+						✕
+					</button>
+				</div>
+			</div>
+		{/each}
+	</div>
+{/if}
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
 	<!-- Sidebar -->

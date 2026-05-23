@@ -1,5 +1,6 @@
 import { writable, type Readable } from 'svelte/store';
 import { asWSMessage, type ClientMessage } from '$lib/types/ws';
+import { pushToast } from '$lib/stores/toast';
 // NOTE: the messages store is intentionally typed as `any[]` for now.
 // Tightening to `WSMessage[]` surfaces real pre-existing vocabulary drift
 // (FE-01 in docs/reports/2026-05-22-audit/04-frontend-audit.md) — see e.g.
@@ -78,6 +79,26 @@ export function connectWs() {
             site: data.site,
             text: data.browser_window_title || `Please log into ${data.site} in the browser window, then click 'Done'.`
           });
+        } else if (data.type === 'gmail_message_received') {
+          const label = data.subject?.trim() || data.from_address;
+          // Map backend categories to a toast tone. Anything unknown stays neutral.
+          const kind = data.category === 'rejection'
+            ? 'warning'
+            : data.category === 'offer' || data.category === 'interview_invite'
+              ? 'success'
+              : 'info';
+          // Deep-link to the linked application if backend matched one,
+          // otherwise drop the user into the unlinked inbox.
+          const href = data.linked_application_id !== null
+            ? '/tracker'
+            : '/inbox';
+          const hrefLabel = data.linked_application_id !== null
+            ? 'Open tracker'
+            : 'Open inbox';
+          pushToast(`Gmail: ${label}`, { kind, href, hrefLabel });
+        } else if (data.type === 'gmail_sync_status') {
+          // Phase 1 minimum: log only. Sidebar pulse can come later.
+          console.debug('gmail sync', data);
         }
       } catch (e) {
         _messages.update(msgs => [...msgs.slice(-199), event.data]);

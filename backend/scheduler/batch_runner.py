@@ -178,11 +178,13 @@ class BatchRunner:
         try:
             from backend.applier.follow_up import scan_overdue  # noqa: PLC0415
 
-            _fu_count = await scan_overdue(db)
+            _fu_count = await scan_overdue()
             logger.info("Batch follow-up scan: %d event(s) created", _fu_count)
         except Exception as _fu_exc:
             logger.warning(
-                "follow_up.scan_overdue failed at batch start (non-fatal): %s", _fu_exc
+                "follow_up.scan_overdue failed at batch start (non-fatal): %s",
+                _fu_exc,
+                exc_info=True,
             )
 
         # ── Step 1: Scrape ───────────────────────────────────────────────

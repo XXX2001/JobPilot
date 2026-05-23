@@ -22,8 +22,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import exists, select
-from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.database import AsyncSessionLocal
 from backend.models.application import Application, ApplicationEvent
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-async def scan_overdue(db: AsyncSession, threshold_days: int = 7) -> int:
+async def scan_overdue(threshold_days: int = 7) -> int:
     """Create ``follow_up_due`` events for overdue applications.
 
     An application is overdue when:
@@ -44,6 +44,10 @@ async def scan_overdue(db: AsyncSession, threshold_days: int = 7) -> int:
 
     Returns the number of new events created (0 when nothing is overdue or
     on an empty database).
+
+    Always opens its own short-lived session so callers do not need to pass
+    a session and the function never commits inside a borrowed long-lived
+    session (which would expire ORM objects still in use by the caller).
     """
     cutoff: datetime = _utc_now() - timedelta(days=threshold_days)
 
@@ -63,24 +67,27 @@ async def scan_overdue(db: AsyncSession, threshold_days: int = 7) -> int:
             ~already_has_event,
         )
     )
-    result = await db.execute(stmt)
-    candidates = result.scalars().all()
 
-    if not candidates:
-        return 0
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(stmt)
+        candidates = result.scalars().all()
 
-    now = _utc_now()
-    count = 0
-    for app in candidates:
-        event = ApplicationEvent(
-            application_id=app.id,
-            event_type="follow_up_due",
-            details=f"No follow-up after {threshold_days} days",
-            event_date=now,
-        )
-        db.add(event)
-        count += 1
+        if not candidates:
+            return 0
 
-    await db.commit()
+        now = _utc_now()
+        count = 0
+        for app in candidates:
+            event = ApplicationEvent(
+                application_id=app.id,
+                event_type="follow_up_due",
+                details=f"No follow-up after {threshold_days} days",
+                event_date=now,
+            )
+            db.add(event)
+            count += 1
+
+        await db.commit()
+
     logger.info("scan_overdue: created %d follow_up_due event(s)", count)
     return count

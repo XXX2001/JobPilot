@@ -96,10 +96,8 @@ async def _add_event(app_id: int, event_type: str, days_offset: float = 0.0) -> 
 async def _run_scan() -> int:
     """Run scan_overdue against the shared test DB and return the count."""
     from backend.applier.follow_up import scan_overdue
-    from backend.database import AsyncSessionLocal
 
-    async with AsyncSessionLocal() as db:
-        return await scan_overdue(db)
+    return await scan_overdue()
 
 
 # ─── Tests ────────────────────────────────────────────────────────────────────

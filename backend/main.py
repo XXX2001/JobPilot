@@ -145,13 +145,13 @@ async def lifespan(app: FastAPI):
     # ── Scan for overdue follow-ups at startup ───────────────────────────
     try:
         from backend.applier.follow_up import scan_overdue
-        from backend.database import AsyncSessionLocal
 
-        async with AsyncSessionLocal() as _startup_db:
-            _created = await scan_overdue(_startup_db)
+        _created = await scan_overdue()
         logger.info("Startup follow-up scan: %d event(s) created", _created)
     except Exception as _fu_exc:
-        logger.warning("follow_up.scan_overdue failed at startup (non-fatal): %s", _fu_exc)
+        logger.warning(
+            "follow_up.scan_overdue failed at startup (non-fatal): %s", _fu_exc, exc_info=True
+        )
 
     # ── Wire WS client message routing ──────────────────────────────────
     try:

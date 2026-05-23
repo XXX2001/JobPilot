@@ -7,6 +7,8 @@
 	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
 	import BatchPipelineTracker from '$lib/components/BatchPipelineTracker.svelte';
 	import { getEmptyState } from '$lib/utils/easterEggs';
+	import { register, deregister } from '$lib/utils/hotkeys';
+	import type { BindingHandle } from '$lib/utils/hotkeys';
 
 	interface Job {
 		id: number;
@@ -47,6 +49,10 @@
 		fields?: Record<string, string>;
 		screenshot?: string;
 	} | null>(null);
+
+	/** Index of the keyboard-focused card in the `matches` array. -1 = none. */
+	let focusedIndex = $state(-1);
+	let hotkeyHandle: BindingHandle | null = null;
 
 	function defaultMode(job: Job): ApplyMode {
 		return job.apply_method === 'easy_apply' || job.apply_method === 'auto' ? 'auto' : 'manual';
@@ -188,6 +194,30 @@
 		}
 	}
 
+	/** Move keyboard focus to the previous visible card. */
+	function focusPrev() {
+		if (phase !== 'select' || matches.length === 0) return;
+		focusedIndex = focusedIndex <= 0 ? matches.length - 1 : focusedIndex - 1;
+	}
+
+	/** Move keyboard focus to the next visible card. */
+	function focusNext() {
+		if (phase !== 'select' || matches.length === 0) return;
+		focusedIndex = focusedIndex >= matches.length - 1 ? 0 : focusedIndex + 1;
+	}
+
+	/** Return the match.id of the currently focused card, or null. */
+	function focusedMatchId(): number | null {
+		if (focusedIndex < 0 || focusedIndex >= matches.length) return null;
+		return matches[focusedIndex].id;
+	}
+
+	/** Set mode on focused card. */
+	function setFocusedMode(mode: ApplyMode) {
+		const id = focusedMatchId();
+		if (id !== null) setMode(id, mode);
+	}
+
 	let unsubWsConnect: (() => void) | null = null;
 
 	onMount(() => {
@@ -195,11 +225,21 @@
 		syncBatchStatus();
 		// On WS reconnect (e.g. after page refresh), re-sync batch status
 		unsubWsConnect = onWsConnect(syncBatchStatus);
+
+		hotkeyHandle = register('/', {
+			j:     { label: 'Move focus down',      action: focusNext },
+			k:     { label: 'Move focus up',        action: focusPrev },
+			a:     { label: 'Set focused card → Auto',   action: () => setFocusedMode('auto') },
+			m:     { label: 'Set focused card → Manual', action: () => setFocusedMode('manual') },
+			s:     { label: 'Set focused card → Skip',   action: () => setFocusedMode('skip') },
+			Enter: { label: 'Review & apply',        action: () => { if (activeMatches.length > 0 && phase === 'select') proceedToReview(); } }
+		}, { group: 'Job Queue' });
 	});
 
 	onDestroy(() => {
 		unsubWsConnect?.();
 		if (refreshTimeout) clearTimeout(refreshTimeout);
+		if (hotkeyHandle) deregister(hotkeyHandle);
 	});
 </script>
 
@@ -267,13 +307,14 @@
 	{/if}
 
 	<div class="max-w-3xl space-y-2">
-		{#each matches as match (match.id)}
+		{#each matches as match, idx (match.id)}
 			{@const mode = modes.get(match.id) ?? 'manual'}
+			{@const isFocused = idx === focusedIndex}
 			<div
 				class="bg-card border-border flex items-center gap-4 rounded-lg border px-4 py-3 {mode ===
 				'skip'
 					? 'opacity-40'
-					: ''}"
+					: ''} {isFocused ? 'ring-2 ring-primary ring-offset-1 ring-offset-background' : ''}"
 			>
 				<span
 					class="w-10 flex-shrink-0 text-center text-sm font-bold {match.score >= 80

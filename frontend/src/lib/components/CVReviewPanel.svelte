@@ -11,6 +11,9 @@
 	import DiffBlock from './DiffBlock.svelte';
 	import EasterEggToast from './EasterEggToast.svelte';
 	import { getApplyConfirmation, getCvToast } from '$lib/utils/easterEggs';
+	import { register, deregister } from '$lib/utils/hotkeys';
+	import type { BindingHandle } from '$lib/utils/hotkeys';
+	import { onMount, onDestroy } from 'svelte';
 
 	interface Job {
 		id: number;
@@ -69,6 +72,22 @@
 
 	const current = $derived(matches[cursor]);
 	const applyQuote = $derived(panelPhase === 'confirm' ? getApplyConfirmation() : '');
+
+	let hotkeyHandle: BindingHandle | null = null;
+
+	onMount(() => {
+		hotkeyHandle = register('/', {
+			'1':         { label: 'Approve CV changes →',      action: () => { if (panelPhase === 'review') decide('approved'); } },
+			'2':         { label: 'Use base CV →',             action: () => { if (panelPhase === 'review') decide('base_cv'); } },
+			'3':         { label: 'Skip job →',                action: () => { if (panelPhase === 'review') decide('skip'); } },
+			ArrowLeft:   { label: 'Previous job',              action: () => { if (panelPhase === 'review') goBack(); } },
+			ArrowRight:  { label: 'Next job (approve changes)', action: () => { if (panelPhase === 'review') decide('approved'); } }
+		}, { group: 'CV Review' });
+	});
+
+	onDestroy(() => {
+		if (hotkeyHandle) deregister(hotkeyHandle);
+	});
 
 	async function loadDiff(matchId: number) {
 		if (diffs.has(matchId)) return;

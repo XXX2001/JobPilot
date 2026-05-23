@@ -7,7 +7,9 @@
 	import { onMount } from 'svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import LoginRequiredModal from '$lib/components/LoginRequiredModal.svelte';
+	import HotkeyHelp from '$lib/components/HotkeyHelp.svelte';
 	import { page } from '$app/stores';
+	import { handle as hotkeyHandle, setCurrentRoute } from '$lib/utils/hotkeys';
 	import {
 		LayoutDashboard,
 		KanbanSquare,
@@ -27,6 +29,11 @@
 		connectWs();
 	});
 
+	// Keep the dispatcher in sync with the current route.
+	$effect(() => {
+		setCurrentRoute($page.route.id ?? '/');
+	});
+
 	const navLinks = [
 		{ href: '/', label: 'Job Queue', icon: LayoutDashboard },
 		{ href: '/tracker', label: 'Tracker', icon: KanbanSquare },
@@ -40,9 +47,12 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
+<svelte:window onkeydown={hotkeyHandle} />
+
 <ModeWatcher defaultMode="dark" />
 
 <LoginRequiredModal />
+<HotkeyHelp />
 
 <div class="flex h-screen bg-background text-foreground overflow-hidden">
 	<!-- Sidebar -->

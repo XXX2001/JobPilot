@@ -3,6 +3,7 @@
 	import { ModeWatcher, toggleMode } from 'mode-watcher';
 	import '../app.css';
 	import { wsStatus, connectWs } from '$lib/stores/websocket';
+	import { dailyLimit, limitColour } from '$lib/stores/dailyLimit';
 	import { onMount } from 'svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import LoginRequiredModal from '$lib/components/LoginRequiredModal.svelte';
@@ -82,6 +83,15 @@
 				<span>Offline</span>
 			{/if}
 		</div>
+
+		<!-- Daily limit pill -->
+		{#if $dailyLimit !== null}
+			<div class="px-3 py-1 flex items-center gap-2 text-xs">
+				<span class="font-medium {limitColour($dailyLimit.used)}">
+					{$dailyLimit.used} / {$dailyLimit.limit} today
+				</span>
+			</div>
+		{/if}
 
 		<!-- Dark mode toggle -->
 		<button

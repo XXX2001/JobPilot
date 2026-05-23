@@ -16,11 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import DBSession
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
+from backend.models.base import Base
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.scraping.site_prompts import SITE_CONFIGS
 
-_T = TypeVar("_T")
+_T = TypeVar("_T", bound=Base)
 
 
 def _utc_now() -> datetime:
@@ -50,7 +51,7 @@ async def _upsert_singleton(
     On update, only the fields present in *body* are applied — defaults
     are ignored.
     """
-    stmt = select(model_cls).where(model_cls.id == row_id)  # type: ignore[attr-defined]
+    stmt = select(model_cls).where(getattr(model_cls, "id") == row_id)
     result = await db.execute(stmt)
     row: _T | None = result.scalar_one_or_none()
 
@@ -61,13 +62,14 @@ async def _upsert_singleton(
         merged = {**defaults, **updates, "id": row_id}
         row = model_cls(**merged)  # type: ignore[call-arg]
         db.add(row)
+        # Note: on create, timestamps rely on each model's ORM-level `default=` column.
     else:
         for field, value in updates.items():
             setattr(row, field, value)
-        row.updated_at = _utc_now()  # type: ignore[attr-defined]
+        setattr(row, "updated_at", _utc_now())
 
     await db.commit()
-    await db.refresh(row)  # type: ignore[arg-type]
+    await db.refresh(row)
     return row
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], redirect_slashes=False)

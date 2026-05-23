@@ -348,9 +348,9 @@ async def get_sources() -> SourcesOut:
 
 
 @router.put("/sources", response_model=SourcesUpdateResponse)
-async def update_sources(_body: SourcesUpdate) -> SourcesUpdateResponse:
+async def update_sources(body: SourcesUpdate) -> SourcesUpdateResponse:
     """Placeholder: sources are configured via .env file — this route returns guidance."""
-    # API keys are NOT stored in the DB per spec. Guide user to .env.
+    del body  # validated but not persisted; sources live in .env
     return SourcesUpdateResponse(
         message=(
             "API keys must be set in the .env file at the project root. "

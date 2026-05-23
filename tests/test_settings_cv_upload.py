@@ -6,16 +6,7 @@ import os
 from pathlib import Path
 
 import httpx
-import pytest
 from starlette.testclient import TestClient
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _tex_file(content: bytes = b"\\documentclass{article}\\begin{document}Hello\\end{document}") -> tuple[str, bytes, str]:
-    """Return a (filename, content, mimetype) triple for a .tex upload."""
-    return ("cv.tex", content, "text/plain")
 
 
 def _upload(client: TestClient, filename: str, content: bytes, mimetype: str = "text/plain") -> httpx.Response:

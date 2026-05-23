@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
     APPLY_TIER1_ENABLED: bool = Field(True, env="APPLY_TIER1_ENABLED")
 
+    # ── Gmail integration (Phase 1) ──────────────────────────────────────
+    GMAIL_CLIENT_ID: str = Field("", env="GMAIL_CLIENT_ID")
+    GMAIL_CLIENT_SECRET: SecretStr = SecretStr("")
+    GMAIL_REDIRECT_URI: str = Field(
+        "http://localhost:8000/api/gmail/oauth/callback",
+        env="GMAIL_REDIRECT_URI",
+    )
+    GMAIL_BACKFILL_DAYS: int = Field(30, env="GMAIL_BACKFILL_DAYS")
+    GMAIL_POLL_INTERVAL_MINUTES: int = Field(5, env="GMAIL_POLL_INTERVAL_MINUTES")
+
     def is_configured(self, field_name: str) -> bool:
         """Return True if *field_name* holds a real, non-placeholder value.
 

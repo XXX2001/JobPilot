@@ -62,7 +62,11 @@ def _str(value: object) -> str:
     return str(value)
 
 
-@router.get("/export")
+@router.get(
+    "/export",
+    response_class=StreamingResponse,
+    responses={400: {"description": "Unknown format — only 'csv' is supported"}},
+)
 async def export_applications(
     db: DBSession,
     format: str = Query(..., description="Export format — only 'csv' is supported"),

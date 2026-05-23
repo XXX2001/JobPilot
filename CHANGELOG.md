@@ -4,6 +4,70 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## 2026-05-23 — Quick-wins sprint (qw-1 .. qw-7)
+
+**Scope.** 7 PRs landed in one sprint, each designed to ship in a day or less. The sprint targeted the top-7 forward-looking improvements from the 2026-05-23 improvements report: two dead-code deletions, two backend behaviour gaps (CV upload bytes + upsert safety), two user-facing features (daily-limit meter + follow-up reminders), one data-portability feature (CSV export), and one ergonomics win (global hotkeys). Every PR was self-contained with its own tests and frontend wire-up; no stacking dependencies between PRs.
+
+**Outcomes.**
+- **Tests:** 341 passed / 0 failed / 7 skipped (was 315/0/7 at sprint start)
+- **Pyright (basic mode):** 40 errors / 7 warnings — baseline unchanged; no new type errors introduced
+- **Frontend:** 0 TS errors, 0 svelte-check errors, 1 pre-existing a11y warning at [`frontend/src/routes/settings/+page.svelte:718`](frontend/src/routes/settings/+page.svelte#L718)
+
+### qw-1 — Delete dead utils (retry.py + source_health.py)
+
+[`backend/utils/retry.py`](backend/utils/retry.py), [`backend/utils/source_health.py`](backend/utils/source_health.py)
+- Deleted 150 LOC that had zero importers anywhere in the codebase. Confirmed via AST-level import scan before deletion.
+- Merge commit `382de74` (`Merge qw-1-delete-dead-utils`).
+
+### qw-2 — CV upload actually POSTs bytes (FE-12 fix)
+
+[`backend/api/settings.py`](backend/api/settings.py), [`frontend/src/routes/settings/+page.svelte`](frontend/src/routes/settings/+page.svelte), [`tests/test_cv_upload.py`](tests/test_cv_upload.py)
+- Added `POST /api/settings/profile/cv-upload` multipart endpoint that validates extension (`.tex` only), enforces a 2 MB size cap, and writes atomically via `NamedTemporaryFile` + `rename` before updating `UserProfile.base_cv_path` (relative path stored, not absolute).
+- 13 new tests cover the happy path, path-traversal rejection, oversize rejection, and wrong-extension rejection.
+- Frontend upload button now sends real `FormData` bytes instead of the previous no-op (FE-12 placebo resolved).
+- Merge commit `bf5ee6b` (`Merge qw-2-cv-upload-bytes`).
+
+### qw-3 — `_upsert_singleton` helper for settings endpoints
+
+[`backend/api/settings.py`](backend/api/settings.py)
+- Extracted a single `_upsert_singleton(model_cls, body, defaults)` helper used by both `PUT /api/settings/profile` and `PUT /api/settings/search`. Uses `exclude_unset=True` so only explicitly-provided fields overwrite existing values.
+- Each `PUT` route shrank from ~50 LOC to ~10 LOC; the F-Q4 bug class (silent field drop on fresh row) is structurally prevented.
+- Merge commit `9e06394` (`Merge qw-3-settings-upsert-helper`).
+
+### qw-4 — Daily-limit budget meter
+
+[`backend/api/applications.py`](backend/api/applications.py), [`backend/applier/daily_limit.py`](backend/applier/daily_limit.py), [`frontend/src/lib/stores/dailyLimit.ts`](frontend/src/lib/stores/dailyLimit.ts), [`frontend/src/lib/components/Sidebar.svelte`](frontend/src/lib/components/Sidebar.svelte)
+- Added `GET /api/applications/limit-status` returning `{used, limit, resets_at}` by reading the same `COUNTABLE_STATUSES` counter as `DailyLimitGuard`. `COUNTABLE_STATUSES` promoted from module-private to public export.
+- Frontend sidebar shows a pill (e.g. "7 / 10 today") with a 60-second polling store; the counter also invalidates immediately on receipt of a `apply_result` WebSocket message.
+- Merge commit `b94aecc` (`Merge qw-4-daily-limit-meter`).
+
+### qw-5 — Follow-up reminders
+
+[`backend/applier/follow_up.py`](backend/applier/follow_up.py), [`backend/api/applications.py`](backend/api/applications.py), [`frontend/src/routes/tracker/+page.svelte`](frontend/src/routes/tracker/+page.svelte)
+- `follow_up.scan_overdue()` finds `applied` rows older than 7 days with no existing `follow_up_due` event; inserts the event idempotently; opens its own `AsyncSessionLocal` session so it never commits inside a borrowed session.
+- Scanner is called lazily at app startup and at the start of each batch run.
+- `GET /api/applications?needs_follow_up=true` filter added via a NOT EXISTS anti-join; the Tracker gained a "Needs follow-up" tab with a badge showing the count.
+- Merge commit `a2cec1d` (`Merge qw-5-follow-up-reminders`).
+
+### qw-6 — Application portfolio CSV export
+
+[`backend/api/applications_export.py`](backend/api/applications_export.py), [`frontend/src/routes/tracker/+page.svelte`](frontend/src/routes/tracker/+page.svelte), [`tests/test_applications_export.py`](tests/test_applications_export.py)
+- `GET /api/applications/export?format=csv` streams all applications via Python's `csv` stdlib (no pandas) as a `StreamingResponse`. 13 columns in spec order; filename is `jobpilot-applications-YYYYMMDD.csv` (UTC date).
+- 13 new tests cover happy path (header row, data rows, empty DB) and error paths (400 on unknown format).
+- Tracker page gained a download button that triggers the export.
+- Merge commit `9c4bb88` (`Merge qw-6-applications-export-csv`).
+
+### qw-7 — Global hotkeys + HotkeyHelp modal
+
+[`frontend/src/lib/utils/hotkeys.ts`](frontend/src/lib/utils/hotkeys.ts), [`frontend/src/lib/components/HotkeyHelp.svelte`](frontend/src/lib/components/HotkeyHelp.svelte), [`frontend/src/routes/+layout.svelte`](frontend/src/routes/+layout.svelte)
+- Central `HotkeyDispatcher` class with `register(key, handler)` API; `svelte:window on:keydown` in the root layout; input-focus guard skips events when focus is inside `input`, `textarea`, `select`, or `contenteditable`.
+- Queue navigation: `j/k` move selection, `a/m/s` set apply/manual/skip status, `Enter` opens detail, `Esc` closes.
+- CV review bindings: `1/2/3` for tier selection, `←/→` to navigate matches.
+- `?` opens the `HotkeyHelp` modal listing all active bindings.
+- Merge commit `39b177c` (`Merge qw-7-global-hotkeys`).
+
+---
+
 ## 2026-05-22 — Pre-ship hardening sprint (PRs 0–10)
 
 **Scope.** 12 stacked PRs landed in one sprint covering type-checking, security, DB foundations, test isolation, apply-flow correctness, concurrency & LLM cost, API contract, frontend wire-up, observability, naming, and post-review cleanup.

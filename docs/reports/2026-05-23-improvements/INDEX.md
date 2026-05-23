@@ -24,13 +24,13 @@ Ordered by combination of **user value** × **effort to ship**.
 
 | # | ID | Title | Source | Effort | Why now |
 |---|---|---|---|---|---|
-| 1 | **PG-PRE** | Wire CV upload to actually POST bytes (FE-12 stub) | UX-3c | XS | First-run trust-break. Users complete onboarding, the dashboard reports `setup_complete=true`, and the first batch fails. |
-| 2 | **BE-DEAD** | Delete `backend/utils/retry.py` + `backend/utils/source_health.py` | BE-D1+D2 | XS | 150 LOC dead. Zero importers. Standalone PR. |
-| 3 | **UX-HOTKEY** | Global `j/k/a/m/s/Enter/Esc` hotkeys + queue navigation | UX-2a | S | No hotkeys exist today. Single `lib/utils/hotkeys.ts` + `svelte:window` in `+layout.svelte`. |
-| 4 | **PG-1** | Follow-up reminders (7-day post-apply nudge) | PG-1 | S–M | `applied_at` already stored but never read. Highest-impact small feature; jumps response rate. |
-| 5 | **UX-LIMIT** | Daily-limit budget meter in sidebar | UX-2d | S | Backend tracks it (`DailyLimitGuard`); FE never surfaces it. New `GET /api/applications/limit-status`. |
-| 6 | **PG-3** | Application portfolio CSV/PDF export | PG-3 | S | Required for unemployment-benefit reporting in EU. Pure read-side join. |
-| 7 | **BE-R3** | `_upsert_singleton` helper for settings endpoints | BE-R3 | S | Same field-by-field upsert × 2 today. Prevents the exact bug fixed in PR-10 (F-Q4 bonus). |
+| 1 | **PG-PRE** | Wire CV upload to actually POST bytes (FE-12 stub) *(Shipped 2026-05-23)* | UX-3c | XS | First-run trust-break. Users complete onboarding, the dashboard reports `setup_complete=true`, and the first batch fails. |
+| 2 | **BE-DEAD** | Delete `backend/utils/retry.py` + `backend/utils/source_health.py` *(Shipped 2026-05-23)* | BE-D1+D2 | XS | 150 LOC dead. Zero importers. Standalone PR. |
+| 3 | **UX-HOTKEY** | Global `j/k/a/m/s/Enter/Esc` hotkeys + queue navigation *(Shipped 2026-05-23)* | UX-2a | S | No hotkeys exist today. Single `lib/utils/hotkeys.ts` + `svelte:window` in `+layout.svelte`. |
+| 4 | **PG-1** | Follow-up reminders (7-day post-apply nudge) *(Shipped 2026-05-23)* | PG-1 | S–M | `applied_at` already stored but never read. Highest-impact small feature; jumps response rate. |
+| 5 | **UX-LIMIT** | Daily-limit budget meter in sidebar *(Shipped 2026-05-23)* | UX-2d | S | Backend tracks it (`DailyLimitGuard`); FE never surfaces it. New `GET /api/applications/limit-status`. |
+| 6 | **PG-3** | Application portfolio CSV/PDF export *(Shipped 2026-05-23)* | PG-3 | S | Required for unemployment-benefit reporting in EU. Pure read-side join. |
+| 7 | **BE-R3** | `_upsert_singleton` helper for settings endpoints *(Shipped 2026-05-23)* | BE-R3 | S | Same field-by-field upsert × 2 today. Prevents the exact bug fixed in PR-10 (F-Q4 bonus). |
 | 8 | **PG-INT-1** | Gmail integration Phase 1 (read-only sync) | PG-Int-1 | M | Already designed in [`../2026-05-22-audit/03-gmail-integration-design.md`](../2026-05-22-audit/03-gmail-integration-design.md). 3× user-perceived value of any other single feature. |
 | 9 | **UX-BET** | "Today" dashboard replaces raw queue as `/` | UX-3 | M | Re-frames product from "tool I trigger" to "ritual I check daily". Earns the open-tab. |
 | 10 | **BE-R4** | Extract apply-flow state machine (`backend/applier/state.py`) | BE-1bet | L | Deletes ~400 LOC, eliminates the "did we release/close/rollback?" bug class. Foundation for everything else apply-side. |

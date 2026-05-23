@@ -431,6 +431,7 @@ The `job_title`, `company`, `location`, and `url` fields are denormalized from t
 | `skip` | integer | 0 | Offset for pagination (min 0) |
 | `limit` | integer | 50 | Max rows to return; range 1–200 |
 | `status` | string | none | Filter to a specific status value. One of: `pending`, `applied`, `cancelled`, `failed`, `interview`, `offer`, `rejected` |
+| `needs_follow_up` | boolean | none | If `true`, return only applications that need a follow-up — i.e. applications with a `follow_up_due` event that do not yet have a subsequent `follow_up` event (NOT EXISTS anti-join). Use to populate the "Needs follow-up" tracker tab. |
 
 **Request body:** None
 
@@ -474,6 +475,72 @@ Events are batch-fetched to avoid N+1 queries.
 | Status | Condition |
 |---|---|
 | 500 | Database error |
+
+---
+
+#### `GET /api/applications/limit-status`
+
+**Description:** Return today's application count, the configured daily limit, and the UTC reset time. Reads the same `COUNTABLE_STATUSES` counter as `DailyLimitGuard`, so the result is always consistent with `POST /api/applications/{match_id}/apply` rejections.
+
+**Auth required:** No
+
+**Path params:** None
+
+**Query params:** None
+
+**Request body:** None
+
+**Response `200`:**
+
+```json
+{
+  "used": 7,
+  "limit": 10,
+  "resets_at": "2026-05-24T00:00:00+00:00"
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `used` | integer | Number of applications counted today (statuses in `COUNTABLE_STATUSES`: `applied`, `pending`) |
+| `limit` | integer | `SearchSettings.daily_limit` (defaults to `DAILY_LIMIT` constant if no settings row exists) |
+| `resets_at` | string (ISO 8601) | Start of next UTC day — when the counter resets to 0 |
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| 500 | Database error |
+
+---
+
+#### `GET /api/applications/export`
+
+**Description:** Stream all applications as a downloadable CSV file. The response is a `StreamingResponse` — rows are emitted as they are serialised, suitable for large datasets.
+
+**Auth required:** No
+
+**Path params:** None
+
+**Query params:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `format` | string | Yes | Export format. Only `csv` is supported; any other value returns 400. |
+
+**Request body:** None
+
+**Response `200`:** CSV stream with headers:
+- `Content-Type: text/csv; charset=utf-8`
+- `Content-Disposition: attachment; filename="jobpilot-applications-YYYYMMDD.csv"` (UTC date)
+
+The CSV contains a header row followed by one row per application, in 13 columns (in this order): `applied_at`, `status`, `method`, `company`, `title`, `location`, `salary_text`, `job_url`, `score`, `ats_score`, `last_event_type`, `last_event_at`, `last_event_details`. Datetime fields use ISO 8601 with `+00:00` suffix; missing values are empty strings.
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| 400 | `format` is not `csv` |
 
 ---
 
@@ -1026,6 +1093,43 @@ Dates are in `YYYY-MM-DD` format. The array always has exactly `days` entries, o
 All fields are optional strings (or dict for `additional_info`).
 
 **Response `200`:** Same shape as `GET /api/settings/profile`.
+
+---
+
+#### `POST /api/settings/profile/cv-upload`
+
+**Description:** Upload a LaTeX CV template file, replacing any previously uploaded base CV. The file is saved atomically (write to a temp file, then rename) and `UserProfile.base_cv_path` is updated with a relative path.
+
+**Auth required:** No
+
+**Path params:** None
+
+**Query params:** None
+
+**Request body:** `multipart/form-data` with a single file field named `file`.
+
+| Constraint | Value |
+|---|---|
+| Allowed extensions | `.tex` only |
+| Maximum file size | 2 MB |
+
+**Response `200`:**
+
+```json
+{
+  "base_cv_path": "templates/cv.tex"
+}
+```
+
+`base_cv_path` is the relative path (relative to `{data_dir}`) where the file was stored. Pass this value to `PUT /api/settings/profile` as `base_cv_path` if you need to persist it to the profile row.
+
+**Error responses:**
+
+| Status | Condition |
+|---|---|
+| 400 | Path-traversal attempt detected (filename contains `..` or an absolute path) |
+| 413 | File exceeds the 2 MB size limit |
+| 415 | File extension is not `.tex` |
 
 ---
 

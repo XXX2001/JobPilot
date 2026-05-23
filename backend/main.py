@@ -213,6 +213,7 @@ app.add_middleware(
 try:
     import backend.api.analytics as analytics  # type: ignore
     import backend.api.applications as applications  # type: ignore
+    import backend.api.applications_export as applications_export  # type: ignore
     import backend.api.documents as documents  # type: ignore
     import backend.api.jobs as jobs  # type: ignore
     import backend.api.queue as queue  # type: ignore
@@ -221,6 +222,8 @@ try:
 
     app.include_router(jobs.router)
     app.include_router(queue.router)
+    # Export router first so /export is not shadowed by /{id} on applications router
+    app.include_router(applications_export.router)
     app.include_router(applications.router)
     app.include_router(documents.router)
     app.include_router(api_settings.router)

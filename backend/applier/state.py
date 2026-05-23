@@ -29,7 +29,6 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,10 +39,7 @@ if TYPE_CHECKING:
     # at runtime — the attribute is always Optional and may be None.
     from browser_use.browser.session import BrowserSession
 
-from backend.applier import (
-    RESULT_CANCELLED,
-    RESULT_FAILED,
-)
+from backend.applier import RESULT_FAILED
 
 logger = logging.getLogger(__name__)
 

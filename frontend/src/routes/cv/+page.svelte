@@ -49,30 +49,22 @@
 		}
 	}
 
-	// TODO FE-12: This handler NEVER sends the file's bytes — it builds `uploads/${file.name}`
-	// and PUTs the string path to /api/settings/profile. The backend gets a path that points
-	// nowhere on the server's disk. Fix in the FE-bugs follow-up PR (needs a new backend
-	// endpoint /api/documents/cv that accepts multipart/form-data).
 	async function handleFileUpload(file: File) {
-		if (!file.name.endsWith('.tex')) {
-			error = 'Please upload a .tex file.';
-			return;
-		}
 		uploading = true;
 		error = '';
 		successMsg = '';
 
 		try {
-			const fileName = file.name;
+			const fd = new FormData();
+			fd.append('file', file, file.name);
 
-			// Save profile with a placeholder path (real upload path is server-side)
-			await apiFetch('/api/settings/profile', {
-				method: 'PUT',
-				body: JSON.stringify({ base_cv_path: `uploads/${fileName}` })
-			});
+			const result = await apiFetch<{ path: string; filename: string; size_bytes: number }>(
+				'/api/settings/profile/cv-upload',
+				{ method: 'POST', body: fd }
+			);
 
-			currentCvPath = `uploads/${fileName}`;
-			successMsg = `CV template "${fileName}" registered.`;
+			currentCvPath = result.path;
+			successMsg = `CV registered at: ${result.path}`;
 		} catch (e: any) {
 			error = e.message ?? 'Upload failed';
 		} finally {
@@ -163,10 +155,10 @@
 		>
 			<input
 				type="file"
-				accept=".tex"
+				accept=".tex,.cls"
 				onchange={onFileInput}
 				class="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-				aria-label="Upload .tex CV template"
+				aria-label="Upload .tex or .cls CV template"
 			/>
 			<div class="flex flex-col items-center gap-3 pointer-events-none">
 				<div class="w-12 h-12 rounded-full bg-muted flex items-center justify-center">

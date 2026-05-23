@@ -30,18 +30,19 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 	async function handleCvUpload(e: Event) {
 		const file = (e.target as HTMLInputElement).files?.[0];
 		if (!file) return;
-		if (!file.name.endsWith('.tex')) {
-			error = 'Please select a .tex file.';
-			return;
-		}
 		cvUploading = true;
 		error = '';
 		try {
-			await apiFetch('/api/settings/profile', {
-				method: 'PUT',
-				body: JSON.stringify({ base_cv_path: `uploads/${file.name}` })
-			});
+			const fd = new FormData();
+			fd.append('file', file, file.name);
+
+			const result = await apiFetch<{ path: string; filename: string; size_bytes: number }>(
+				'/api/settings/profile/cv-upload',
+				{ method: 'POST', body: fd }
+			);
 			cvDone = true;
+			error = '';
+			void result; // path available if needed for display
 		} catch (e: any) {
 			error = e.message ?? 'Upload failed';
 		} finally {
@@ -177,7 +178,7 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						</div>
 					{:else}
 						<label class="block border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors relative">
-							<input type="file" accept=".tex" onchange={handleCvUpload} class="sr-only" />
+							<input type="file" accept=".tex,.cls" onchange={handleCvUpload} class="sr-only" />
 							<div class="flex flex-col items-center gap-2">
 								<Upload size={24} class="text-muted-foreground" />
 								{#if cvUploading}

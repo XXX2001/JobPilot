@@ -60,17 +60,26 @@ async def list_jobs(
     result = await db.execute(stmt)
     jobs = result.scalars().all()
 
-    # Attach scores from job_matches if min_score is requested
+    # Bulk-fetch the latest JobMatch score per job_id in a single query
+    # (replaces a 1+N per-job lookup). Works on any backend (SQLite/Postgres).
+    job_ids = [j.id for j in jobs]
+    scores_by_job: dict[int, float] = {}
+    if job_ids:
+        match_stmt = (
+            select(JobMatch.job_id, JobMatch.score, JobMatch.matched_at)
+            .where(JobMatch.job_id.in_(job_ids))
+            .order_by(JobMatch.matched_at.desc())
+        )
+        match_rows = await db.execute(match_stmt)
+        for jid, score, _matched_at in match_rows.all():
+            # First row per job_id wins (already sorted desc by matched_at)
+            if jid not in scores_by_job:
+                scores_by_job[jid] = score
+
+    # Attach scores and apply optional min_score filter
     job_outs: list[JobOut] = []
     for job in jobs:
-        match_stmt = (
-            select(JobMatch.score)
-            .where(JobMatch.job_id == job.id)
-            .order_by(JobMatch.matched_at.desc())
-            .limit(1)
-        )
-        match_result = await db.execute(match_stmt)
-        score_row = match_result.scalar_one_or_none()
+        score_row = scores_by_job.get(job.id)
         if min_score is not None and (score_row is None or score_row < min_score):
             continue
         job_outs.append(

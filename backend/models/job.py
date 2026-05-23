@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
@@ -17,12 +17,12 @@ class JobSource(Base):
     __tablename__ = "job_sources"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    type: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String, nullable=False, index=True)
     url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     prompt_template: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_scraped_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -31,7 +31,7 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    source_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
     external_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     title: Mapped[str] = mapped_column(String, nullable=False)
     company: Mapped[str] = mapped_column(String, nullable=False)
@@ -47,19 +47,23 @@ class Job(Base):
     apply_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     apply_method: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    scraped_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     dedup_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True, unique=True)
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
 
 class JobMatch(Base):
     __tablename__ = "job_matches"
+    __table_args__ = (
+        Index("ix_job_matches_job_id_matched_at", "job_id", "matched_at"),
+        Index("ix_job_matches_job_id_batch_date", "job_id", "batch_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[int] = mapped_column(Integer)
     score: Mapped[float] = mapped_column(Float, nullable=False)
     keyword_hits: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="new")
+    status: Mapped[str] = mapped_column(String, default="new", index=True)
     batch_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     matched_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     gap_severity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

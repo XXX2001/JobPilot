@@ -161,7 +161,15 @@ async def test_engine_daily_limit_exceeded_returns_cancelled():
     engine = _make_engine()
 
     db = AsyncMock(spec=AsyncSession)
-    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=10)  # at limit
+    # With the atomic reserve_slot() flow, the placeholder INSERT happens
+    # first, then the post-insert COUNT is compared against the limit.
+    # Count > limit (11 with limit=10) → reservation rolled back, raises
+    # DailyLimitExceeded.
+    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=11)
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    db.add = MagicMock()
 
     result = await engine.apply(
         job_match_id=2,
@@ -172,6 +180,8 @@ async def test_engine_daily_limit_exceeded_returns_cancelled():
 
     assert result.status == "cancelled"
     assert "limit" in result.message.lower()
+    # Reservation must be rolled back when over limit.
+    db.rollback.assert_awaited()
 
 
 def test_engine_signal_confirm_sets_event():

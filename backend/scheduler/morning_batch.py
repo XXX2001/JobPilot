@@ -21,7 +21,7 @@ from backend.defaults import CONCURRENCY_GEMINI, DAILY_LIMIT, MIN_JOB_SKILLS_FOR
 from backend.matching.cv_parser import CVParser
 from backend.matching.embedder import Embedder
 from backend.matching.filters import JobFilters
-from backend.matching.fit_engine import FitEngine
+from backend.matching.fit_engine import FitAssessment, FitEngine
 from backend.matching.job_skill_extractor import JobSkillExtractor
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
@@ -222,40 +222,53 @@ class MorningBatchRunner:
 
         assessments: dict[int, Any] = {}  # match_id -> FitAssessment or None
         if cv_profile and self._embedder:
-            for mid in new_match_ids:
-                jd = match_to_jd.get(mid)
-                if jd is None:
-                    continue
-                try:
-                    job_profile = self._job_extractor.extract(jd.description or "")
-                    if len(job_profile.skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE:
-                        assessments[mid] = None  # fallback
-                        continue
-                    job_profile = await self._embedder.embed_job_profile(job_profile)
-                    assessment = self._fit_engine.assess(job_profile, cv_profile, sensitivity)
-                    assessments[mid] = assessment
+            # Run extraction + embedding + FitEngine.assess concurrently for each
+            # match (bounded by CONCURRENCY_GEMINI). DB writes and WS broadcasts
+            # MUST happen sequentially after the gather — AsyncSession is not
+            # safe for concurrent use, and we want deterministic broadcast order.
+            sem = asyncio.Semaphore(CONCURRENCY_GEMINI)
 
-                    # Store assessment on JobMatch
-                    match_row = (await db.execute(
-                        select(JobMatch).where(JobMatch.id == mid)
-                    )).scalar_one_or_none()
-                    if match_row:
-                        match_row.gap_severity = assessment.severity
-                        match_row.ats_score = assessment.simulated_ats_score
-                        match_row.fit_assessment_json = assessment.to_dict()
+            async def _gated_assess(mid: int, jd: Any) -> tuple[int, FitAssessment | None]:
+                async with sem:
+                    return await self._assess_one(mid, jd, cv_profile, sensitivity)
 
-                    await broadcast_job_assessment(
-                        match_id=mid,
-                        ats_score=assessment.simulated_ats_score,
-                        gap_severity=assessment.severity,
-                        decision="modify" if assessment.should_modify else "base_cv",
-                        covered=assessment.covered_skills[:10],
-                        gaps=[{"skill": g.skill, "criticality": g.criticality}
-                              for g in assessment.critical_gaps[:5]],
-                    )
-                except Exception as exc:
-                    logger.warning("Fit assessment failed for match %d: %s", mid, exc)
+            assess_pairs = [
+                (mid, match_to_jd[mid]) for mid in new_match_ids if mid in match_to_jd
+            ]
+            results = await asyncio.gather(
+                *[_gated_assess(mid, jd) for mid, jd in assess_pairs],
+                return_exceptions=True,
+            )
+
+            # Sequential post-gather merge: DB writes (single session) + WS broadcasts.
+            for (mid, _jd), outcome in zip(assess_pairs, results):
+                if isinstance(outcome, BaseException):
+                    logger.warning("Fit assessment failed for match %d: %s", mid, outcome)
                     assessments[mid] = None
+                    continue
+                _result_mid, assessment = outcome
+                assessments[mid] = assessment
+                if assessment is None:
+                    continue
+
+                # Store assessment on JobMatch
+                match_row = (await db.execute(
+                    select(JobMatch).where(JobMatch.id == mid)
+                )).scalar_one_or_none()
+                if match_row:
+                    match_row.gap_severity = assessment.severity
+                    match_row.ats_score = assessment.simulated_ats_score
+                    match_row.fit_assessment_json = assessment.to_dict()
+
+                await broadcast_job_assessment(
+                    match_id=mid,
+                    ats_score=assessment.simulated_ats_score,
+                    gap_severity=assessment.severity,
+                    decision="modify" if assessment.should_modify else "base_cv",
+                    covered=assessment.covered_skills[:10],
+                    gaps=[{"skill": g.skill, "criticality": g.criticality}
+                          for g in assessment.critical_gaps[:5]],
+                )
 
             await db.commit()
 
@@ -355,6 +368,32 @@ class MorningBatchRunner:
         # ── Step 5: Notify dashboard ─────────────────────────────────────
         await self._broadcast_and_track(f"{len(top_ids)} applications ready for review", progress=1.0)
         logger.info("Morning batch complete — %d jobs ready", len(top_ids))
+
+    async def _assess_one(
+        self,
+        mid: int,
+        jd: Any,
+        cv_profile: Any,
+        sensitivity: str,
+    ) -> tuple[int, FitAssessment | None]:
+        """Run job-skill extraction → job-skill embedding → FitEngine.assess for ONE match.
+
+        Returns ``(mid, assessment_or_None)``. Returning ``None`` means the job
+        had too few extracted skills to feed the FitEngine (caller will record
+        the fallback). Exceptions propagate to the gather caller, which logs
+        them and records ``assessments[mid] = None``.
+
+        IMPORTANT: This coroutine MUST NOT touch the DB session — multiple
+        copies of this run concurrently and AsyncSession isn't concurrent-safe.
+        All DB writes happen in the sequential merge loop after gather.
+        """
+        assert self._embedder is not None  # caller guarantees this
+        job_profile = self._job_extractor.extract(jd.description or "")
+        if len(job_profile.skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE:
+            return mid, None
+        job_profile = await self._embedder.embed_job_profile(job_profile)
+        assessment = self._fit_engine.assess(job_profile, cv_profile, sensitivity)
+        return mid, assessment
 
     # ------------------------------------------------------------------ #
     #  DB helpers                                                          #

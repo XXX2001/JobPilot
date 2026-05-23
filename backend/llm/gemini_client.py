@@ -92,15 +92,26 @@ class GeminiClient:
         self._embed_lock = asyncio.Lock()
 
     async def _wait_for_rate_limit(self) -> None:
+        # Hold the lock only long enough to read state and reserve a slot;
+        # release before sleeping so concurrent callers can reserve their
+        # own slots in parallel (otherwise asyncio.sleep inside the lock
+        # serialises every call and defeats CONCURRENCY_GEMINI).
         async with self._lock:
             now = time.monotonic()
+            sleep_for = 0.0
             if len(self._call_times) == self.RPM_LIMIT:
                 oldest = self._call_times[0]
                 window = 60.0 - (now - oldest)
                 if window > 0:
-                    logger.info("Rate limit: sleeping %.1fs", window)
-                    await asyncio.sleep(min(window, 120.0))  # Never sleep more than 2 minutes
-            self._call_times.append(time.monotonic())
+                    sleep_for = window
+            # Reserve the slot using the *future* time at which we'll
+            # resume. This keeps the sliding window correct for subsequent
+            # callers — they see N slots staggered across the window
+            # rather than all clumped at "now".
+            self._call_times.append(now + sleep_for)
+        if sleep_for > 0:
+            logger.info("Rate limit: sleeping %.1fs", sleep_for)
+            await asyncio.sleep(min(sleep_for, 120.0))  # Never sleep more than 2 minutes
 
     def _is_model_not_found(self, msg: str) -> bool:
         return (
@@ -219,15 +230,20 @@ class GeminiClient:
                 ) from first_exc
 
     async def _wait_for_embed_rate_limit(self) -> None:
+        # See _wait_for_rate_limit: lock covers reserve only, not sleep.
         async with self._embed_lock:
             now = time.monotonic()
+            sleep_for = 0.0
             if len(self._embed_call_times) == self.RPM_LIMIT:
                 oldest = self._embed_call_times[0]
                 window = 60.0 - (now - oldest)
                 if window > 0:
-                    logger.info("Embed rate limit: sleeping %.1fs", window)
-                    await asyncio.sleep(min(window, 120.0))
-            self._embed_call_times.append(time.monotonic())
+                    sleep_for = window
+            # Reserve slot at the future resume time; see _wait_for_rate_limit.
+            self._embed_call_times.append(now + sleep_for)
+        if sleep_for > 0:
+            logger.info("Embed rate limit: sleeping %.1fs", sleep_for)
+            await asyncio.sleep(min(sleep_for, 120.0))
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """Batch embed texts via text-embedding-004. Returns list of 768-dim vectors."""

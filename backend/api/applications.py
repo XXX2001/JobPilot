@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
 from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED
-from backend.applier.daily_limit import _COUNTABLE_STATUSES
+from backend.applier.daily_limit import COUNTABLE_STATUSES
 from backend.applier.manual_apply import ApplicationResult
 from backend.defaults import DAILY_LIMIT
 from backend.models.application import Application, ApplicationEvent
@@ -218,10 +218,10 @@ async def get_limit_status(db: DBSession) -> LimitStatusOut:
     limit = (ss.daily_limit if ss is not None else None) or DAILY_LIMIT
 
     # ── Count today's applications (same SQL as DailyLimitGuard.remaining_today) ──
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     stmt = select(func.count(Application.id)).where(
         Application.applied_at >= today,  # type: ignore[operator]
-        Application.status.in_(_COUNTABLE_STATUSES),
+        Application.status.in_(COUNTABLE_STATUSES),
     )
     used: int = (await db.execute(stmt)).scalar_one_or_none() or 0
 

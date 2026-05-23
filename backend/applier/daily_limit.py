@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Statuses that count against today's quota. Includes the canonical
 # ``"applied"`` plus legacy ``"manual"`` / ``"assisted"`` for backward
 # compatibility with rows persisted before the vocabulary consolidation.
-_COUNTABLE_STATUSES: list[str] = sorted(
+COUNTABLE_STATUSES: list[str] = sorted(
     {STATUS_APPLIED, STATUS_PENDING} | LEGACY_APPLIED_ALIASES
 )
 
@@ -76,7 +76,7 @@ class DailyLimitGuard:
         today = date.today()
         stmt = select(func.count(Application.id)).where(
             Application.applied_at >= today,  # type: ignore[operator]
-            Application.status.in_(_COUNTABLE_STATUSES),
+            Application.status.in_(COUNTABLE_STATUSES),
         )
         count = (await self.db.execute(stmt)).scalar_one_or_none() or 0
         return max(0, self.limit - count)
@@ -135,7 +135,7 @@ class DailyLimitGuard:
         today = date.today()
         count_stmt = select(func.count(Application.id)).where(
             Application.applied_at >= today,  # type: ignore[operator]
-            Application.status.in_(_COUNTABLE_STATUSES),
+            Application.status.in_(COUNTABLE_STATUSES),
         )
         count = (await self.db.execute(count_stmt)).scalar_one_or_none() or 0
 
@@ -164,4 +164,4 @@ class DailyLimitGuard:
         return placeholder.id  # type: ignore[return-value]
 
 
-__all__ = ["DailyLimitGuard", "DailyLimitExceeded"]
+__all__ = ["COUNTABLE_STATUSES", "DailyLimitExceeded", "DailyLimitGuard"]

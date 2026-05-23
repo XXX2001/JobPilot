@@ -161,8 +161,7 @@ def test_cv_upload_rejects_empty_filename_after_sanitize(test_app: TestClient):
 
 def test_cv_upload_rolls_back_on_db_failure(test_app: TestClient, monkeypatch):
     """If the DB commit fails, neither dest nor dest_tmp should remain on disk."""
-    import pytest
-    from unittest.mock import AsyncMock, patch
+    from sqlalchemy.ext.asyncio import AsyncSession
 
     content = b"\\documentclass{article}\\begin{document}Rollback CV\\end{document}"
     filename = "rollback_cv.tex"
@@ -171,20 +170,8 @@ def test_cv_upload_rolls_back_on_db_failure(test_app: TestClient, monkeypatch):
     dest = data_dir / "templates" / filename
     dest_tmp = dest.with_suffix(dest.suffix + ".tmp")
 
-    # Patch the DB session's commit to raise inside the endpoint
-    original_commit = None
-
-    async def _failing_commit(self_or_none=None):
+    async def _failing_commit(*_args, **_kwargs) -> None:  # pyright: ignore[reportUnusedParameter]
         raise RuntimeError("Simulated DB commit failure")
-
-    with patch(
-        "backend.api.settings.DBSession",
-        side_effect=None,
-    ):
-        pass  # We'll monkeypatch at the session level instead
-
-    # Use monkeypatch on the AsyncSession.commit method
-    from sqlalchemy.ext.asyncio import AsyncSession
 
     monkeypatch.setattr(AsyncSession, "commit", _failing_commit)
 

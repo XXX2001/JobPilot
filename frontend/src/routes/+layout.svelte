@@ -16,6 +16,7 @@
 		FileText,
 		Settings,
 		BarChart2,
+		Inbox,
 		Sun,
 		Moon,
 		Wifi,
@@ -37,6 +38,7 @@
 	const navLinks = [
 		{ href: '/', label: 'Job Queue', icon: LayoutDashboard },
 		{ href: '/tracker', label: 'Tracker', icon: KanbanSquare },
+		{ href: '/inbox', label: 'Inbox', icon: Inbox },
 		{ href: '/cv', label: 'CV Manager', icon: FileText },
 		{ href: '/settings', label: 'Settings', icon: Settings },
 		{ href: '/analytics', label: 'Analytics', icon: BarChart2 }

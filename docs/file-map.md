@@ -72,6 +72,4 @@ Every Python file in `backend/`, its single responsibility, what it imports from
 | `backend/security/__init__.py` | Package marker (empty stub) | — | Python import system |
 | `backend/security/sanitizer.py` | InputSanitizer: sanitize_for_prompt() (truncate + strip control chars + collapse whitespace + strip injection patterns); wrap_untrusted(); sanitize_url() | `defaults` | `llm.job_analyzer`, `llm.cv_modifier`, `llm.cv_editor` |
 | `backend/utils/__init__.py` | Package marker (empty stub) | — | Python import system |
-| `backend/utils/retry.py` | async_retry() decorator: exponential-backoff retry for flaky async functions | — (stdlib only) | (utility; used ad-hoc) |
-| `backend/utils/source_health.py` | SourceHealthMonitor: in-memory per-source success/failure rate tracker; SourceHealthRecord dataclass; module-level health_monitor singleton | — (stdlib only) | (utility; used ad-hoc) |
 | `backend/utils/browser_path.py` | get_chromium_executable(): resolves Chromium binary via patchright then playwright subprocess probe; cached after first call | — (stdlib only) | `scraping.adaptive_scraper`, `scraping.session_manager`, `applier.form_filler` |

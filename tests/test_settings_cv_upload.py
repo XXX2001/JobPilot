@@ -170,7 +170,8 @@ def test_cv_upload_rolls_back_on_db_failure(test_app: TestClient, monkeypatch):
     dest = data_dir / "templates" / filename
     dest_tmp = dest.with_suffix(dest.suffix + ".tmp")
 
-    async def _failing_commit(*_args, **_kwargs) -> None:  # pyright: ignore[reportUnusedParameter]
+    async def _failing_commit(*args, **kwargs) -> None:
+        del args, kwargs  # mock signature; absorbs whatever AsyncSession.commit is called with
         raise RuntimeError("Simulated DB commit failure")
 
     monkeypatch.setattr(AsyncSession, "commit", _failing_commit)

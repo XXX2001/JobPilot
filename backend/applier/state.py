@@ -30,9 +30,15 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Awaitable, Callable, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    # BrowserSession is the concrete browser type from browser-use.
+    # Imported under TYPE_CHECKING only to avoid the heavy browser_use import
+    # at runtime — the attribute is always Optional and may be None.
+    from browser_use.browser.session import BrowserSession
 
 from backend.applier import (
     RESULT_CANCELLED,
@@ -101,8 +107,11 @@ class ApplyContext:
     outcome_method: str = "auto"
     outcome_message: Optional[str] = None
 
-    # Extra: browser reference (optional, for cleanup)
-    browser: Optional[object] = None
+    # Extra: browser reference (optional, for cleanup).
+    # Typed as Optional[BrowserSession] so callers can call .stop() without
+    # type: ignore — the import is guarded by TYPE_CHECKING to avoid the
+    # heavy browser_use import at runtime.
+    browser: Optional[BrowserSession] = None
 
     # Free-form extras (strategy-specific)
     extras: dict = field(default_factory=dict)

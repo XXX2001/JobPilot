@@ -429,3 +429,117 @@ def test_state_values_are_strings():
     for s in State:
         assert isinstance(s.value, str)
         assert s.value == s.value.lower()
+
+
+# ── Full linear pipeline walks every middle state ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_full_linear_pipeline_visits_all_middle_states():
+    """RESERVED → CAPTCHA_CHECK → FILLING → AWAITING_CONFIRM → SUBMITTING → RECORDING → APPLIED.
+
+    Verifies that all four middle states are entered in order and the chart
+    reaches APPLIED.  The strategy _dispatch is not involved — on_enter for
+    each middle state just records a visit; next() advances linearly.
+    """
+    visited: list[State] = []
+
+    def _make_enter(state: State):
+        async def on_enter(c: ApplyContext) -> None:
+            visited.append(state)
+        return on_enter
+
+    async def next_captcha(c: ApplyContext) -> State:
+        return State.FILLING
+
+    async def next_filling(c: ApplyContext) -> State:
+        return State.AWAITING_CONFIRM
+
+    async def next_awaiting(c: ApplyContext) -> State:
+        return State.SUBMITTING
+
+    async def next_submitting(c: ApplyContext) -> State:
+        return State.RECORDING
+
+    async def next_recording(c: ApplyContext) -> State:
+        c.outcome_status = RESULT_APPLIED
+        return State.APPLIED
+
+    async def reserved_next(c: ApplyContext) -> State:
+        return State.CAPTCHA_CHECK
+
+    transitions = {
+        State.RESERVED: Transition(next=reserved_next),
+        State.CAPTCHA_CHECK: Transition(on_enter=_make_enter(State.CAPTCHA_CHECK), next=next_captcha),
+        State.FILLING: Transition(on_enter=_make_enter(State.FILLING), next=next_filling),
+        State.AWAITING_CONFIRM: Transition(on_enter=_make_enter(State.AWAITING_CONFIRM), next=next_awaiting),
+        State.SUBMITTING: Transition(on_enter=_make_enter(State.SUBMITTING), next=next_submitting),
+        State.RECORDING: Transition(on_enter=_make_enter(State.RECORDING), next=next_recording),
+        State.APPLIED: Transition(on_enter=_noop),
+        State.CANCELLED: Transition(on_enter=_noop),
+        State.FAILED: Transition(on_enter=_noop),
+        State.REMOTE_SUBMITTED_LOCAL_FAILED: Transition(on_enter=_noop),
+    }
+
+    ctx = _make_ctx()
+    chart = Statechart(transitions=transitions, initial=State.RESERVED)
+    status, _method, _msg = await chart.run(ctx)
+
+    assert chart.state == State.APPLIED
+    assert status == RESULT_APPLIED
+    # All four middle states must have been entered, in the correct order
+    assert visited == [
+        State.CAPTCHA_CHECK,
+        State.FILLING,
+        State.AWAITING_CONFIRM,
+        State.SUBMITTING,
+        State.RECORDING,
+    ], f"Unexpected visit sequence: {visited}"
+
+
+@pytest.mark.asyncio
+async def test_middle_states_are_not_terminals():
+    """CAPTCHA_CHECK, FILLING, AWAITING_CONFIRM, and SUBMITTING are not in TERMINALS."""
+    for state in (State.CAPTCHA_CHECK, State.FILLING, State.AWAITING_CONFIRM, State.SUBMITTING):
+        assert state not in TERMINALS, f"{state} should not be a terminal"
+
+
+@pytest.mark.asyncio
+async def test_full_pipeline_fails_partway_through_middle_state():
+    """If a middle-state next() raises, driver should land in FAILED.
+
+    Specifically: RESERVED → CAPTCHA_CHECK → FILLING (next raises) → FAILED.
+    """
+    failed_entered = []
+
+    async def reserved_next(c: ApplyContext) -> State:
+        return State.CAPTCHA_CHECK
+
+    async def captcha_next(c: ApplyContext) -> State:
+        return State.FILLING
+
+    async def filling_next_boom(c: ApplyContext) -> State:
+        raise RuntimeError("filling failed mid-pipeline")
+
+    async def failed_enter(c: ApplyContext) -> None:
+        failed_entered.append(True)
+
+    transitions = {
+        State.RESERVED: Transition(next=reserved_next),
+        State.CAPTCHA_CHECK: Transition(next=captcha_next),
+        State.FILLING: Transition(next=filling_next_boom),
+        State.AWAITING_CONFIRM: Transition(next=_next_applied),
+        State.SUBMITTING: Transition(next=_next_applied),
+        State.RECORDING: Transition(next=_next_applied),
+        State.APPLIED: Transition(on_enter=_noop),
+        State.CANCELLED: Transition(on_enter=_noop),
+        State.FAILED: Transition(on_enter=failed_enter),
+        State.REMOTE_SUBMITTED_LOCAL_FAILED: Transition(on_enter=_noop),
+    }
+
+    ctx = _make_ctx()
+    chart = Statechart(transitions=transitions, initial=State.RESERVED)
+    await chart.run(ctx)
+
+    assert chart.state == State.FAILED
+    assert failed_entered == [True], "FAILED on_enter must fire when a middle state next() raises"

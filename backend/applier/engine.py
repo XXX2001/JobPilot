@@ -188,8 +188,52 @@ class ApplicationEngine:
 
         # ── RESERVED ──────────────────────────────────────────────────
         async def reserved_next(c: ApplyContext) -> State:
-            # Slot already reserved by the time we enter this state —
-            # move straight to dispatching.
+            # Slot already reserved by the time we enter this state.
+            # Route through the observable middle states so the full lifecycle
+            # is visible to tests, monitoring, and future per-state hooks.
+            return State.CAPTCHA_CHECK
+
+        # ── CAPTCHA_CHECK (pass-through) ───────────────────────────────
+        # NOTE: real captcha-detection work lives in the strategy _dispatch.
+        # This state exists to (a) make the lifecycle observable in the FSM
+        # transition log and (b) provide a hook point for future per-state
+        # interception (e.g. pause-and-wait for a human captcha solver).
+        async def captcha_check_on_enter(c: ApplyContext) -> None:
+            logger.debug("entering %s", State.CAPTCHA_CHECK)
+
+        async def captcha_check_next(c: ApplyContext) -> State:
+            return State.FILLING
+
+        # ── FILLING (pass-through) ─────────────────────────────────────
+        # NOTE: the actual form-filling work is done by the strategy in
+        # _dispatch (called from RECORDING's on_enter).  This state exists
+        # to (a) make the lifecycle observable and (b) allow future hooks
+        # such as injecting per-field validation before submission.
+        async def filling_on_enter(c: ApplyContext) -> None:
+            logger.debug("entering %s", State.FILLING)
+
+        async def filling_next(c: ApplyContext) -> State:
+            return State.AWAITING_CONFIRM
+
+        # ── AWAITING_CONFIRM (pass-through) ───────────────────────────
+        # NOTE: the confirm/cancel wait is handled inside the strategy.
+        # This state exists to (a) make the lifecycle observable and
+        # (b) allow future interception (e.g. per-application review UI).
+        async def awaiting_confirm_on_enter(c: ApplyContext) -> None:
+            logger.debug("entering %s", State.AWAITING_CONFIRM)
+
+        async def awaiting_confirm_next(c: ApplyContext) -> State:
+            return State.SUBMITTING
+
+        # ── SUBMITTING (pass-through) ──────────────────────────────────
+        # NOTE: the actual submit click is performed by the strategy in
+        # _dispatch.  This state exists to (a) make the lifecycle observable
+        # and (b) allow future hooks such as rate-limiting or audit logging
+        # immediately before a form is submitted.
+        async def submitting_on_enter(c: ApplyContext) -> None:
+            logger.debug("entering %s", State.SUBMITTING)
+
+        async def submitting_next(c: ApplyContext) -> State:
             return State.RECORDING
 
         # ── RECORDING ─────────────────────────────────────────────────
@@ -235,8 +279,12 @@ class ApplicationEngine:
                         await recorder.release_reserved_slot(c.db, c.reserved_app_id)
                     except Exception:
                         pass  # Already logged inside release_reserved_slot.
-                # Surface as RemoteSubmittedLocalFailed if it was a success,
-                # or plain Failed if it was a cancellation-like outcome.
+                # EH-03: remote submit succeeded but local record failed.
+                # ANY exception here routes to REMOTE_SUBMITTED_LOCAL_FAILED so the
+                # db_write_failed audit event is always persisted (and the caller is
+                # told to verify on the job site).  Previously only ApplicationRecordError
+                # was checked — that left generic exceptions silently routing to FAILED
+                # and losing the audit trail.
                 c.outcome_status = RESULT_FAILED
                 c.outcome_method = result.method
                 c.outcome_message = (
@@ -244,10 +292,7 @@ class ApplicationEngine:
                     "but recording it locally failed: "
                     f"{exc}. Please verify on the job site and retry if needed."
                 )
-                # Check if it was an ApplicationRecordError (from the recorder)
-                if isinstance(exc, ApplicationRecordError):
-                    return State.REMOTE_SUBMITTED_LOCAL_FAILED
-                return State.FAILED
+                return State.REMOTE_SUBMITTED_LOCAL_FAILED
 
             return State.APPLIED
 
@@ -276,7 +321,7 @@ class ApplicationEngine:
             # Close browser if one was left open
             if c.browser is not None:
                 try:
-                    await c.browser.stop()  # type: ignore[union-attr]
+                    await c.browser.stop()
                 except Exception:
                     pass
             if c.outcome_status != RESULT_FAILED:
@@ -308,6 +353,22 @@ class ApplicationEngine:
                 on_enter=None,
                 next=reserved_next,
                 on_exit=None,
+            ),
+            State.CAPTCHA_CHECK: Transition(
+                on_enter=captcha_check_on_enter,
+                next=captcha_check_next,
+            ),
+            State.FILLING: Transition(
+                on_enter=filling_on_enter,
+                next=filling_next,
+            ),
+            State.AWAITING_CONFIRM: Transition(
+                on_enter=awaiting_confirm_on_enter,
+                next=awaiting_confirm_next,
+            ),
+            State.SUBMITTING: Transition(
+                on_enter=submitting_on_enter,
+                next=submitting_next,
             ),
             State.RECORDING: Transition(
                 on_enter=recording_on_enter,

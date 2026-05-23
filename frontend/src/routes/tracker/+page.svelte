@@ -114,14 +114,23 @@
 			{applications.length} application{applications.length !== 1 ? 's' : ''} tracked
 		</p>
 	</div>
-	<button
-		onclick={load}
-		disabled={loading}
-		class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors disabled:opacity-50"
-	>
-		<RefreshCw size={13} class={loading ? 'animate-spin' : ''} />
-		Refresh
-	</button>
+	<div class="flex items-center gap-2">
+		<a
+			href="/api/applications/export?format=csv"
+			download
+			class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors"
+		>
+			Export CSV
+		</a>
+		<button
+			onclick={load}
+			disabled={loading}
+			class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors disabled:opacity-50"
+		>
+			<RefreshCw size={13} class={loading ? 'animate-spin' : ''} />
+			Refresh
+		</button>
+	</div>
 </div>
 
 <!-- Tabs -->

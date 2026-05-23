@@ -43,9 +43,15 @@ _COLUMNS = [
 
 
 def _iso(dt: datetime | None) -> str:
-    """Return an ISO 8601 string for *dt*, or an empty string for NULL."""
+    """Return an ISO 8601 string for *dt*, or an empty string for NULL.
+
+    Application timestamps are stored naive-UTC; we attach `+00:00` so the
+    serialized value is unambiguous to spreadsheet/DB importers.
+    """
     if dt is None:
         return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     return dt.isoformat()
 
 

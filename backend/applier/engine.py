@@ -18,11 +18,7 @@ from typing import Optional, cast
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.applier import (
-    RESULT_CANCELLED,
-    RESULT_FAILED,
-    ApplicationRecordError,
-)
+from backend.applier import RESULT_CANCELLED, RESULT_FAILED
 from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
 from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard

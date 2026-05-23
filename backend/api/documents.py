@@ -42,6 +42,23 @@ class ValidateTemplateRequest(BaseModel):
     tex_content: str
 
 
+class ValidateTemplateResponse(BaseModel):
+    has_markers: bool
+    warnings: list[str]
+
+
+class CVDiffResponse(BaseModel):
+    match_id: int
+    diff: Any
+    generated_at: Optional[str] = None
+
+
+class RegenerateResponse(BaseModel):
+    match_id: int
+    status: str
+    message: str
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -54,18 +71,18 @@ async def list_documents(db: DBSession):
     return [DocumentOut.model_validate(d) for d in docs]
 
 
-@router.post("/validate-template")
-async def validate_template(body: ValidateTemplateRequest):
+@router.post("/validate-template", response_model=ValidateTemplateResponse)
+async def validate_template(body: ValidateTemplateRequest) -> ValidateTemplateResponse:
     """Check whether a LaTeX CV template contains JOBPILOT markers."""
     from backend.latex.parser import LaTeXParser
 
     parser = LaTeXParser()
     sections = parser.extract_sections(body.tex_content)
     warnings = parser.validate_markers(body.tex_content)
-    return {"has_markers": sections.has_markers, "warnings": warnings}
+    return ValidateTemplateResponse(has_markers=sections.has_markers, warnings=warnings)
 
 
-@router.get("/{match_id}/cv/pdf")
+@router.get("/{match_id}/cv/pdf", response_class=FileResponse)
 async def get_cv_pdf(match_id: int, db: DBSession):
     """Stream the tailored CV PDF for a given job match."""
     stmt = select(TailoredDocument).where(
@@ -101,7 +118,7 @@ async def get_cv_pdf(match_id: int, db: DBSession):
     )
 
 
-@router.get("/{match_id}/letter/pdf")
+@router.get("/{match_id}/letter/pdf", response_class=FileResponse)
 async def get_letter_pdf(match_id: int, db: DBSession):
     """Stream the tailored cover letter PDF for a given job match."""
     stmt = select(TailoredDocument).where(
@@ -137,8 +154,8 @@ async def get_letter_pdf(match_id: int, db: DBSession):
     )
 
 
-@router.get("/{match_id}/diff")
-async def get_cv_diff(match_id: int, db: DBSession):
+@router.get("/{match_id}/diff", response_model=CVDiffResponse)
+async def get_cv_diff(match_id: int, db: DBSession) -> CVDiffResponse:
     """Return the JSON diff of CV changes for a given job match."""
     stmt = select(TailoredDocument).where(
         TailoredDocument.job_match_id == match_id,
@@ -153,20 +170,20 @@ async def get_cv_diff(match_id: int, db: DBSession):
             detail=f"No CV document found for match {match_id}",
         )
 
-    return {
-        "match_id": match_id,
-        "diff": doc.diff_json or [],
-        "generated_at": doc.created_at.isoformat() if doc.created_at else None,
-    }
+    return CVDiffResponse(
+        match_id=match_id,
+        diff=doc.diff_json or [],
+        generated_at=doc.created_at.isoformat() if doc.created_at else None,
+    )
 
 
-@router.post("/{match_id}/regenerate")
+@router.post("/{match_id}/regenerate", response_model=RegenerateResponse)
 async def regenerate_documents(
     match_id: int,
     body: RegenerateRequest,
     background_tasks: BackgroundTasks,
     db: DBSession,
-):
+) -> RegenerateResponse:
     """Trigger re-generation of tailored CV and letter for a job match."""
     # Verify the match exists
     match_stmt = select(JobMatch).where(JobMatch.id == match_id)
@@ -190,8 +207,8 @@ async def regenerate_documents(
 
     logger.info("Regeneration queued for match_id=%d (force=%s)", match_id, body.force)
 
-    return {
-        "match_id": match_id,
-        "status": "queued",
-        "message": "Document regeneration has been queued",
-    }
+    return RegenerateResponse(
+        match_id=match_id,
+        status="queued",
+        message="Document regeneration has been queued",
+    )

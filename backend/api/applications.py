@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
 from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED
+from backend.applier.manual_apply import ApplicationResult
 from backend.models.application import Application, ApplicationEvent
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch
@@ -371,8 +372,10 @@ class ApplyRequest(BaseModel):
         return v[:5000]
 
 
-@router.post("/{match_id}/apply", status_code=200)
-async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request: Request):
+@router.post("/{match_id}/apply", status_code=200, response_model=ApplicationResult)
+async def apply_to_job(
+    match_id: int, body: ApplyRequest, db: DBSession, request: Request
+) -> ApplicationResult:
     """Trigger an application for a job match via auto / assisted / manual strategy."""
     from backend.models.user import UserProfile
 
@@ -514,4 +517,4 @@ async def apply_to_job(match_id: int, body: ApplyRequest, db: DBSession, request
         cv_pdf=cv_pdf,
         letter_pdf=letter_pdf,
     )
-    return result.model_dump()
+    return result

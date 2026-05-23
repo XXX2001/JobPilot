@@ -45,6 +45,24 @@ class SearchRequest(BaseModel):
     max_results: int = 20
 
 
+class SearchResultJob(BaseModel):
+    """Minimal job descriptor for the manual search response."""
+
+    title: str
+    company: str
+
+
+class SearchResponse(BaseModel):
+    stored: int
+    jobs: list[SearchResultJob]
+
+
+class JobScoreOut(BaseModel):
+    job_id: int
+    score: Optional[float] = None
+    keyword_hits: Optional[dict] = None
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -142,8 +160,8 @@ async def get_job(job_id: int, db: DBSession):
     )
 
 
-@router.post("/search")
-async def search_jobs(body: SearchRequest, db: DBSession):
+@router.post("/search", response_model=SearchResponse)
+async def search_jobs(body: SearchRequest, db: DBSession) -> SearchResponse:
     """Trigger a manual Adzuna search and store results in the DB.
 
     Returns the list of newly stored jobs.
@@ -206,11 +224,14 @@ async def search_jobs(body: SearchRequest, db: DBSession):
 
     await db.commit()
     logger.info("Manual search stored %d new jobs", len(stored))
-    return {"stored": len(stored), "jobs": stored}
+    return SearchResponse(
+        stored=len(stored),
+        jobs=[SearchResultJob(**s) for s in stored],
+    )
 
 
-@router.get("/{job_id}/score")
-async def get_job_score(job_id: int, db: DBSession):
+@router.get("/{job_id}/score", response_model=JobScoreOut)
+async def get_job_score(job_id: int, db: DBSession) -> JobScoreOut:
     """Return the latest match score for a job."""
     stmt = select(Job).where(Job.id == job_id)
     job = (await db.execute(stmt)).scalar_one_or_none()
@@ -225,6 +246,6 @@ async def get_job_score(job_id: int, db: DBSession):
     )
     match = (await db.execute(match_stmt)).scalar_one_or_none()
     if match is None:
-        return {"job_id": job_id, "score": None}
+        return JobScoreOut(job_id=job_id, score=None)
 
-    return {"job_id": job_id, "score": match.score, "keyword_hits": match.keyword_hits}
+    return JobScoreOut(job_id=job_id, score=match.score, keyword_hits=match.keyword_hits)

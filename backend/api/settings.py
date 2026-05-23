@@ -111,6 +111,43 @@ class SetupStatus(BaseModel):
     setup_complete: bool
 
 
+class SourceProviderStatus(BaseModel):
+    configured: bool
+    app_id_hint: Optional[str] = None
+
+
+class GeminiProviderStatus(BaseModel):
+    configured: bool
+
+
+class SourcesOut(BaseModel):
+    adzuna: SourceProviderStatus
+    gemini: GeminiProviderStatus
+
+
+class SourcesUpdateResponse(BaseModel):
+    message: str
+    env_file: str
+
+
+class SiteToggleResponse(BaseModel):
+    name: str
+    enabled: bool
+
+
+class CredentialSaveResponse(BaseModel):
+    site_name: str
+    saved: bool
+
+
+class SessionClearResponse(BaseModel):
+    cleared: bool
+
+
+class CustomSiteDeleteResponse(BaseModel):
+    deleted: int
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -273,39 +310,39 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
     return SearchSettingsOut.model_validate(ss)
 
 
-@router.get("/sources")
-async def get_sources():
+@router.get("/sources", response_model=SourcesOut)
+async def get_sources() -> SourcesOut:
     """Return which API sources are configured (keys masked)."""
     adzuna_app_id = settings.ADZUNA_APP_ID
     adzuna_key = settings.ADZUNA_APP_KEY.get_secret_value()
     gemini_key = settings.GOOGLE_API_KEY.get_secret_value()
     placeholder = ("", "placeholder")
-    return {
-        "adzuna": {
-            "configured": bool(
+    return SourcesOut(
+        adzuna=SourceProviderStatus(
+            configured=bool(
                 adzuna_app_id not in placeholder and adzuna_key not in placeholder
             ),
-            "app_id_hint": (
+            app_id_hint=(
                 (adzuna_app_id[:4] + "****") if adzuna_app_id not in placeholder else None
             ),
-        },
-        "gemini": {
-            "configured": bool(gemini_key not in placeholder),
-        },
-    }
+        ),
+        gemini=GeminiProviderStatus(
+            configured=bool(gemini_key not in placeholder),
+        ),
+    )
 
 
-@router.put("/sources")
-async def update_sources(body: SourcesUpdate):
+@router.put("/sources", response_model=SourcesUpdateResponse)
+async def update_sources(body: SourcesUpdate) -> SourcesUpdateResponse:
     """Placeholder: sources are configured via .env file — this route returns guidance."""
     # API keys are NOT stored in the DB per spec. Guide user to .env.
-    return {
-        "message": (
+    return SourcesUpdateResponse(
+        message=(
             "API keys must be set in the .env file at the project root. "
             "Edit ADZUNA_APP_ID, ADZUNA_APP_KEY, and GOOGLE_API_KEY then restart the server."
         ),
-        "env_file": ".env",
-    }
+        env_file=".env",
+    )
 
 
 @router.get("/status", response_model=SetupStatus)
@@ -435,8 +472,10 @@ async def get_sites(db: DBSession):
     return out
 
 
-@router.put("/sites/{site_name}")
-async def toggle_site(site_name: str, body: SiteToggle, db: DBSession):
+@router.put("/sites/{site_name}", response_model=SiteToggleResponse)
+async def toggle_site(
+    site_name: str, body: SiteToggle, db: DBSession
+) -> SiteToggleResponse:
     """Enable or disable a job source site."""
     if site_name not in SITE_CONFIGS:
         raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
@@ -458,7 +497,7 @@ async def toggle_site(site_name: str, body: SiteToggle, db: DBSession):
         row.enabled = body.enabled
 
     await db.commit()
-    return {"name": site_name, "enabled": body.enabled}
+    return SiteToggleResponse(name=site_name, enabled=body.enabled)
 
 
 # ─── Credentials routes ────────────────────────────────────────────────────────
@@ -502,8 +541,10 @@ async def get_credentials(db: DBSession):
     return out
 
 
-@router.put("/credentials/{site_name}")
-async def save_credential(site_name: str, body: CredentialUpdate, db: DBSession):
+@router.put("/credentials/{site_name}", response_model=CredentialSaveResponse)
+async def save_credential(
+    site_name: str, body: CredentialUpdate, db: DBSession
+) -> CredentialSaveResponse:
     """Encrypt and store email/password for a site that requires login."""
     if site_name not in SITE_CONFIGS:
         raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
@@ -539,11 +580,11 @@ async def save_credential(site_name: str, body: CredentialUpdate, db: DBSession)
         row.updated_at = datetime.utcnow()
 
     await db.commit()
-    return {"site_name": site_name, "saved": True}
+    return CredentialSaveResponse(site_name=site_name, saved=True)
 
 
-@router.delete("/credentials/{site_name}/session")
-async def clear_session(site_name: str):
+@router.delete("/credentials/{site_name}/session", response_model=SessionClearResponse)
+async def clear_session(site_name: str) -> SessionClearResponse:
     """Delete the browser session files for a site."""
     if site_name not in SITE_CONFIGS:
         raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
@@ -560,7 +601,7 @@ async def clear_session(site_name: str):
         old_path.unlink()
         cleared = True
 
-    return {"cleared": cleared}
+    return SessionClearResponse(cleared=cleared)
 
 
 # ─── Custom sites routes ───────────────────────────────────────────────────────
@@ -610,8 +651,8 @@ async def add_custom_site(body: CustomSiteCreate, db: DBSession):
     )
 
 
-@router.delete("/custom-sites/{site_id}")
-async def delete_custom_site(site_id: int, db: DBSession):
+@router.delete("/custom-sites/{site_id}", response_model=CustomSiteDeleteResponse)
+async def delete_custom_site(site_id: int, db: DBSession) -> CustomSiteDeleteResponse:
     """Delete a custom site by ID."""
     stmt = select(JobSource).where(
         JobSource.id == site_id, JobSource.type.in_(["lab_url", "custom"])
@@ -622,4 +663,4 @@ async def delete_custom_site(site_id: int, db: DBSession):
         raise HTTPException(status_code=404, detail="Custom site not found")
     await db.delete(row)
     await db.commit()
-    return {"deleted": site_id}
+    return CustomSiteDeleteResponse(deleted=site_id)

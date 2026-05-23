@@ -11,8 +11,7 @@ Exercises:
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -29,28 +28,40 @@ from backend.applier import RESULT_APPLIED, RESULT_CANCELLED, RESULT_FAILED
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _make_ctx(**overrides) -> ApplyContext:
+def _make_ctx(
+    job_match_id: int = 1,
+    mode: str = "auto",
+    apply_url: str = "https://example.com/job",
+    db: object = None,
+    reserved_app_id: int | None = None,
+    confirm_event: asyncio.Event | None = None,
+    cancel_event: asyncio.Event | None = None,
+    outcome_status: str = RESULT_FAILED,
+    outcome_method: str = "auto",
+    outcome_message: str | None = None,
+) -> ApplyContext:
     """Return a minimal ApplyContext with mock db."""
-    db = AsyncMock()
-    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
-    db.commit = AsyncMock()
-    db.rollback = AsyncMock()
-    db.flush = AsyncMock()
-    db.add = MagicMock()
-    defaults = dict(
-        job_match_id=1,
-        mode="auto",
-        apply_url="https://example.com/job",
-        db=db,
-        reserved_app_id=None,
-        confirm_event=asyncio.Event(),
-        cancel_event=asyncio.Event(),
-        outcome_status=RESULT_FAILED,
-        outcome_method="auto",
-        outcome_message=None,
+    if db is None:
+        mock_db = AsyncMock()
+        mock_db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+        mock_db.commit = AsyncMock()
+        mock_db.rollback = AsyncMock()
+        mock_db.flush = AsyncMock()
+        mock_db.add = MagicMock()
+    else:
+        mock_db = db  # type: ignore[assignment]
+    return ApplyContext(
+        job_match_id=job_match_id,
+        mode=mode,
+        apply_url=apply_url,
+        db=mock_db,  # type: ignore[arg-type]
+        reserved_app_id=reserved_app_id,
+        confirm_event=confirm_event if confirm_event is not None else asyncio.Event(),
+        cancel_event=cancel_event if cancel_event is not None else asyncio.Event(),
+        outcome_status=outcome_status,
+        outcome_method=outcome_method,
+        outcome_message=outcome_message,
     )
-    defaults.update(overrides)
-    return ApplyContext(**defaults)
 
 
 async def _noop(ctx: ApplyContext) -> None:
@@ -96,20 +107,17 @@ async def test_statechart_forward_to_applied():
         c.outcome_status = RESULT_APPLIED
         c.outcome_method = "auto"
 
+    async def reserved_next(c: ApplyContext) -> State:
+        return State.RECORDING
+
     transitions = {
-        State.RESERVED: Transition(next=lambda c: asyncio.coroutine(lambda: State.RECORDING)()),
+        State.RESERVED: Transition(next=reserved_next),
         State.RECORDING: Transition(on_enter=recording_enter, next=_next_applied),
         State.APPLIED: Transition(on_enter=_noop),
         State.CANCELLED: Transition(on_enter=_noop),
         State.FAILED: Transition(on_enter=_noop),
         State.REMOTE_SUBMITTED_LOCAL_FAILED: Transition(on_enter=_noop),
     }
-
-    # Use a simpler approach with proper async lambdas
-    async def reserved_next(c: ApplyContext) -> State:
-        return State.RECORDING
-
-    transitions[State.RESERVED] = Transition(next=reserved_next)
 
     chart = Statechart(transitions=transitions, initial=State.RESERVED)
     status, method, message = await chart.run(ctx)
@@ -132,19 +140,17 @@ async def test_statechart_direct_to_cancelled():
     async def cancelled_enter(c: ApplyContext) -> None:
         cancelled_entered.append(True)
 
+    async def reserved_next(c: ApplyContext) -> State:
+        return State.RECORDING
+
     transitions = {
-        State.RESERVED: Transition(next=lambda c: asyncio.coroutine(lambda: State.RECORDING)()),
+        State.RESERVED: Transition(next=reserved_next),
         State.RECORDING: Transition(next=recording_next),
         State.APPLIED: Transition(on_enter=_noop),
         State.CANCELLED: Transition(on_enter=cancelled_enter),
         State.FAILED: Transition(on_enter=_noop),
         State.REMOTE_SUBMITTED_LOCAL_FAILED: Transition(on_enter=_noop),
     }
-
-    async def reserved_next(c: ApplyContext) -> State:
-        return State.RECORDING
-
-    transitions[State.RESERVED] = Transition(next=reserved_next)
 
     chart = Statechart(transitions=transitions, initial=State.RESERVED)
     status, method, message = await chart.run(ctx)

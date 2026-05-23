@@ -164,13 +164,16 @@ async def list_applications(
     if status_filter is not None:
         stmt = stmt.where(Application.status.in_(status_filter))
 
+    # Build the follow-up filter once so it can be reused for both the data
+    # query and the count query without Pyright losing track of the binding.
+    needs_follow_up_filter = None
     if needs_follow_up:
         # Alias for the "outer" follow_up_due event row we're anchoring on.
         fud = ApplicationEvent.__table__.alias("fud")
         # Include application only when:
         #   1. A follow_up_due event exists for it; AND
         #   2. No follow_up event exists with event_date AFTER the follow_up_due event.
-        has_open_due = exists().where(
+        needs_follow_up_filter = exists().where(
             fud.c.application_id == Application.id,
             fud.c.event_type == "follow_up_due",
             ~exists().where(
@@ -179,7 +182,9 @@ async def list_applications(
                 ApplicationEvent.event_date > fud.c.event_date,
             ),
         )
-        stmt = stmt.where(has_open_due)
+
+    if needs_follow_up_filter is not None:
+        stmt = stmt.where(needs_follow_up_filter)
 
     stmt = stmt.order_by(Application.created_at.desc()).offset(skip).limit(limit)
 
@@ -220,8 +225,8 @@ async def list_applications(
     count_stmt = select(func.count()).select_from(Application)
     if status_filter is not None:
         count_stmt = count_stmt.where(Application.status.in_(status_filter))
-    if needs_follow_up:
-        count_stmt = count_stmt.where(has_open_due)  # type: ignore[possibly-undefined]
+    if needs_follow_up_filter is not None:
+        count_stmt = count_stmt.where(needs_follow_up_filter)
     total = (await db.execute(count_stmt)).scalar_one()
 
     return ApplicationListOut(applications=app_outs, total=total)

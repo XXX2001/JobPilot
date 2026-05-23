@@ -289,11 +289,11 @@ class BrowserSessionManager:
         if not row or not row.encrypted_email or not row.encrypted_password:
             return None
 
-        if not getattr(settings, "CREDENTIAL_KEY", None):
+        if not settings.CREDENTIAL_KEY.get_secret_value():
             return None
 
         try:
-            f = Fernet(settings.CREDENTIAL_KEY.encode())
+            f = Fernet(settings.CREDENTIAL_KEY.get_secret_value().encode())
             email = f.decrypt(row.encrypted_email.encode()).decode()
             password = f.decrypt(row.encrypted_password.encode()).decode()
         except Exception as exc:

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field  # type: ignore
+from pydantic import Field, SecretStr  # type: ignore
 from pydantic_settings import (
     BaseSettings,  # type: ignore
     SettingsConfigDict,  # type: ignore
@@ -13,13 +13,13 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
     # Required secrets (no defaults)
-    GOOGLE_API_KEY: str
-    ADZUNA_APP_ID: str
-    ADZUNA_APP_KEY: str
+    GOOGLE_API_KEY: SecretStr
+    ADZUNA_APP_ID: str  # public app id (shown masked in UI but not a secret)
+    ADZUNA_APP_KEY: SecretStr
 
     # Optional
-    SERPAPI_KEY: str = ""
-    CREDENTIAL_KEY: str = ""  # Fernet key for encrypting stored credentials
+    SERPAPI_KEY: SecretStr = SecretStr("")
+    CREDENTIAL_KEY: SecretStr = SecretStr("")  # Fernet key for encrypting stored credentials
 
     # App settings with sensible defaults
     jobpilot_host: str = Field("127.0.0.1", env="JOBPILOT_HOST")
@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     jobpilot_log_level: str = Field("info", env="JOBPILOT_LOG_LEVEL")
     jobpilot_scraper_headless: bool = Field(True, env="JOBPILOT_SCRAPER_HEADLESS")
     jobpilot_data_dir: str = Field("./data", env="JOBPILOT_DATA_DIR")
+    # Comma-separated list of allowed CORS origins. Default = local dev hosts.
+    jobpilot_allowed_origins: str = Field(
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
+        env="JOBPILOT_ALLOWED_ORIGINS",
+    )
     # Google / Gemini model settings
     # Primary model name (Gemini 3 Flash Preview — newest, most intelligent flash)
     GOOGLE_MODEL: str = Field("gemini-3-flash-preview", env="GOOGLE_MODEL")
@@ -42,11 +47,11 @@ settings = Settings()
 
 # Auto-generate CREDENTIAL_KEY if not set, and persist it to .env so it
 # survives restarts.  This runs once on first launch — no installer needed.
-if not settings.CREDENTIAL_KEY:
+if not settings.CREDENTIAL_KEY.get_secret_value():
     from cryptography.fernet import Fernet  # type: ignore
 
     _new_key = Fernet.generate_key().decode()
-    settings.CREDENTIAL_KEY = _new_key
+    settings.CREDENTIAL_KEY = SecretStr(_new_key)
 
     _env_path = Path(__file__).resolve().parent.parent / ".env"
     if _env_path.exists():

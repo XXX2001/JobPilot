@@ -32,7 +32,7 @@ class AdaptiveScraper:
     """
 
     def __init__(self, gemini_api_key: str | None = None) -> None:
-        self._api_key = gemini_api_key or settings.GOOGLE_API_KEY
+        self._api_key = gemini_api_key or settings.GOOGLE_API_KEY.get_secret_value()
 
     def _make_llm(self):  # type: ignore[return]
         """Create a ChatGoogle LLM instance for browser-use."""

@@ -22,7 +22,7 @@ class AdzunaClient:
 
     def __init__(self) -> None:
         self.app_id = settings.ADZUNA_APP_ID
-        self.app_key = settings.ADZUNA_APP_KEY
+        self.app_key = settings.ADZUNA_APP_KEY.get_secret_value()
 
     async def search(
         self,

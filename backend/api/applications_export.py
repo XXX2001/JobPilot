@@ -22,7 +22,7 @@ from backend.models.job import Job, JobMatch
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/applications", tags=["applications-export"], redirect_slashes=False)
+router = APIRouter(prefix="/api/applications", tags=["applications"], redirect_slashes=False)
 
 # Columns emitted in the CSV, in spec order.
 _COLUMNS = [

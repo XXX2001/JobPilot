@@ -21,10 +21,11 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ### qw-2 — CV upload actually POSTs bytes (FE-12 fix)
 
-[`backend/api/settings.py`](backend/api/settings.py), [`frontend/src/routes/settings/+page.svelte`](frontend/src/routes/settings/+page.svelte), [`tests/test_cv_upload.py`](tests/test_cv_upload.py)
-- Added `POST /api/settings/profile/cv-upload` multipart endpoint that validates extension (`.tex` only), enforces a 2 MB size cap, and writes atomically via `NamedTemporaryFile` + `rename` before updating `UserProfile.base_cv_path` (relative path stored, not absolute).
-- 13 new tests cover the happy path, path-traversal rejection, oversize rejection, and wrong-extension rejection.
-- Frontend upload button now sends real `FormData` bytes instead of the previous no-op (FE-12 placebo resolved).
+[`backend/api/settings.py`](backend/api/settings.py), [`frontend/src/routes/cv/+page.svelte`](frontend/src/routes/cv/+page.svelte), [`frontend/src/lib/components/SetupWizard.svelte`](frontend/src/lib/components/SetupWizard.svelte), [`tests/test_settings_cv_upload.py`](tests/test_settings_cv_upload.py)
+- Added `POST /api/settings/profile/cv-upload` multipart endpoint that validates extensions (`.tex` / `.cls`), enforces a 1 MB size cap, and writes atomically: bytes go to a `<dest>.tmp` sibling, the DB commits, then `Path.rename` swaps the file into place. On any exception the `.tmp` is unlinked.
+- `UserProfile.base_cv_path` stores the path **relative** to `jobpilot_data_dir` (e.g. `templates/cv.tex`); `_resolve_cv_path` in `batch_runner.py` handles both relative (new rows) and absolute (legacy rows) values.
+- 13 new tests cover the happy path, `.cls` acceptance, filename sanitisation, path-traversal rejection (`..`, `/`), oversize rejection (1 MB + 1 byte → 413), wrong-extension rejection (`.pdf`/`.docx` → 415), and rollback-on-commit-failure.
+- Frontend upload button (and the wizard variant) now send real `FormData` bytes instead of the previous no-op (FE-12 placebo resolved).
 - Merge commit `bf5ee6b` (`Merge qw-2-cv-upload-bytes`).
 
 ### qw-3 — `_upsert_singleton` helper for settings endpoints
@@ -36,9 +37,10 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ### qw-4 — Daily-limit budget meter
 
-[`backend/api/applications.py`](backend/api/applications.py), [`backend/applier/daily_limit.py`](backend/applier/daily_limit.py), [`frontend/src/lib/stores/dailyLimit.ts`](frontend/src/lib/stores/dailyLimit.ts), [`frontend/src/lib/components/Sidebar.svelte`](frontend/src/lib/components/Sidebar.svelte)
-- Added `GET /api/applications/limit-status` returning `{used, limit, resets_at}` by reading the same `COUNTABLE_STATUSES` counter as `DailyLimitGuard`. `COUNTABLE_STATUSES` promoted from module-private to public export.
-- Frontend sidebar shows a pill (e.g. "7 / 10 today") with a 60-second polling store; the counter also invalidates immediately on receipt of a `apply_result` WebSocket message.
+[`backend/api/applications.py`](backend/api/applications.py), [`backend/applier/daily_limit.py`](backend/applier/daily_limit.py), [`frontend/src/lib/stores/dailyLimit.ts`](frontend/src/lib/stores/dailyLimit.ts), [`frontend/src/routes/+layout.svelte`](frontend/src/routes/+layout.svelte)
+- Added `GET /api/applications/limit-status` returning `{used, limit, resets_at}` by reading the same `COUNTABLE_STATUSES` counter as `DailyLimitGuard` (with UTC date arithmetic — `datetime.now(timezone.utc).date()`, not local `date.today()`). `COUNTABLE_STATUSES` promoted from module-private to public export.
+- New ref-counted writable store at `frontend/src/lib/stores/dailyLimit.ts` polls every 60 s and refreshes immediately on receipt of an `apply_result` WebSocket message. Pill ("7 / 10 today") was added to `+layout.svelte` under the WS-status block; colour shifts gray ≤ 6 → amber 7-8 → red 9-10.
+- 3 new endpoint tests (fresh / mid-day / at-cap).
 - Merge commit `b94aecc` (`Merge qw-4-daily-limit-meter`).
 
 ### qw-5 — Follow-up reminders
@@ -52,18 +54,18 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 ### qw-6 — Application portfolio CSV export
 
 [`backend/api/applications_export.py`](backend/api/applications_export.py), [`frontend/src/routes/tracker/+page.svelte`](frontend/src/routes/tracker/+page.svelte), [`tests/test_applications_export.py`](tests/test_applications_export.py)
-- `GET /api/applications/export?format=csv` streams all applications via Python's `csv` stdlib (no pandas) as a `StreamingResponse`. 13 columns in spec order; filename is `jobpilot-applications-YYYYMMDD.csv` (UTC date).
-- 13 new tests cover happy path (header row, data rows, empty DB) and error paths (400 on unknown format).
-- Tracker page gained a download button that triggers the export.
+- `GET /api/applications/export?format=csv` streams all applications via Python's `csv` stdlib (no pandas) as a `StreamingResponse`. 13 columns in spec order; ISO 8601 timestamps with explicit `+00:00` UTC offset; filename is `jobpilot-applications-YYYYMMDD.csv` (UTC date).
+- 3 new tests cover happy path (header + columns + ISO date validation), populated DB with a joined event row, and 400 on unknown format (e.g. `?format=json`).
+- Tracker page gained a plain `<a href download>` button — no JS needed.
 - Merge commit `9c4bb88` (`Merge qw-6-applications-export-csv`).
 
 ### qw-7 — Global hotkeys + HotkeyHelp modal
 
-[`frontend/src/lib/utils/hotkeys.ts`](frontend/src/lib/utils/hotkeys.ts), [`frontend/src/lib/components/HotkeyHelp.svelte`](frontend/src/lib/components/HotkeyHelp.svelte), [`frontend/src/routes/+layout.svelte`](frontend/src/routes/+layout.svelte)
-- Central `HotkeyDispatcher` class with `register(key, handler)` API; `svelte:window on:keydown` in the root layout; input-focus guard skips events when focus is inside `input`, `textarea`, `select`, or `contenteditable`.
-- Queue navigation: `j/k` move selection, `a/m/s` set apply/manual/skip status, `Enter` opens detail, `Esc` closes.
-- CV review bindings: `1/2/3` for tier selection, `←/→` to navigate matches.
-- `?` opens the `HotkeyHelp` modal listing all active bindings.
+[`frontend/src/lib/utils/hotkeys.ts`](frontend/src/lib/utils/hotkeys.ts), [`frontend/src/lib/components/HotkeyHelp.svelte`](frontend/src/lib/components/HotkeyHelp.svelte), [`frontend/src/routes/+layout.svelte`](frontend/src/routes/+layout.svelte), [`frontend/src/routes/+page.svelte`](frontend/src/routes/+page.svelte), [`frontend/src/lib/components/CVReviewPanel.svelte`](frontend/src/lib/components/CVReviewPanel.svelte)
+- New module-level dispatcher with `register(routeId, bindings, options) → handle` / `deregister(handle)` API. Single `<svelte:window onkeydown>` in the root layout delegates to the dispatcher; per-route bindings only fire when `$page.route.id` matches. Input-focus guard skips events when focus is inside `<input>`, `<textarea>`, `<select>`, or `[contenteditable]` — except `Esc`, which blurs the active field.
+- Queue navigation (`+page.svelte`): `j`/`k` move card focus, `a`/`m`/`s` set Auto/Manual/Skip on the focused card, `Enter` opens detail, `Esc` clears card focus.
+- CV review (`CVReviewPanel.svelte`): `1` skip, `2` use base CV, `3` approve, `←`/`→` navigate; all guarded by `panelPhase === 'review'`.
+- `?` opens the `HotkeyHelp` modal globally with focus-trap; help modal lists all active bindings grouped by section.
 - Merge commit `39b177c` (`Merge qw-7-global-hotkeys`).
 
 ---

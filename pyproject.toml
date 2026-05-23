@@ -28,6 +28,7 @@ jobpilot = "start:main"
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
     "ruff>=0.6",
     "pyright>=1.1",
 ]
@@ -37,6 +38,24 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-p no:launch_testing -p no:launch_ros -p no:ament_flake8 -p no:ament_lint -p no:ament_copyright -p no:ament_pep257 -p no:ament_xmllint"
 norecursedirs = [".venv", "node_modules", "__pycache__", ".git", "frontend"]
+
+[tool.coverage.run]
+source = ["backend"]
+branch = true
+omit = [
+    "backend/**/__init__.py",
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+show_missing = true
+skip_covered = false
 
 [tool.ruff]
 line-length = 100

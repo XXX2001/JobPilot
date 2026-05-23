@@ -71,7 +71,8 @@ async def test_embed_returns_vectors(monkeypatch):
     from unittest.mock import MagicMock
     from backend.llm.gemini_client import GeminiClient
 
-    monkeypatch.setattr("backend.config.settings.GOOGLE_API_KEY", "fake-key")
+    from pydantic import SecretStr
+    monkeypatch.setattr("backend.config.settings.GOOGLE_API_KEY", SecretStr("fake-key"))
     monkeypatch.setattr("backend.config.settings.GOOGLE_MODEL", "gemini-3.0-flash")
     monkeypatch.setattr("backend.config.settings.GOOGLE_MODEL_FALLBACKS", "")
 

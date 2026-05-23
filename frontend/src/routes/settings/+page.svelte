@@ -2,7 +2,8 @@
 import { onMount } from 'svelte';
 import { apiFetch } from '$lib/api';
 import { getProfileStatus } from '$lib/utils/easterEggs';
-	import { AlertCircle, CheckCircle2, Key, Info, Globe, Trash2, User, Search, Code, Cpu, X, Plus, Save } from 'lucide-svelte';
+	import { AlertCircle, CheckCircle2, Key, Info, Globe, Trash2, User, Search, Code, Cpu, X, Plus, Save, Plug } from 'lucide-svelte';
+	import GmailConnectCard from '$lib/components/GmailConnectCard.svelte';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -75,13 +76,14 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 
 	// ─── State ───────────────────────────────────────────────────────────────────
 
-	type TabId = 'profile' | 'search' | 'sites' | 'credentials' | 'sources' | 'system';
+	type TabId = 'profile' | 'search' | 'sites' | 'credentials' | 'sources' | 'integrations' | 'system';
 	const tabs: [TabId, string, typeof User][] = [
 		['profile', 'Profile', User],
 		['search', 'Search', Search],
 		['sites', 'Sites', Globe],
 		['credentials', 'Credentials', Key],
 		['sources', 'Sources', Code],
+		['integrations', 'Integrations', Plug],
 		['system', 'System', Cpu]
 	];
 
@@ -1044,6 +1046,16 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 			</section>
 		</div>
 	{/if}
+
+<!-- ── INTEGRATIONS TAB ────────────────────────────────────────────────────── -->
+{:else if activeTab === 'integrations'}
+	<div class="space-y-6">
+		<div class="mb-4">
+			<h2 class="text-xl font-semibold font-heading mb-1">Integrations</h2>
+			<p class="text-sm text-muted-foreground">Connect external accounts to enrich JobPilot with your existing data.</p>
+		</div>
+		<GmailConnectCard />
+	</div>
 
 <!-- ── SYSTEM TAB ──────────────────────────────────────────────────────────── -->
 {:else if activeTab === 'system'}

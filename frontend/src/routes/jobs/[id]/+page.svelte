@@ -2,6 +2,7 @@
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import { apiFetch } from '$lib/api';
+	import { fetchThread } from '$lib/api/gmail';
 	import { getApplyConfirmation } from '$lib/utils/easterEggs';
 	import ScoreIndicator from '$lib/components/ScoreIndicator.svelte';
 	import {
@@ -15,6 +16,7 @@
 		MousePointer,
 		Globe,
 		FileText,
+		Mail,
 		AlertCircle,
 		CheckCircle2
 	} from 'lucide-svelte';
@@ -56,6 +58,33 @@
 		generated_at?: string;
 	}
 
+	interface CorrespondenceMessage {
+		id: number;
+		gmail_message_id: string;
+		gmail_thread_id: string;
+		from_address: string;
+		subject: string | null;
+		snippet: string | null;
+		received_at: string;
+		category: string | null;
+		category_confidence: number | null;
+	}
+
+	interface CorrespondenceThread {
+		application_id: number;
+		messages: CorrespondenceMessage[];
+	}
+
+	interface ApplicationSummary {
+		id: number;
+		job_match_id: number | null;
+	}
+
+	interface ApplicationListResponse {
+		applications: ApplicationSummary[];
+		total: number;
+	}
+
 	const matchId = $derived(parseInt($page.params.id ?? '0'));
 
 	let matchData = $state<QueueMatch | null>(null);
@@ -66,8 +95,17 @@
 	let applyLoading = $state('');
 	let error = $state('');
 	let successMsg = $state('');
-	let activeTab = $state<'description' | 'diff'>('description');
+	let activeTab = $state<'description' | 'diff' | 'emails'>('description');
 	let enriching = $state(false);
+
+	// Linked-emails state. applicationId is resolved by looking up the
+	// Application row whose job_match_id matches the current matchId.
+	// Stays null when the user hasn't applied yet — in that case we show a
+	// hint instead of an empty thread.
+	let applicationId = $state<number | null>(null);
+	let linkedMessages = $state<CorrespondenceMessage[]>([]);
+	let emailsLoading = $state(false);
+	let emailsError = $state('');
 
 	const salary = $derived(() => {
 		if (!job) return null;
@@ -99,10 +137,49 @@
 			} catch {
 				diff = [];
 			}
+			// Fire-and-forget: resolve the application linked to this match so
+			// we can light up the "Linked emails" tab. Tracker is the
+			// authoritative source for application rows.
+			resolveApplicationId();
 		} catch (e: any) {
 			error = e.message ?? 'Failed to load job';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function resolveApplicationId() {
+		try {
+			// Pull a reasonable window of applications and pick the one whose
+			// job_match_id matches. The list endpoint already powers /tracker
+			// so the cache should be warm in most sessions.
+			const data = await apiFetch<ApplicationListResponse>('/api/applications?limit=200');
+			const app = (data.applications ?? []).find((a) => a.job_match_id === matchId);
+			if (app) {
+				applicationId = app.id;
+				loadEmails();
+			} else {
+				applicationId = null;
+			}
+		} catch {
+			// Non-fatal — emails tab will show an error banner only if the
+			// user explicitly opens it and the lookup fails again.
+			applicationId = null;
+		}
+	}
+
+	async function loadEmails() {
+		if (applicationId === null) return;
+		emailsLoading = true;
+		emailsError = '';
+		try {
+			const thread = (await fetchThread(applicationId)) as CorrespondenceThread;
+			linkedMessages = thread.messages ?? [];
+		} catch (e: any) {
+			emailsError = e?.message ?? 'Failed to load linked emails';
+			linkedMessages = [];
+		} finally {
+			emailsLoading = false;
 		}
 	}
 
@@ -236,7 +313,7 @@
 		</button>
 	</div>
 
-	<!-- Tabs: Description | CV Diff -->
+	<!-- Tabs: Description | CV Diff | Linked Emails -->
 	<div class="flex items-center gap-1 border-b border-border mb-4">
 		<button
 			onclick={() => (activeTab = 'description')}
@@ -256,6 +333,23 @@
 			CV Diff
 			{#if diff.length > 0}
 				<span class="ml-1 px-1.5 py-0.5 rounded-full bg-primary/20 text-primary text-xs">{diff.length}</span>
+			{/if}
+		</button>
+		<button
+			onclick={() => {
+				activeTab = 'emails';
+				if (applicationId !== null && linkedMessages.length === 0 && !emailsLoading) {
+					loadEmails();
+				}
+			}}
+			class="flex items-center gap-1.5 text-xs px-4 py-2 border-b-2 transition-colors {activeTab === 'emails'
+				? 'border-primary text-foreground font-medium'
+				: 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<Mail size={12} />
+			Linked Emails
+			{#if linkedMessages.length > 0}
+				<span class="ml-1 px-1.5 py-0.5 rounded-full bg-primary/20 text-primary text-xs">{linkedMessages.length}</span>
 			{/if}
 		</button>
 	</div>
@@ -293,7 +387,7 @@
 				</button>
 			{/if}
 		</div>
-	{:else}
+	{:else if activeTab === 'diff'}
 		<!-- CV Diff view -->
 		<div class="max-w-3xl">
 			{#if diff.length === 0}
@@ -342,6 +436,56 @@
 						View Tailored CV (PDF)
 					</a>
 				</div>
+			{/if}
+		</div>
+	{:else}
+		<!-- Linked Emails view -->
+		<div class="max-w-3xl">
+			{#if applicationId === null}
+				<div class="flex flex-col items-center justify-center py-16 gap-3 bg-card border border-border rounded-lg">
+					<Mail size={32} class="text-muted-foreground/40" />
+					<p class="text-sm text-muted-foreground font-medium">No application yet</p>
+					<p class="text-xs text-muted-foreground">
+						Apply to this job to start tracking linked emails.
+					</p>
+				</div>
+			{:else if emailsLoading}
+				<div class="space-y-2">
+					{#each Array(3) as _, i (i)}
+						<div class="h-20 bg-card/40 border border-border/30 rounded-lg animate-pulse"></div>
+					{/each}
+				</div>
+			{:else if emailsError}
+				<div class="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+					<AlertCircle size={13} />
+					{emailsError}
+					<button onclick={loadEmails} class="ml-auto hover:text-red-300 underline">Retry</button>
+				</div>
+			{:else if linkedMessages.length === 0}
+				<div class="flex flex-col items-center justify-center py-16 gap-3 bg-card border border-border rounded-lg">
+					<Mail size={32} class="text-muted-foreground/40" />
+					<p class="text-sm text-muted-foreground font-medium">No linked emails yet</p>
+					<p class="text-xs text-muted-foreground">
+						Visit the
+						<a href="/inbox" class="text-primary hover:underline">Inbox</a>
+						to attach recruiter messages to this application.
+					</p>
+				</div>
+			{:else}
+				<ul class="space-y-2">
+					{#each linkedMessages as m (m.id)}
+						<li class="rounded-lg border border-border bg-card p-3">
+							<header class="flex items-center justify-between text-xs text-muted-foreground mb-1 gap-2">
+								<span class="truncate" title={m.from_address}>{m.from_address}</span>
+								<span class="flex-shrink-0">{new Date(m.received_at).toLocaleString()}</span>
+							</header>
+							<p class="text-sm text-foreground font-medium">{m.subject ?? '(no subject)'}</p>
+							{#if m.snippet}
+								<p class="text-xs text-muted-foreground mt-1 line-clamp-2">{m.snippet}</p>
+							{/if}
+						</li>
+					{/each}
+				</ul>
 			{/if}
 		</div>
 	{/if}

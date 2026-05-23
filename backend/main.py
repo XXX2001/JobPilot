@@ -19,6 +19,13 @@ from starlette.staticfiles import NotModifiedResponse  # type: ignore
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
 from backend.logging_config import configure_logging
 
+# Importable at module level so tests can patch backend.main.GmailSyncWorker.
+# Wrapped in try/except to keep import resilient in trimmed-down test/CLI envs.
+try:
+    from backend.gmail.sync import GmailSyncWorker  # noqa: F401
+except Exception:
+    GmailSyncWorker = None  # type: ignore[assignment]
+
 
 # ─── Health response schema (OBS-03) ──────────────────────────────────────────
 
@@ -34,6 +41,29 @@ class HealthOut(BaseModel):
     db_error_code: str | None = None
 
 logger = logging.getLogger("jobpilot")
+
+
+async def _run_gmail_poll() -> None:
+    """Cron entrypoint — iterate enabled credentials, run sync for each."""
+    from sqlalchemy import select
+
+    from backend.database import AsyncSessionLocal
+    from backend.models.gmail import GmailCredential
+
+    if GmailSyncWorker is None:
+        return
+    token_mgr = getattr(app.state, "gmail_token_manager", None)
+    worker = GmailSyncWorker(token_manager=token_mgr)  # type: ignore[arg-type]
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(GmailCredential).where(GmailCredential.enabled.is_(True))
+        )).scalars().all()
+        emails = [r.email_address for r in rows]
+    for email in emails:
+        try:
+            await worker.sync_now(email)
+        except Exception:
+            logger.exception("Gmail poll failed for %s", email)
 
 
 @asynccontextmanager
@@ -189,11 +219,37 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("WS handler registration failed (non-fatal): %s", exc)
 
+    # ── Gmail token manager singleton ────────────────────────────────────
+    try:
+        from backend.gmail.auth import GmailTokenManager
+
+        app.state.gmail_token_manager = GmailTokenManager()
+    except Exception as exc:
+        logger.warning("GmailTokenManager init failed (non-fatal): %s", exc)
+
+    # ── APScheduler: poll Gmail every N minutes (Phase 1) ─────────────────
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        scheduler = AsyncIOScheduler()
+        interval = max(1, int(settings.GMAIL_POLL_INTERVAL_MINUTES))
+        scheduler.add_job(_run_gmail_poll, "interval", minutes=interval, id="gmail_poll")
+        scheduler.start()
+        app.state.scheduler = scheduler
+        logger.info("Gmail poller scheduled every %d minute(s)", interval)
+    except Exception as exc:
+        logger.warning("Could not start Gmail scheduler: %s", exc, exc_info=True)
+
     yield
 
     # Shutdown
     logger.info("Shutting down JobPilot application")
-    # No scheduler to shut down — batch runs are on-demand only
+    scheduler = getattr(app.state, "scheduler", None)
+    if scheduler is not None:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception:
+            pass
 
 
 app: Any = FastAPI(lifespan=lifespan, redirect_slashes=False)  # type: ignore[arg-type]
@@ -215,6 +271,9 @@ try:
     import backend.api.applications as applications  # type: ignore
     import backend.api.applications_export as applications_export  # type: ignore
     import backend.api.documents as documents  # type: ignore
+    import backend.api.correspondence as correspondence  # type: ignore
+    import backend.api.gmail as gmail  # type: ignore
+    import backend.api.gmail_auth as gmail_auth  # type: ignore
     import backend.api.jobs as jobs  # type: ignore
     import backend.api.queue as queue  # type: ignore
     import backend.api.settings as api_settings  # type: ignore
@@ -230,6 +289,9 @@ try:
     app.include_router(documents.router)
     app.include_router(api_settings.router)
     app.include_router(analytics.router)
+    app.include_router(gmail_auth.router)
+    app.include_router(gmail.router)
+    app.include_router(correspondence.router)
     # ws.py is present but may not register routes yet
     app.include_router(ws.router)
 except Exception as e:

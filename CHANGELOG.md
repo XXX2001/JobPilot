@@ -4,6 +4,40 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## 2026-05-23 — Gmail Phase 1 sprint (gm-1 .. gm-12)
+
+**Scope.** Read-only Gmail integration shipped as 12 PR-style commits on `gm-phase-1`. Designed at [`docs/reports/2026-05-22-audit/03-gmail-integration-design.md`](docs/reports/2026-05-22-audit/03-gmail-integration-design.md); plan at [`docs/superpowers/plans/2026-05-23-gmail-phase-1.md`](docs/superpowers/plans/2026-05-23-gmail-phase-1.md). Resolved open questions: single account, polling-only (Pub/Sub deferred to Phase 2), heuristic-only classifier (LLM tiers deferred), reuse `ConnectionManager.register_handler`.
+
+**Outcomes.**
+- **Tests:** 401 passed / 0 failed / 7 skipped (was 357/0/7 at sprint start — +44 new tests across 10 new gm-* test files plus the integration smoke).
+- **Pyright (basic mode):** no regression on the new files (all 0/0); pre-existing `Field(env=...)` deprecation warnings remain.
+- **Frontend:** svelte-check 0 errors, 1 pre-existing a11y warning (not from gm-*).
+- **New dependency:** `apscheduler>=3.10` (the first real `AsyncIOScheduler.start()` in the repo). OAuth + Gmail REST go through raw `httpx` — no `google-auth` / `google-api-python-client`.
+
+**Ships.**
+- OAuth 2.0 flow with `gmail.readonly` scope; refresh tokens Fernet-encrypted at rest with `CREDENTIAL_KEY` (mirrors `SiteCredential`). CSRF state via stdlib HMAC-SHA256 — no extra dep.
+- Three new tables (`gmail_credentials`, `gmail_messages`, `application_correspondence`) + `applications.last_correspondence_at` column. Phase 2 enrichment columns declared now so the schema doesn't migrate twice.
+- Polling sync every 5 min via APScheduler; first-run back-fill of `newer_than:30d category:primary`, then `users.history.list` delta sync. Per-account `asyncio.Lock` + per-process `Semaphore(10)`.
+- Heuristic classifier (`ats_ack` / `recruiter_question` / `interview_invite` / `rejection` / `offer` / `noise` / `unknown`) with confidence capped at 0.85 so the Phase 2 LLM can override.
+- REST: `GET /api/gmail/{oauth/start, oauth/callback, status}`, `POST /api/gmail/{sync, disconnect}`, `GET/POST/DELETE /api/correspondence/{...}`.
+- WS: two new variants (`gmail_sync_status`, `gmail_message_received`) in the discriminated `WSMessage` union; broadcast helpers in [`backend/api/ws.py`](backend/api/ws.py).
+- Frontend: Gmail Connect card in Settings → Integrations tab, dedicated `/inbox` page with searchable Link-to-Application modal, Linked-emails tab on `/jobs/[id]` (with client-side `job_match_id → application_id` lookup), generic toast store wired to `gmail_message_received` events.
+
+**Known follow-ups (not blocking ship).**
+- `backend/gmail/auth.py` and `backend/gmail/sync.py` use name-bound `from backend.config import settings` rather than the `_config.settings` indirection used by [`backend/api/gmail_auth.py`](backend/api/gmail_auth.py); reassigning `cfg.settings` in tests doesn't propagate. Worked around in `tests/test_gmail_smoke.py`; harmonise in Phase 2.
+- `/api/gmail/status` returns `select(GmailCredential).limit(1)` with no scoping — fine for single-account Phase 1; needs `?email=` or per-user scoping when multi-account ships.
+- `/jobs/[id]` Linked-emails tab degrades to "No application yet" when the user has >200 applications and is viewing an old one outside the API's hard `limit=200`. Phase 2 should switch to a direct `GET /api/applications/by-match/{match_id}` endpoint.
+- Pre-existing `Field(default, env=...)` Pydantic V2 deprecation warnings now also appear on the new Gmail config fields (matched the file's existing style intentionally).
+
+**Not in scope (deferred).**
+- LLM classifier tiers (Flash-Lite + Pro escalation) — Phase 2.
+- Auto-link via `ApplicationMatcher` (company+role+temporal scoring) — Phase 2.
+- Application status FSM driven by inbound classification — Phase 2.
+- Pub/Sub push pipeline + `users.watch` renewer — Phase 2.
+- Gmail draft + auto-adapt CV regeneration — Phase 3.
+
+---
+
 ## 2026-05-23 — NX sprint (nx-1, nx-2)
 
 **Scope.** Two PRs covering the remaining improvement items from the 2026-05-23 report's Top-10 list that don't need new infrastructure: an apply-flow finite-state-machine extract (nx-1) and a "Today" dashboard replacing the queue-as-home (nx-2). Gmail Phase 1 is owned by the product owner separately; the `scan_overdue` periodic trigger remains deferred (no scheduler in current architecture).

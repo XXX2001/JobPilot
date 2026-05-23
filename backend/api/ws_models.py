@@ -121,6 +121,24 @@ class CaptchaResolved(BaseModel):
     job_id: int | None = None
 
 
+class GmailSyncStatus(BaseModel):
+    type: Literal["gmail_sync_status"] = "gmail_sync_status"
+    last_history_id: str | None = None
+    messages_synced: int = 0
+    progress: float = 0.0
+
+
+class GmailMessageReceived(BaseModel):
+    type: Literal["gmail_message_received"] = "gmail_message_received"
+    gmail_message_id: str
+    from_address: str
+    subject: str | None = None
+    category: str | None = None
+    category_confidence: float | None = None
+    linked_application_id: int | None = None
+    link_confidence: float | None = None
+
+
 class Pong(BaseModel):
     """Server reply to a client `ping`."""
 
@@ -146,6 +164,8 @@ WSMessage = Annotated[
         LoginConfirmed,
         CaptchaDetected,
         CaptchaResolved,
+        GmailSyncStatus,
+        GmailMessageReceived,
         Pong,
         ErrorMessage,
     ],
@@ -192,6 +212,8 @@ __all__ = [
     "LoginConfirmed",
     "CaptchaDetected",
     "CaptchaResolved",
+    "GmailSyncStatus",
+    "GmailMessageReceived",
     "Pong",
     "ErrorMessage",
     "ClientMessage",

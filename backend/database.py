@@ -77,6 +77,7 @@ async def _migrate_add_columns() -> None:
         ("search_settings", "cv_tailoring_enabled", "BOOLEAN NOT NULL DEFAULT 1"),
         ("search_settings", "max_results_per_source", "INTEGER NOT NULL DEFAULT 20"),
         ("search_settings", "max_job_age_days", "INTEGER"),
+        ("applications", "last_correspondence_at", "DATETIME"),
     ]
     try:
         async with engine.begin() as conn:

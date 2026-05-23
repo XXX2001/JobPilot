@@ -180,4 +180,32 @@ async def broadcast_job_assessment(
     )
 
 
-__all__ = ["ConnectionManager", "manager", "router", "broadcast_status", "broadcast_job_assessment"]
+async def broadcast_gmail_sync_status(
+    messages_synced: int, progress: float, last_history_id: str | None = None
+) -> None:
+    """Broadcast a Gmail sync-status update to all WS clients."""
+    from backend.api.ws_models import GmailSyncStatus
+    await manager.broadcast(GmailSyncStatus(
+        last_history_id=last_history_id,
+        messages_synced=messages_synced,
+        progress=progress,
+    ))
+
+
+async def broadcast_gmail_message_received(
+    gmail_message_id: str, from_address: str, subject: str | None,
+    category: str | None, category_confidence: float | None,
+) -> None:
+    """Broadcast a single inbound classified Gmail message to WS clients."""
+    from backend.api.ws_models import GmailMessageReceived
+    await manager.broadcast(GmailMessageReceived(
+        gmail_message_id=gmail_message_id, from_address=from_address,
+        subject=subject, category=category, category_confidence=category_confidence,
+    ))
+
+
+__all__ = [
+    "ConnectionManager", "manager", "router",
+    "broadcast_status", "broadcast_job_assessment",
+    "broadcast_gmail_sync_status", "broadcast_gmail_message_received",
+]

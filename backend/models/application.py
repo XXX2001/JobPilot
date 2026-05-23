@@ -26,6 +26,9 @@ class Application(Base):
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    last_correspondence_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime, nullable=True
+    )
 
 
 class ApplicationEvent(Base):

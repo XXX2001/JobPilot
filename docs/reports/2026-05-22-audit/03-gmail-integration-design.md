@@ -739,12 +739,18 @@ Extend `backend/api/settings.py` with:
 
 ## Open Questions
 
-1. **Multi-account.** Single-user app today; do we want to support linking *both* a personal and a work Gmail in the same JobPilot instance? Schema supports it; UX doesn't currently.
-2. **Pub/Sub project ownership.** Push notifications require a GCP project with billing. Acceptable to ask the user to BYO project, or do we ship a shared one? Polling-only is a fine MVP.
-3. **Gemini model availability.** `gemini-flash-lite-latest` — confirm the exact identifier; if not available, fall back to `gemini-flash-latest` and accept the ~3x cost (still trivial).
-4. **Workday / Taleo recruiter portals.** Many emails point the candidate back to a recruiter portal rather than including the question inline; do we want a Phase 3.5 to drive Playwright back into those portals? Out of scope here.
-5. **Threading across the apply-engine login flow.** The existing applier uses asyncio events per-job (`backend/applier/engine.py:102`). Should the Gmail event bus reuse the same `ConnectionManager.register_handler` pattern, or stand up its own dispatcher? Recommending the former for Phase 1; revisit if event volume grows.
-6. **Calendar integration.** Phase 2 lays the groundwork (`extracted_interview_at`); explicit Google Calendar write is deferred to a separate design.
+> **Resolved 2026-05-23** by product owner — decisions locked below; original questions kept for context.
+
+1. **Multi-account.** ~~Single-user app today; do we want to support linking *both* a personal and a work Gmail in the same JobPilot instance?~~
+   **Decision:** **Single account only.** Schema stays keyed by `email_address` (no migration needed if we ever change our mind), but UI assumes one inbox — Settings shows one Connect button, `/api/correspondence/unlinked` returns the rows for the single linked account.
+2. **Pub/Sub project ownership.** ~~Push notifications require a GCP project with billing. Acceptable to ask the user to BYO project, or do we ship a shared one?~~
+   **Decision:** **Polling-only for Phase 1.** Push pipeline (Pub/Sub, `/api/webhooks/gmail`, JWT verification) is deferred to Phase 2. APScheduler `*/5 * * * *` is the only sync entry point. The `users.watch` daily renewer is also deferred — not invoked in Phase 1.
+3. **Gemini model availability.** ~~`gemini-flash-lite-latest` — confirm the exact identifier.~~
+   **Decision:** **Use `gemini-flash-lite-latest`.** Locked for Phase 2 (Phase 1 has no LLM calls). If the identifier is rejected at runtime, fall back to `gemini-flash-latest` per the original design.
+4. **Workday / Taleo recruiter portals.** Out of scope. Deferred indefinitely.
+5. **Threading across the apply-engine login flow.** ~~Should the Gmail event bus reuse the same `ConnectionManager.register_handler` pattern, or stand up its own dispatcher?~~
+   **Decision:** **Reuse `ConnectionManager.register_handler`** for Phase 1 (the production-conservative choice — matches the pattern already used by the applier and the scraping batch). Revisit only if event volume grows.
+6. **Calendar integration.** Deferred to a separate design. `extracted_interview_at` is still populated in Phase 2 enrichment so the future Calendar writer has data to work with.
 
 ---
 

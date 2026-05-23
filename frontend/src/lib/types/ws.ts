@@ -103,6 +103,26 @@ export interface ErrorMsg {
 	code: string;
 }
 
+/** Gmail polling progress narration emitted by gm-6/gm-8. */
+export interface GmailSyncStatusMsg {
+	type: 'gmail_sync_status';
+	last_history_id: string | null;
+	messages_synced: number;
+	progress: number;
+}
+
+/** Per-message broadcast when a new inbound Gmail message is ingested. */
+export interface GmailMessageReceivedMsg {
+	type: 'gmail_message_received';
+	gmail_message_id: string;
+	from_address: string;
+	subject: string | null;
+	category: string | null;
+	category_confidence: number | null;
+	linked_application_id: number | null;
+	link_confidence: number | null;
+}
+
 export type WSMessage =
 	| StatusMsg
 	| JobAssessmentMsg
@@ -116,7 +136,9 @@ export type WSMessage =
 	| CaptchaDetectedMsg
 	| CaptchaResolvedMsg
 	| PongMsg
-	| ErrorMsg;
+	| ErrorMsg
+	| GmailSyncStatusMsg
+	| GmailMessageReceivedMsg;
 
 export type WSMessageType = WSMessage['type'];
 
@@ -169,6 +191,8 @@ export function asWSMessage(value: unknown): WSMessage | null {
 		case 'captcha_resolved':
 		case 'pong':
 		case 'error':
+		case 'gmail_sync_status':
+		case 'gmail_message_received':
 			return value as WSMessage;
 		default:
 			return null;

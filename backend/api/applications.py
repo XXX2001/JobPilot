@@ -7,7 +7,7 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, field_validator
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, select
 
 from backend.api.deps import DBSession
 from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED
@@ -88,6 +88,7 @@ class CreateEventRequest(BaseModel):
         "rejected",
         "viewed",
         "follow_up",
+        "follow_up_due",
     ]
     details: Optional[str] = None
 
@@ -143,8 +144,16 @@ async def list_applications(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     status: Optional[str] = Query(None),
+    needs_follow_up: Optional[bool] = Query(None),
 ):
-    """List applications with optional status filter and pagination."""
+    """List applications with optional status filter and pagination.
+
+    When ``needs_follow_up=true`` is supplied the response is restricted to
+    applications that have an *open* ``follow_up_due`` event — i.e. the event
+    exists AND no subsequent ``follow_up`` event (with a later ``event_date``)
+    has been logged by the user.  A ``follow_up`` event that pre-dates the
+    ``follow_up_due`` does NOT resolve it.
+    """
     # Query applications with joined job data
     stmt = (
         select(Application, Job)
@@ -154,6 +163,29 @@ async def list_applications(
     status_filter = _expand_status_filter(status)
     if status_filter is not None:
         stmt = stmt.where(Application.status.in_(status_filter))
+
+    # Build the follow-up filter once so it can be reused for both the data
+    # query and the count query without Pyright losing track of the binding.
+    needs_follow_up_filter = None
+    if needs_follow_up:
+        # Alias for the "outer" follow_up_due event row we're anchoring on.
+        fud = ApplicationEvent.__table__.alias("fud")
+        # Include application only when:
+        #   1. A follow_up_due event exists for it; AND
+        #   2. No follow_up event exists with event_date AFTER the follow_up_due event.
+        needs_follow_up_filter = exists().where(
+            fud.c.application_id == Application.id,
+            fud.c.event_type == "follow_up_due",
+            ~exists().where(
+                ApplicationEvent.application_id == Application.id,
+                ApplicationEvent.event_type == "follow_up",
+                ApplicationEvent.event_date > fud.c.event_date,
+            ),
+        )
+
+    if needs_follow_up_filter is not None:
+        stmt = stmt.where(needs_follow_up_filter)
+
     stmt = stmt.order_by(Application.created_at.desc()).offset(skip).limit(limit)
 
     result = await db.execute(stmt)
@@ -193,6 +225,8 @@ async def list_applications(
     count_stmt = select(func.count()).select_from(Application)
     if status_filter is not None:
         count_stmt = count_stmt.where(Application.status.in_(status_filter))
+    if needs_follow_up_filter is not None:
+        count_stmt = count_stmt.where(needs_follow_up_filter)
     total = (await db.execute(count_stmt)).scalar_one()
 
     return ApplicationListOut(applications=app_outs, total=total)

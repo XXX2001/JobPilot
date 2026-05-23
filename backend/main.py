@@ -142,6 +142,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Singleton init failed (non-fatal in test env): %s", exc, exc_info=True)
 
+    # ── Scan for overdue follow-ups at startup ───────────────────────────
+    try:
+        from backend.applier.follow_up import scan_overdue
+
+        _created = await scan_overdue()
+        logger.info("Startup follow-up scan: %d event(s) created", _created)
+    except Exception as _fu_exc:
+        logger.warning(
+            "follow_up.scan_overdue failed at startup (non-fatal): %s", _fu_exc, exc_info=True
+        )
+
     # ── Wire WS client message routing ──────────────────────────────────
     try:
         from backend.api import ws as ws_module

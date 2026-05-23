@@ -1,4 +1,4 @@
-"""Morning batch runner — orchestrates job scraping and CV pre-generation.
+"""On-demand batch runner — orchestrates job scraping and CV pre-generation.
 
 The batch is triggered manually via POST /api/queue/refresh. There is no
 automatic scheduling; users decide when to search for new jobs.
@@ -82,7 +82,7 @@ def _resolve_cv_path(profile_row: Any, data_dir: Path) -> Path | None:
     return None
 
 
-class MorningBatchRunner:
+class BatchRunner:
     """Orchestrates job discovery and CV pre-generation pipeline.
 
     Steps:
@@ -126,18 +126,18 @@ class MorningBatchRunner:
         await broadcast_status(message, progress=progress)
 
     async def run_batch(self) -> None:
-        """Full 5-step morning pipeline."""
+        """Full 5-step batch pipeline."""
         if self.running:
             logger.warning("Batch already running — ignoring duplicate trigger")
             return
         self.running = True
         self.last_status = None
-        logger.info("Morning batch started")
+        logger.info("Batch started")
         db: AsyncSession = self._db_factory()
         try:
             await self._run_batch_inner(db)
         except Exception as exc:
-            logger.error("Morning batch failed: %s", exc, exc_info=True)
+            logger.error("Batch failed: %s", exc, exc_info=True)
             await self._broadcast_and_track(f"Batch failed: {exc}", progress=-1.0)
         finally:
             self.running = False
@@ -175,7 +175,7 @@ class MorningBatchRunner:
         await self._broadcast_and_track("Searching for jobs…", progress=0.05)
         location = filters.locations[0] if filters.locations else ""
         countries = _extract_json_list(settings_row.countries, "items") if settings_row.countries else []
-        raw_jobs = await self._scraper.run_morning_batch(
+        raw_jobs = await self._scraper.scrape_batch(
             keywords=keywords,
             filters=filters,
             sources=sources,
@@ -367,7 +367,7 @@ class MorningBatchRunner:
 
         # ── Step 5: Notify dashboard ─────────────────────────────────────
         await self._broadcast_and_track(f"{len(top_ids)} applications ready for review", progress=1.0)
-        logger.info("Morning batch complete — %d jobs ready", len(top_ids))
+        logger.info("Batch complete — %d jobs ready", len(top_ids))
 
     async def _assess_one(
         self,
@@ -564,4 +564,4 @@ class MorningBatchRunner:
         )
 
 
-__all__ = ["MorningBatchRunner"]
+__all__ = ["BatchRunner"]

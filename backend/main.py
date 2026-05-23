@@ -3,24 +3,46 @@ import logging
 import platform
 import shutil
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, Request  # type: ignore
+from fastapi import FastAPI, Request, Response  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.responses import JSONResponse  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
+from pydantic import BaseModel  # type: ignore
+from sqlalchemy import text  # type: ignore
 from starlette.responses import FileResponse  # type: ignore
 from starlette.staticfiles import NotModifiedResponse  # type: ignore
 
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
+from backend.logging_config import configure_logging
+
+
+# ─── Health response schema (OBS-03) ──────────────────────────────────────────
+
+
+class HealthOut(BaseModel):
+    status: Literal["ok", "degraded"]
+    version: str
+    timestamp: datetime
+    db: Literal["ok", "error"]
+    tectonic: bool
+    gemini_key_set: bool
+    tectonic_hint: str | None = None
+    db_error_code: str | None = None
 
 logger = logging.getLogger("jobpilot")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup: wire JSON logging FIRST (honors JOBPILOT_LOG_LEVEL + writes
+    # to <DATA_DIR>/logs/jobpilot.log) so every subsequent log line is
+    # structured.
+    configure_logging(data_dir=DATA_DIR)
+
     logger.info("Starting JobPilot application")
 
     # Ensure data subdirectories exist
@@ -56,7 +78,7 @@ async def lifespan(app: FastAPI):
         from backend.matching.embedder import Embedder
         from backend.matching.fit_engine import FitEngine
         from backend.matching.matcher import JobMatcher
-        from backend.scheduler.morning_batch import MorningBatchRunner
+        from backend.scheduler.batch_runner import BatchRunner
         from backend.scraping.adaptive_scraper import AdaptiveScraper
         from backend.scraping.adzuna_client import AdzunaClient
         from backend.scraping.deduplicator import JobDeduplicator
@@ -95,7 +117,7 @@ async def lifespan(app: FastAPI):
         # DB factory for the batch runner (creates a new session each call)
         from backend.database import AsyncSessionLocal
 
-        batch_runner = MorningBatchRunner(
+        batch_runner = BatchRunner(
             scraper=orchestrator,
             matcher=matcher,
             cv_pipeline=cv_pipeline,
@@ -199,24 +221,71 @@ except Exception as e:
     logger.debug("API routers not all available yet: %s", e)
 
 
-@app.get("/api/health")
-async def health():
+@app.get("/api/health", response_model=HealthOut)
+async def health(response: Response) -> HealthOut:
+    """Liveness/readiness probe — actually pings the DB (OBS-03).
+
+    Returns 200 when everything's healthy; 503 when the DB ping fails so
+    container/k8s health-checks can react. Exception text is never leaked
+    in the response body (EH-05) — a short error code is returned instead
+    and the full traceback is logged server-side.
+    """
+    # Tectonic check: cheap synchronous filesystem call — fine for a probe.
     tectonic_name = "tectonic.exe" if platform.system() == "Windows" else "tectonic"
     tectonic_bin = PROJECT_ROOT / "bin" / tectonic_name
     tectonic = tectonic_bin.exists() or shutil.which("tectonic") is not None
-    gemini_key_set = getattr(settings, "GOOGLE_API_KEY", "") not in (None, "", "placeholder")
-    result: dict[str, Any] = {
-        "status": "ok",
-        "version": "0.1.0",
-        "db": "connected",
-        "tectonic": bool(tectonic),
-        "gemini_key_set": bool(gemini_key_set),
-    }
-    if not tectonic:
-        result["tectonic_hint"] = (
-            "Tectonic not found. Run: uv run python scripts/download_tectonic.py"
-        )
-    return result
+
+    raw_key: Any = getattr(settings, "GOOGLE_API_KEY", "")
+    # Settings may wrap secrets in SecretStr; unwrap defensively before comparing.
+    if hasattr(raw_key, "get_secret_value"):
+        try:
+            raw_key = raw_key.get_secret_value()
+        except Exception:
+            raw_key = ""
+    gemini_key_set = raw_key not in (None, "", "placeholder")
+
+    # ── DB ping ────────────────────────────────────────────────────────────
+    # Use the shared AsyncSessionLocal so we go through the existing pool
+    # rather than spinning up a fresh engine on every probe.
+    db_status: Literal["ok", "error"] = "ok"
+    db_error_code: str | None = None
+    try:
+        # Late import + module-level lookup so tests can monkeypatch
+        # `backend.database.AsyncSessionLocal` to simulate DB failure.
+        from backend import database as _db
+
+        async with _db.AsyncSessionLocal() as session:
+            result = await session.execute(text("SELECT 1"))
+            value = result.scalar_one()
+            if value != 1:
+                raise RuntimeError(f"SELECT 1 returned {value!r}")
+    except Exception as exc:
+        # Log full traceback server-side, surface only a short code (EH-05).
+        logger.warning("Health-check DB ping failed: %s", exc, exc_info=True)
+        db_status = "error"
+        db_error_code = "db_unreachable"
+
+    overall_status: Literal["ok", "degraded"] = "ok" if db_status == "ok" else "degraded"
+    if db_status == "error":
+        # 503 lets orchestrators (k8s liveness, Docker healthcheck) react.
+        response.status_code = 503
+
+    tectonic_hint = (
+        None
+        if tectonic
+        else "Tectonic not found. Run: uv run python scripts/download_tectonic.py"
+    )
+
+    return HealthOut(
+        status=overall_status,
+        version="0.1.0",
+        timestamp=datetime.now(timezone.utc),
+        db=db_status,
+        tectonic=bool(tectonic),
+        gemini_key_set=bool(gemini_key_set),
+        tectonic_hint=tectonic_hint,
+        db_error_code=db_error_code,
+    )
 
 
 # ── Global exception handlers ────────────────────────────────────────────────

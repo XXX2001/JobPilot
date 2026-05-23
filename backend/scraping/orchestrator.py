@@ -1,4 +1,4 @@
-"""Scraping orchestrator — coordinates all job sources for a morning batch.
+"""Scraping orchestrator — coordinates all job sources for one batch.
 
 Phase 1: API sources (Adzuna) — fast, parallel.
 Phase 2: Browser sources — sequential with 3-8s human-like delay.
@@ -73,7 +73,7 @@ def _flatten_results(results: list) -> list[RawJob]:
 
 
 class ScrapingOrchestrator:
-    """Coordinates all job sources for a morning batch.
+    """Coordinates all job sources for one batch.
 
     Constructor receives all dependencies explicitly so they can be injected
     from the FastAPI app state (and mocked in tests).
@@ -98,7 +98,7 @@ class ScrapingOrchestrator:
         self.deduplicator = deduplicator
         self.scrapling_fetcher = scrapling_fetcher
 
-    async def run_morning_batch(
+    async def scrape_batch(
         self,
         keywords: list[str] | None = None,
         filters: "JobFilters | None" = None,
@@ -108,7 +108,7 @@ class ScrapingOrchestrator:
         max_results_per_source: int = 20,
         max_age_days: int | None = None,
     ) -> list[RawJob]:
-        """Run the full morning scraping pipeline.
+        """Run the full scraping pipeline for one batch.
 
         Args:
             keywords: Search keywords. Loaded from DB settings if None.
@@ -132,7 +132,7 @@ class ScrapingOrchestrator:
         all_jobs: list[RawJob] = []
 
         logger.info(
-            "run_morning_batch: %d sources, %d keywords, location=%r, countries=%r",
+            "scrape_batch: %d sources, %d keywords, location=%r, countries=%r",
             len(sources), len(keywords), location, countries,
         )
 

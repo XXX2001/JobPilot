@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from backend.scheduler.morning_batch import _resolve_cv_path
+from backend.scheduler.batch_runner import _resolve_cv_path
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

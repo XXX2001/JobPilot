@@ -159,6 +159,60 @@ def test_cv_upload_rejects_empty_filename_after_sanitize(test_app: TestClient):
 # Atomic write: rollback on DB failure
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Multipart contract — proves the apiFetch FormData fix is required
+# ---------------------------------------------------------------------------
+# The deep-dive flagged (07-frontend.md §CRITICAL) that ``apiFetch`` was
+# stamping ``Content-Type: application/json`` on every request, including
+# FormData uploads. These two tests pin the backend contract the client
+# fix has to match: multipart accepted, JSON rejected.
+
+
+def test_cv_upload_accepts_multipart_form_data(test_app: TestClient):
+    """A real multipart/form-data POST is the supported wire format.
+
+    Mirrors what a fixed ``apiFetch`` (no forced Content-Type for FormData)
+    actually sends from the browser. ``httpx.files=`` builds a proper
+    multipart body with boundary, exactly like ``new FormData()`` plus a
+    fetch with no overridden Content-Type.
+    """
+    content = b"\\documentclass{article}\\begin{document}Contract\\end{document}"
+    resp = test_app.post(
+        "/api/settings/profile/cv-upload",
+        files={"file": ("contract.tex", content, "application/x-tex")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["filename"] == "contract.tex"
+
+
+def test_cv_upload_rejects_application_json_body(test_app: TestClient):
+    """Posting with ``Content-Type: application/json`` must NOT succeed.
+
+    This is precisely the pre-fix client behaviour: ``apiFetch`` forced
+    ``application/json`` even when the body was FormData, and the FastAPI
+    ``UploadFile = File(...)`` parser produced 422 because it can't find
+    the ``file`` form field. Locking this behaviour in stops a future
+    refactor from silently making the broken client "work" again.
+    """
+    resp = test_app.post(
+        "/api/settings/profile/cv-upload",
+        headers={"Content-Type": "application/json"},
+        content=b'{"filename": "fake.tex", "content": "x"}',
+    )
+    # 422 is the standard FastAPI response for a missing form field; some
+    # configurations surface 415 instead. The critical assertion is that
+    # the request does NOT return 200 — silently accepting JSON would mean
+    # the FormData contract is no longer enforced.
+    assert resp.status_code != 200, (
+        f"JSON-bodied POST to multipart endpoint must be rejected, got "
+        f"{resp.status_code}: {resp.text}"
+    )
+    assert resp.status_code in (415, 422), (
+        f"Expected 415 or 422 for JSON sent to multipart endpoint, got "
+        f"{resp.status_code}: {resp.text}"
+    )
+
+
 def test_cv_upload_rolls_back_on_db_failure(test_app: TestClient, monkeypatch):
     """If the DB commit fails, neither dest nor dest_tmp should remain on disk."""
     from sqlalchemy.ext.asyncio import AsyncSession

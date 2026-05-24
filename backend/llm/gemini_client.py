@@ -148,10 +148,14 @@ class GeminiClient:
         max_attempts = len(self._candidates) if self._candidates else 1
         last_exc: Exception | None = None
         for model_try in range(max_attempts):
-            self._model_name = self._candidates[model_try]
+            # T4a: do NOT mutate self._model_name here.
+            # Two concurrent generate_text() calls would race on instance state
+            # (one call's candidate-bump would clobber the other's current
+            # model). Keep the per-call selection in a local instead.
+            current_model = self._candidates[model_try]
             for attempt in range(3):
                 try:
-                    _model = self._model_name
+                    _model = current_model
                     _config = config
                     response = await asyncio.get_running_loop().run_in_executor(
                         None,
@@ -168,7 +172,7 @@ class GeminiClient:
                     # Detect model-not-found / NOT_FOUND and break to try next candidate
                     if self._is_model_not_found(msg):
                         logger.warning(
-                            "Model %s not found: %s — trying next candidate", self._model_name, e
+                            "Model %s not found: %s — trying next candidate", current_model, e
                         )
                         break
                     if "429" in msg and attempt < 2:

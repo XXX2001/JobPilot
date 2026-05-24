@@ -6,6 +6,7 @@
 	import CVReviewPanel from '$lib/components/CVReviewPanel.svelte';
 	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
 	import BatchPipelineTracker from '$lib/components/BatchPipelineTracker.svelte';
+	import SourceHealthPills from '$lib/components/SourceHealthPills.svelte';
 	import { getEmptyState } from '$lib/utils/easterEggs';
 
 	interface Job {
@@ -41,6 +42,8 @@
 	let error = $state('');
 	let refreshing = $state(false);
 	let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+	// Bump on scan completion so the SourceHealthPills component re-fetches.
+	let healthRefreshKey = $state(0);
 	let confirmModal = $state<{
 		jobId: number;
 		method: string;
@@ -70,6 +73,10 @@
 				refreshTimeout = null;
 			}
 			if (lastMsg.progress >= 1.0) loadQueue();
+			// Re-fetch source-health pills whether the scan succeeded or failed —
+			// a failed batch is exactly when the user wants to see which source
+			// went down.
+			healthRefreshKey += 1;
 		}
 	});
 
@@ -220,6 +227,8 @@
 		{refreshing ? 'Scanning…' : 'Scan for Jobs'}
 	</button>
 </div>
+
+<SourceHealthPills refreshKey={healthRefreshKey} />
 
 {#if error}
 	<div

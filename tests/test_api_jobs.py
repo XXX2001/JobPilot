@@ -77,3 +77,12 @@ def test_queue_status_update_not_found(test_app: TestClient):
     """PATCH /api/queue/999999/status returns 404 for non-existent match."""
     resp = test_app.patch("/api/queue/999999/status", json={"status": "applied"})
     assert resp.status_code == 404
+
+
+def test_queue_source_health_returns_list(test_app: TestClient):
+    """GET /api/queue/source-health returns 200 with a ``sources`` list."""
+    resp = test_app.get("/api/queue/source-health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "sources" in data
+    assert isinstance(data["sources"], list)

@@ -108,6 +108,27 @@ async def get_batch_status(request: Request):
     }
 
 
+@router.get("/source-health")
+async def get_source_health(request: Request):
+    """Return per-source scrape health (in-memory, lives with the orchestrator).
+
+    Each entry is a dict with ``source``, ``status`` (one of ``healthy``,
+    ``degraded``, ``down``, ``unknown``), ``last_outcome``, ``last_attempt_at``,
+    ``last_success_at``, ``consecutive_failures``, ``last_error``,
+    ``last_job_count``, ``total_attempts``, ``total_jobs``, and ``history``
+    (rolling window of the last 5 outcomes).
+
+    Empty list when no scrape has run since process start.
+    """
+    orchestrator = getattr(request.app.state, "scraping_orchestrator", None)
+    if orchestrator is None:
+        return {"sources": []}
+    tracker = getattr(orchestrator, "source_health", None)
+    if tracker is None:
+        return {"sources": []}
+    return {"sources": tracker.snapshot()}
+
+
 @router.post("/refresh")
 async def refresh_queue(request: Request, db: DBSession):  # noqa: ARG001
     """Trigger a new morning batch run immediately (manual re-run).

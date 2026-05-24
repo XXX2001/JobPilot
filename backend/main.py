@@ -169,8 +169,15 @@ async def lifespan(app: FastAPI):
         app.state.batch_runner = batch_runner
 
         logger.info("All singletons initialised")
-    except Exception as exc:
-        logger.warning("Singleton init failed (non-fatal in test env): %s", exc, exc_info=True)
+    except Exception:
+        # Fail-fast: a half-initialised app.state can boot a half-broken server
+        # (no apply_engine, no batch_runner, no orchestrator) that returns 200
+        # on /api/health and then 5xx on every real route. Surface the original
+        # traceback and abort startup so the operator sees the failure.
+        # (Re-opens deep-dive CRIT in
+        # docs/reports/2026-05-23-codebase-deep-dive/01-app-shell-and-api.md.)
+        logger.exception("Singleton init failed — aborting startup")
+        raise
 
     # ── Scan for overdue follow-ups at startup ───────────────────────────
     try:

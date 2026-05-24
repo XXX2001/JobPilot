@@ -178,10 +178,16 @@ async def wait_for_captcha_resolution(
     job_id: int | None = None,
     poll_interval: float = 2.0,
     timeout: float = 300.0,
+    cancel_event: asyncio.Event | None = None,
 ) -> bool:
     """Broadcast CAPTCHA/block notification and poll until resolved or timeout.
 
-    Returns True if resolved, False on timeout.
+    Returns True if resolved, False on timeout *or* on user cancellation.
+
+    T4a: ``cancel_event`` lets the apply-flow short-circuit the poll if the
+    user clicks "Cancel" in the UI while the browser is paused on a
+    captcha page. Without it the user has to first solve the captcha
+    before their cancel takes effect — see deep-dive §12 SEV-1.
     """
     try:
         from backend.api.ws import manager as ws_manager
@@ -202,8 +208,34 @@ async def wait_for_captcha_resolution(
 
     elapsed = 0.0
     while elapsed < timeout:
-        await asyncio.sleep(poll_interval)
+        # Honour user cancellation immediately — do not wait for the next
+        # poll interval and do not require the user to solve the captcha
+        # first.
+        if cancel_event is not None and cancel_event.is_set():
+            logger.info(
+                "Captcha wait cancelled by user on %s after %.1fs", site, elapsed
+            )
+            await ws_manager.broadcast(CaptchaResolved(job_id=job_id))
+            return False
+
+        # Sleep in small slices so a cancel arriving mid-interval is
+        # acted on within ~0.5s rather than after a full ``poll_interval``.
+        slept = 0.0
+        slice_s = 0.5
+        while slept < poll_interval:
+            this_slice = min(slice_s, poll_interval - slept)
+            await asyncio.sleep(this_slice)
+            slept += this_slice
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info(
+                    "Captcha wait cancelled by user on %s mid-poll after %.1fs",
+                    site,
+                    elapsed + slept,
+                )
+                await ws_manager.broadcast(CaptchaResolved(job_id=job_id))
+                return False
         elapsed += poll_interval
+
         if not await detect_any_block(page):
             logger.info("Block resolved on %s after %.1fs", site, elapsed)
             await ws_manager.broadcast(CaptchaResolved(job_id=job_id))
@@ -215,13 +247,23 @@ async def wait_for_captcha_resolution(
     return False
 
 
-async def check_and_handle_captcha(page, job_id: int | None = None) -> bool:
+async def check_and_handle_captcha(
+    page,
+    job_id: int | None = None,
+    cancel_event: asyncio.Event | None = None,
+) -> bool:
     """Convenience: detect + handle in one call.
 
     Returns True if a CAPTCHA/block was found and handled.
+
+    T4a: ``cancel_event`` is forwarded to
+    :func:`wait_for_captcha_resolution` so the user can cancel out of a
+    long captcha wait without first solving it.
     """
     if await detect_any_block(page):
-        return await wait_for_captcha_resolution(page, job_id=job_id)
+        return await wait_for_captcha_resolution(
+            page, job_id=job_id, cancel_event=cancel_event
+        )
     return False
 
 

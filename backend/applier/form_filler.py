@@ -109,10 +109,25 @@ class PlaywrightFormFiller:
 
             await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
 
-            # Phase 1: inline CAPTCHA check within this browser (no separate window)
-            captcha_handled = await check_and_handle_captcha(page, job_id=job_id)
+            # Phase 1: inline CAPTCHA check within this browser (no separate window).
+            # T4a: forward the cancel_event so the user can short-circuit a
+            # long captcha wait without first solving the challenge.
+            captcha_handled = await check_and_handle_captcha(
+                page, job_id=job_id, cancel_event=cancel_event
+            )
             if captcha_handled:
-                # Re-check after resolution — if still blocked, give up
+                # If the user cancelled during the captcha wait, exit cleanly
+                # with "cancelled" rather than crashing the strategy.
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info(
+                        "[Tier 1] CAPTCHA wait cancelled by user for job_id=%d", job_id
+                    )
+                    return {
+                        "status": "cancelled",
+                        "filled_fields": {},
+                        "screenshot_b64": None,
+                    }
+                # Re-check after resolution — if still blocked, give up.
                 from backend.applier.captcha_handler import detect_any_block
                 if await detect_any_block(page):
                     raise RuntimeError(f"CAPTCHA on {apply_url} could not be resolved")

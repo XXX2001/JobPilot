@@ -31,8 +31,17 @@ def _naive_utc_ago(days: float) -> datetime:
     return (datetime.now(timezone.utc) - timedelta(days=days)).replace(tzinfo=None)
 
 
-async def _create_applied_app(*, days_ago: float) -> int:
+async def _create_applied_app(
+    *,
+    days_ago: float,
+    last_correspondence_days_ago: float | None = None,
+) -> int:
     """Insert an Application row with status='applied' and applied_at days ago.
+
+    When ``last_correspondence_days_ago`` is provided, also set
+    ``last_correspondence_at`` to that many days in the past — this exercises
+    the freshness-anchor branch of ``scan_overdue`` introduced for the
+    Gmail-linked follow-up reminder (deep-dive §15.10).
 
     Returns the application id.
     """
@@ -44,6 +53,11 @@ async def _create_applied_app(*, days_ago: float) -> int:
             method="manual",
             status="applied",
             applied_at=_naive_utc_ago(days_ago),
+            last_correspondence_at=(
+                _naive_utc_ago(last_correspondence_days_ago)
+                if last_correspondence_days_ago is not None
+                else None
+            ),
         )
         db.add(app)
         await db.commit()
@@ -166,3 +180,67 @@ def test_needs_follow_up_filter_resolved(test_app: TestClient) -> None:
     data2 = resp2.json()
     app_ids_after = [a["id"] for a in data2["applications"]]
     assert app_id not in app_ids_after
+
+
+# ─── Re-opened: PG-1 / deep-dive §15.10 ──────────────────────────────────────
+# `last_correspondence_at` was previously write-only — the column was
+# populated by POST /api/correspondence/link but `scan_overdue` ignored it,
+# so a recruiter reply 1 day ago would still trigger a stale 7-day
+# follow_up_due reminder. These tests pin the new freshness-anchor behaviour:
+# scan_overdue uses MAX(applied_at, last_correspondence_at) as the cutoff
+# anchor.
+
+
+def test_scan_overdue_respects_last_correspondence_at(test_app: TestClient) -> None:
+    """An app applied 10 days ago BUT with last_correspondence 2 days ago is NOT overdue.
+
+    Pre-fix: scan_overdue read only applied_at, so this would have created a
+    follow_up_due event (false positive).
+    Post-fix: scan_overdue uses ``MAX(applied_at, last_correspondence_at) <=
+    cutoff``, so a recent correspondence pushes the reminder window forward.
+    """
+    app_id = asyncio.run(
+        _create_applied_app(days_ago=10, last_correspondence_days_ago=2)
+    )
+    asyncio.run(_run_scan())
+
+    event_count = asyncio.run(_count_events(app_id, "follow_up_due"))
+    assert event_count == 0, (
+        "Expected 0 follow_up_due events when last_correspondence_at is fresh "
+        "(2 days ago, well under the 7-day threshold), but scan_overdue still "
+        "fired — PG-1 regression has returned."
+    )
+
+
+def test_scan_overdue_fires_when_correspondence_is_also_old(
+    test_app: TestClient,
+) -> None:
+    """When BOTH applied_at and last_correspondence_at are >7 days old, scan fires.
+
+    Documents that adding the freshness anchor did not break the original
+    "no reply for a long time" use case.
+    """
+    app_id = asyncio.run(
+        _create_applied_app(days_ago=10, last_correspondence_days_ago=9)
+    )
+    asyncio.run(_run_scan())
+
+    event_count = asyncio.run(_count_events(app_id, "follow_up_due"))
+    assert event_count == 1
+
+
+def test_scan_overdue_falls_back_to_applied_at_when_no_correspondence(
+    test_app: TestClient,
+) -> None:
+    """NULL last_correspondence_at → behaviour identical to original applied_at-only logic.
+
+    Backwards-compat: the column is only populated when a Gmail message is
+    linked. Existing applications must continue to surface based on applied_at.
+    """
+    app_id = asyncio.run(
+        _create_applied_app(days_ago=8, last_correspondence_days_ago=None)
+    )
+    asyncio.run(_run_scan())
+
+    event_count = asyncio.run(_count_events(app_id, "follow_up_due"))
+    assert event_count == 1

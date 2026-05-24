@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 
 from backend.database import AsyncSessionLocal
 from backend.models.application import Application, ApplicationEvent
@@ -39,8 +39,19 @@ async def scan_overdue(threshold_days: int = 7) -> int:
 
     An application is overdue when:
     - Its ``status`` is ``"applied"``; AND
-    - Its ``applied_at`` is at least ``threshold_days`` days ago; AND
+    - Its **freshness anchor** is at least ``threshold_days`` days ago, where
+      the freshness anchor is ``max(applied_at, last_correspondence_at)``
+      (whichever is newer); AND
     - It has no existing ``follow_up_due`` event (idempotency guard).
+
+    The ``last_correspondence_at`` column is written by
+    ``POST /api/correspondence/link`` whenever a Gmail message is linked to
+    the application, so a recruiter reply (or a manual link) pushes the
+    follow-up window forward. When the column is NULL the scanner falls back
+    to ``applied_at`` alone — matching the original 7-day post-apply
+    behaviour for applications with no linked correspondence. (Re-opens PG-1:
+    column was previously write-only — see
+    ``docs/reports/2026-05-23-codebase-deep-dive/06-gmail-integration.md`` §15.10.)
 
     Returns the number of new events created (0 when nothing is overdue or
     on an empty database).
@@ -58,12 +69,23 @@ async def scan_overdue(threshold_days: int = 7) -> int:
         ApplicationEvent.event_type == "follow_up_due",
     )
 
+    # Freshness anchor (per-row): the LATER of applied_at and
+    # last_correspondence_at. We can't use SQL MAX() in a WHERE (that's an
+    # aggregate); instead require BOTH columns to be ``<= cutoff`` — applied_at
+    # is non-null by the predicate above, and COALESCE(last_correspondence_at,
+    # applied_at) replaces NULL with applied_at so the second clause becomes a
+    # no-op when there's no linked correspondence yet.
+    correspondence_anchor = func.coalesce(
+        Application.last_correspondence_at, Application.applied_at
+    )
+
     stmt = (
         select(Application)
         .where(
             Application.status == "applied",
             Application.applied_at != None,  # noqa: E711
             Application.applied_at <= cutoff,
+            correspondence_anchor <= cutoff,
             ~already_has_event,
         )
     )

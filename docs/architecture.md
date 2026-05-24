@@ -496,3 +496,77 @@ data/
 ├── browser_profiles/        # Canonical per-domain Playwright storage-state directories
 └── logs/                    # Application log files
 ```
+
+---
+
+## Credentials & encryption
+
+JobPilot stores a handful of long-lived secrets in the SQLite database. They
+are all encrypted at rest with the same Fernet key — `CREDENTIAL_KEY` in
+`.env`. This section documents what that key protects, what happens if you
+lose it, how to rotate it safely, and how to back the value up.
+
+### What `CREDENTIAL_KEY` protects
+
+The key is generated once on first launch (`backend/config.py:115`) using
+`cryptography.fernet.Fernet.generate_key()` and written back into `.env` so
+it survives restarts. From that moment on it is the **only** key that can
+decrypt:
+
+| Surface | Protected value | Code path |
+| --- | --- | --- |
+| `site_credentials.password_encrypted` | Per-site login passwords (LinkedIn, Indeed, …) | `backend/security/encryption.py` via `backend/models/site_credential.py` |
+| `gmail_credentials.refresh_token_encrypted` / `access_token_encrypted` | Gmail OAuth tokens for read-only mailbox access | `backend/gmail/auth.py` |
+| Gmail OAuth state HMAC | CSRF protection on `/api/gmail/oauth/callback` (stdlib `hmac.new(key, …, sha256)`) | `backend/api/gmail_auth.py` |
+
+Nothing else uses `CREDENTIAL_KEY` — `jobpilot.db` itself is *not* encrypted,
+and tailored CV / letter files on disk are plaintext.
+
+### What loss means
+
+If `CREDENTIAL_KEY` disappears (re-installer overwrote `.env`, `.env` was
+deleted, the file was committed elsewhere without the key…) every value
+above becomes mathematically unrecoverable. There is no recovery procedure;
+the affected rows must be re-entered:
+
+- Site credentials → re-enter on the Settings → Credentials page.
+- Gmail tokens → click *Disconnect* on the Gmail card and re-run the OAuth
+  flow.
+- In-flight OAuth `state` HMACs → harmless; the next callback simply
+  generates a new state.
+
+The launcher will not warn you — it will silently start, fail on the first
+`fernet.decrypt(...)`, and surface the error inside whichever feature you
+touched first. `scripts/backup_db.py` does **not** snapshot `.env`, so the
+key must be backed up separately.
+
+### Rotation procedure
+
+There is currently no production-grade rotation script. The right shape is
+a re-encrypt-on-read pass:
+
+1. Read every encrypted column with the **old** key.
+2. Re-encrypt with the **new** key.
+3. Update the rows in a transaction.
+4. Write the new key to `.env`.
+
+When implemented (slated for a follow-up sprint) the script will live at
+`scripts/rotate_credential_key.py` and take `--old-key` / `--new-key`
+options. Until then, rotation is a "disconnect, delete, reconnect" exercise
+done from the UI.
+
+### Backup recommendation
+
+`CREDENTIAL_KEY` is a 32-byte URL-safe base64 string. The easiest place to
+back it up is alongside your password manager, **not** in the same backup
+location as `data/jobpilot.db` — combining the two reproduces every
+secret in plaintext.
+
+Recommended cadence:
+
+- Copy `.env`'s `CREDENTIAL_KEY` value to your password manager once, right
+  after first launch (the installer prints it to stderr on generation).
+- Run `python scripts/backup_db.py` before each upgrade and keep the
+  output somewhere safe.
+- If you ever re-run the installer on a fresh checkout, restore `.env`
+  from your password manager *before* starting the server.

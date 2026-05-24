@@ -17,6 +17,20 @@ Sprint kicked off the day after the 2026-05-23 deep-dive (see [`docs/reports/202
 
 Tests: +6 new regression tests across `tests/test_follow_up.py`, `tests/test_main_lifespan.py` (new file), `tests/test_api_routes.py`, and `tests/test_settings_cv_upload.py`. Pins both the contract (multipart accepted, JSON rejected on the CV-upload route) and the bug behaviour (recent correspondence suppresses follow-up).
 
+### T9 — Ops + dead-code purge
+
+Grab-bag deep-dive cleanup that does not warrant its own sprint slot.
+
+- **Dead code removed.** `backend/latex/validator.py` (zero imports, offline-only heuristic that nothing called); `LaTeXInjector.inject_summary_edit` / `inject_experience_edits` (referenced `CVSummaryEdit` / `CVExperienceEdit` types that were never exported); `backend/latex/pipeline.py::generate_diff` (depended on the same undefined types); five never-called dependency getters in `backend/api/deps.py` (`get_session_manager`, `get_apply_engine`, `get_cv_pipeline`, `get_scraping_orchestrator`, `get_batch_runner`) — the `DBSession` alias stays. Each was re-grepped against current `main` immediately before deletion. `tests/test_latex_parser.py::test_inject_summary_round_trip` removed alongside the methods.
+- **Healthcheck enrichment (deep-dive CRIT-OPS-8).** `GET /api/health` already pings the DB; T9 confirms the response includes `tectonic` (binary present?) and `gemini_key_set` (configured?) booleans. Overall status stays conservative — only DB failure flips the HTTP code to 503 — so existing orchestrator probes don't see spurious 503s on hosts without Tectonic.
+- **`start.py` honours `JOBPILOT_HOST` / `JOBPILOT_PORT` (deep-dive CRIT-OPS-7).** Previously hard-coded `127.0.0.1:8000`; now reads the same env vars that `backend/config.py` already consumes. When `HOST=0.0.0.0` the auto-opened browser tab still points at `http://127.0.0.1:<port>` so the launcher behaviour is unchanged on a default install.
+- **`scripts/backup_db.py` (deep-dive CRIT-OPS-4).** New CLI that takes a hot online snapshot via SQLite `VACUUM INTO` — safe to run while the server is live, output defaults to `data/backups/jobpilot-<UTC>.db`. Documented in README → "Backup & restore".
+- **`CREDENTIAL_KEY` rotation docs (deep-dive CRIT-OPS-2).** New `docs/architecture.md` § "Credentials & encryption" covering protected scope, loss = data loss, the (currently manual) rotation procedure, and the password-manager-not-the-same-bucket backup recommendation. `.env.example` carries a one-paragraph warning pointing at the same section.
+- **`LEGACY_APPLIED_ALIASES` deprecation path.** Marked the alias frozenset as deprecated in the package docstring + added `warn_if_legacy_status()` for read-side filters to opt into a `DeprecationWarning`. Companion data-migration script `scripts/migrate_legacy_applied.py` rewrites every `Application.status IN ('manual', 'assisted')` row to `'applied'`. Once production DBs are migrated the alias path can be deleted.
+- **Tectonic version drift (deep-dive CRIT-OPS-15).** `scripts/download_tectonic.py` now pins the same `TECTONIC_VERSION` (default `0.15.0`) as the `Dockerfile`'s ARG and points the releases-API URL at that tag rather than `/latest`. Override via `TECTONIC_VERSION=` env var if a one-off upgrade is needed.
+
+No new dependencies. No schema changes. No coordination with T2a (left `backend/database.py` and `backend/main.py:172-173` untouched per the wave plan), no coordination with T3 (left `backend/api/ws.py`, `backend/llm/gemini_client.py`, `backend/latex/compiler.py` untouched).
+
 ---
 
 ## 2026-05-23 — Gmail Phase 1 sprint (gm-1 .. gm-12)

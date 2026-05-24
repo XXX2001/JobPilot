@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from backend.applier import RESULT_ASSISTED, RESULT_FAILED
+from backend.applier.captcha_handler import site_profile_key
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import settings
 from backend.security.sanitizer import sanitize_url
@@ -34,12 +35,12 @@ def _is_multi_step_site(url: str) -> bool:
     return hostname.lstrip("www.") in {h.lstrip("www.") for h in _MULTI_STEP_DOMAINS}
 
 
-def _site_key(url: str) -> str:
-    """Extract a site key matching the scraping session convention (e.g. 'linkedin')."""
-    hostname = urlparse(url).hostname or "unknown"
-    if hostname.startswith("www."):
-        hostname = hostname[4:]
-    return hostname.split(".")[0]
+# T4a: ``_site_key`` removed in favour of the canonical
+# :func:`backend.applier.captcha_handler.site_profile_key`. See the
+# matching comment in ``auto_apply.py`` and the ``site_profile_key``
+# docstring for why this matters (preflight wrote sessions under the
+# underscore form; the old ``_site_key`` looked in a sibling directory
+# that never existed and silently logged in as a guest every time).
 
 
 class AssistedApplyStrategy:
@@ -133,8 +134,10 @@ class AssistedApplyStrategy:
             letter_pdf=letter_pdf,
         )
 
-        # Reuse saved session (cookies/auth) from scraping
-        site_key = _site_key(apply_url)
+        # T4a: reuse saved session (cookies/auth) from scraping using the
+        # canonical key — same as captcha_handler / form_filler — so we
+        # read the storage_state file preflight wrote.
+        site_key = site_profile_key(apply_url)
         profiles_dir = Path(settings.jobpilot_data_dir) / "browser_profiles"
         state_path = profiles_dir / site_key / "state.json"
 

@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
+from backend.applier.captcha_handler import site_profile_key
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import settings
 from backend.security.sanitizer import sanitize_url
@@ -30,13 +31,12 @@ except ImportError:
 _MULTI_STEP_DOMAINS = {"linkedin.com", "www.linkedin.com"}
 
 
-def _site_key(url: str) -> str:
-    """Extract a site key matching the scraping session convention (e.g. 'linkedin')."""
-    hostname = urlparse(url).hostname or "unknown"
-    if hostname.startswith("www."):
-        hostname = hostname[4:]
-    # Use just the domain name (e.g. 'linkedin' from 'linkedin.com')
-    return hostname.split(".")[0]
+# T4a: ``_site_key`` removed in favour of the canonical
+# :func:`backend.applier.captcha_handler.site_profile_key` (imported at the
+# top of the file). The old helper returned just the first label
+# ("linkedin") while ``captcha_handler`` saved sessions under the full
+# underscore form ("linkedin_com"), so Tier 2 looked in the wrong
+# directory and never picked up the saved login.
 
 
 def _is_multi_step_site(url: str) -> bool:
@@ -260,7 +260,10 @@ class AutoApplyStrategy:
             )
 
         # ── Reuse saved session (cookies/auth) from scraping ──────────────
-        site_key = _site_key(apply_url)
+        # T4a: use the canonical profile key — same as captcha_handler /
+        # form_filler — so the storage_state file we read here is the
+        # one preflight wrote.
+        site_key = site_profile_key(apply_url)
         profiles_dir = Path(settings.jobpilot_data_dir) / "browser_profiles"
         state_path = profiles_dir / site_key / "state.json"
 

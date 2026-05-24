@@ -71,11 +71,11 @@ class PlaywrightFormFiller:
         from playwright.async_api import async_playwright
 
         from backend.applier.captcha_handler import (
-            _domain_key,
             check_and_handle_captcha,
+            site_profile_key,
         )
 
-        site_key = _domain_key(apply_url)
+        site_key = site_profile_key(apply_url)
         profile_dir = Path(settings.jobpilot_data_dir) / "browser_profiles" / site_key
         profile_dir.mkdir(parents=True, exist_ok=True)
 
@@ -245,9 +245,9 @@ class PlaywrightFormFiller:
         """
         from playwright.async_api import async_playwright
 
-        from backend.applier.captcha_handler import _domain_key
+        from backend.applier.captcha_handler import site_profile_key
 
-        site_key = _domain_key(apply_url)
+        site_key = site_profile_key(apply_url)
         profile_dir = Path(settings.jobpilot_data_dir) / "browser_profiles" / site_key
         profile_dir.mkdir(parents=True, exist_ok=True)
 

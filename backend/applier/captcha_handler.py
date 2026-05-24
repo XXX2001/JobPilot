@@ -63,12 +63,36 @@ _BLOCK_TITLE_FRAGMENTS = [
 ]
 
 
-def _domain_key(url: str) -> str:
-    """Extract a clean domain key from a URL (e.g. 'linkedin_com')."""
+def site_profile_key(url: str) -> str:
+    """Return the canonical browser-profile directory key for *url*.
+
+    This key is used as the subdirectory name under
+    ``data/browser_profiles/{site_profile_key}/`` to locate the persistent
+    Playwright profile and the ``state.json`` storage snapshot that
+    ``browser_use`` consumes via ``storage_state=``.
+
+    Format: lowercase hostname with leading ``www.`` stripped and dots
+    replaced by underscores (e.g. ``"linkedin_com"``,
+    ``"jobs_indeed_com"``).
+
+    NOTE — T4a: previously two helpers existed —
+    ``captcha_handler._domain_key`` (returned ``"linkedin_com"``) and
+    ``auto_apply._site_key`` / ``assisted_apply._site_key`` (returned
+    ``"linkedin"`` — just the first label). The preflight always saved
+    sessions under the ``_domain_key`` form, so the ``_site_key``
+    callsites in Tier 2 looked in the wrong directory and never picked
+    up the saved login. This function is the single source of truth.
+    """
     hostname = urlparse(url).hostname or "unknown"
     if hostname.startswith("www."):
         hostname = hostname[4:]
     return hostname.replace(".", "_")
+
+
+# Back-compat alias — internal callers (and existing tests) may still
+# import ``_domain_key`` from this module. Keep both names pointing at
+# the same function so we do not break either.
+_domain_key = site_profile_key
 
 
 def get_session_path(url: str) -> Path:

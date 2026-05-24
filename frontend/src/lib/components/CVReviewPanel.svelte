@@ -14,34 +14,7 @@
 	import { register, deregister } from '$lib/utils/hotkeys';
 	import type { BindingHandle } from '$lib/utils/hotkeys';
 	import { onMount, onDestroy } from 'svelte';
-
-	interface Job {
-		id: number;
-		title: string;
-		company: string;
-		location: string;
-		url: string;
-		apply_url: string;
-		apply_method: string;
-		salary_min?: number;
-		salary_max?: number;
-		description?: string;
-	}
-	interface QueueMatch {
-		id: number;
-		job_id: number;
-		score: number;
-		status: string;
-		batch_date: string;
-		matched_at: string;
-		job: Job;
-	}
-	interface DiffEntry {
-		section: string;
-		original_text: string;
-		edited_text: string;
-		change_description: string;
-	}
+	import type { QueueMatch, DiffEntry } from '$lib/types/api';
 
 	type ApplyMode = 'auto' | 'manual' | 'skip';
 	type Decision = 'approved' | 'base_cv' | 'skip';

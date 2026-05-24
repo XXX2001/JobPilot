@@ -20,37 +20,7 @@
 		AlertCircle,
 		CheckCircle2
 	} from 'lucide-svelte';
-
-	interface Job {
-		id: number;
-		title: string;
-		company: string;
-		location?: string;
-		salary_min?: number;
-		salary_max?: number;
-		description?: string;
-		url: string;
-		apply_url?: string;
-		posted_at?: string;
-		apply_method?: string;
-	}
-
-	interface QueueMatch {
-		id: number;
-		job_id: number;
-		score: number;
-		status: string;
-		batch_date?: string;
-		matched_at: string;
-		job: Job;
-	}
-
-	interface DiffEntry {
-		section: string;
-		original_text: string;
-		edited_text: string;
-		change_description: string;
-	}
+	import type { QueueMatch, DiffEntry } from '$lib/types/api';
 
 	interface DiffResponse {
 		match_id: number;

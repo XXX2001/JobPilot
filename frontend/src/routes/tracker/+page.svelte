@@ -3,7 +3,7 @@
 	import { apiFetch } from '$lib/api';
 	import KanbanBoard from '$lib/components/KanbanBoard.svelte';
 	import { AlertCircle, RefreshCw } from 'lucide-svelte';
-	import type { Application } from '$lib/components/KanbanBoard.svelte';
+	import type { Application, ApplicationEvent } from '$lib/types/api';
 	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
 	import EasterEggToast from '$lib/components/EasterEggToast.svelte';
 	import { getEmptyState, getRejectionMilestone } from '$lib/utils/easterEggs';
@@ -64,7 +64,7 @@
 	async function handleAddEvent(e: CustomEvent<{ id: number; event_type: string; details?: string }>) {
 		const { id, event_type, details } = e.detail;
 		try {
-			const newEvent = await apiFetch<Application['events'][number]>(
+			const newEvent = await apiFetch<ApplicationEvent>(
 				`/api/applications/${id}/events`,
 				{
 					method: 'POST',

@@ -2,18 +2,27 @@
 	import { createEventDispatcher } from 'svelte';
 	import { apiFetch } from '$lib/api';
 	import { CheckCircle2, AlertCircle, Upload, ArrowRight, X } from 'lucide-svelte';
-
-	interface SetupStatus {
-		gemini_key_set: boolean;
-		adzuna_key_set: boolean;
-		tectonic_found: boolean;
-		base_cv_uploaded: boolean;
-		setup_complete: boolean;
-	}
+	import type { SetupStatus } from '$lib/types/api';
+	import { focusTrap } from '$lib/utils/focusTrap';
 
 	let { status }: { status: SetupStatus } = $props();
 
 	const dispatch = createEventDispatcher<{ close: void; complete: void }>();
+
+	function close() {
+		dispatch('close');
+	}
+
+	function onBackdropClick(e: MouseEvent) {
+		if (e.target === e.currentTarget) close();
+	}
+
+	function onKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			close();
+		}
+	}
 
 	let step = $state(1);
 	let keywords = $state<string[]>([]);
@@ -79,16 +88,34 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 	];
 </script>
 
+<svelte:window onkeydown={onKeydown} />
+
 <!-- Modal overlay -->
-<div class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-	<div class="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+	class="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+	onclick={onBackdropClick}
+>
+	<div
+		class="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md overflow-hidden"
+		role="dialog"
+		tabindex="-1"
+		aria-modal="true"
+		aria-labelledby="setup-wizard-title"
+		use:focusTrap
+	>
 		<!-- Header -->
 		<div class="p-5 border-b border-border flex items-center gap-3">
 			<div class="flex-1">
-				<h2 class="font-semibold">Welcome to JobPilot</h2>
+				<h2 id="setup-wizard-title" class="font-semibold">Welcome to JobPilot</h2>
 				<p class="text-xs text-muted-foreground mt-0.5">Complete setup to start applying</p>
 			</div>
-			<button onclick={() => dispatch('close')} class="text-muted-foreground hover:text-foreground transition-colors">
+			<button
+				onclick={close}
+				aria-label="Close setup wizard"
+				class="text-muted-foreground hover:text-foreground transition-colors"
+			>
 				<X size={16} />
 			</button>
 		</div>
@@ -222,7 +249,7 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 		<!-- Footer -->
 		<div class="flex items-center justify-between px-5 pb-5">
 			<button
-				onclick={() => dispatch('close')}
+				onclick={close}
 				class="text-xs text-muted-foreground hover:text-foreground transition-colors"
 			>
 				Skip for now

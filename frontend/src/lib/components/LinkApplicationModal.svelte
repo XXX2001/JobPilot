@@ -1,15 +1,13 @@
 <script lang="ts">
 	import { Link2, Search, X } from 'lucide-svelte';
 	import { apiFetch } from '$lib/api';
+	import type { Application } from '$lib/types/api';
 
-	type Application = {
-		id: number;
-		method: string;
-		status: string;
-		applied_at?: string | null;
-		job_title?: string | null;
-		company?: string | null;
-	};
+	// Subset of Application — we only render id / titles / status here.
+	type ApplicationOption = Pick<
+		Application,
+		'id' | 'method' | 'status' | 'applied_at' | 'job_title' | 'company'
+	>;
 
 	let {
 		open = $bindable(false),
@@ -19,7 +17,7 @@
 		onLink: (applicationId: number) => Promise<void> | void;
 	} = $props();
 
-	let apps = $state<Application[]>([]);
+	let apps = $state<ApplicationOption[]>([]);
 	let filter = $state('');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
@@ -29,7 +27,7 @@
 		loading = true;
 		error = null;
 		try {
-			const body = await apiFetch<{ applications: Application[]; total: number }>(
+			const body = await apiFetch<{ applications: ApplicationOption[]; total: number }>(
 				'/api/applications'
 			);
 			apps = body.applications ?? [];

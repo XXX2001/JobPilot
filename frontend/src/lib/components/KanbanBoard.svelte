@@ -1,31 +1,8 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
-	import { apiFetch } from '$lib/api';
-	import { Briefcase, Clock, GripVertical, MessageSquare, ChevronDown } from 'lucide-svelte';
+	import { Briefcase, Clock, GripVertical, ChevronDown } from 'lucide-svelte';
 	import { getRejectionMilestone } from '$lib/utils/easterEggs';
-
-	export interface Application {
-		id: number;
-		job_match_id?: number;
-		method: string;
-		status: string;
-		applied_at?: string;
-		notes?: string;
-		error_log?: string;
-		created_at: string;
-		events: ApplicationEvent[];
-		// denormalized fields for display (injected by parent)
-		job_title?: string;
-		company?: string;
-	}
-
-	export interface ApplicationEvent {
-		id: number;
-		application_id: number;
-		event_type: string;
-		details?: string;
-		event_date: string;
-	}
+	import type { Application } from '$lib/types/api';
 
 	const COLUMNS: { id: string; label: string; color: string }[] = [
 		{ id: 'applied', label: 'Applied', color: 'border-blue-500/40' },
@@ -191,9 +168,9 @@
 						</div>
 
 						<!-- Events -->
-						{#if app.events.length > 0}
+						{#if (app.events?.length ?? 0) > 0}
 							<div class="mt-2 pt-2 border-t border-border/50 space-y-1">
-								{#each app.events.slice(-2) as evt}
+								{#each (app.events ?? []).slice(-2) as evt}
 									<p class="text-xs text-muted-foreground truncate">
 										<span class="capitalize">{evt.event_type.replace('_', ' ')}</span>
 										{#if evt.details} · {evt.details}{/if}

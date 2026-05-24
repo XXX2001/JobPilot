@@ -3,6 +3,7 @@
 	import { apiFetch } from '$lib/api';
 	import SetupWizard from '$lib/components/SetupWizard.svelte';
 	import { TrendingUp, Users, BarChart, Calendar, AlertCircle } from 'lucide-svelte';
+	import type { SetupStatus } from '$lib/types/api';
 
 	interface Summary {
 		total_apps: number;
@@ -19,14 +20,6 @@
 	interface TrendsResponse {
 		trends: DailyTrend[];
 		days: number;
-	}
-
-	interface SetupStatus {
-		gemini_key_set: boolean;
-		adzuna_key_set: boolean;
-		tectonic_found: boolean;
-		base_cv_uploaded: boolean;
-		setup_complete: boolean;
 	}
 
 	let summary = $state<Summary | null>(null);

@@ -107,7 +107,7 @@ class MockAdzuna:
         self._result = result or []
         self._fail = fail
 
-    async def search(self, keywords=None, filters=None, country="gb") -> list[RawJob]:
+    async def search(self, **kwargs) -> list[RawJob]:  # noqa: ARG002
         if self._fail:
             raise RuntimeError("Adzuna API down")
         return self._result

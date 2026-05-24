@@ -20,7 +20,12 @@ from backend.config import settings
 from backend.defaults import MAX_SCRAPLING_CONTENT_CHARS
 from backend.models.schemas import RawJob
 from backend.scraping.json_utils import extract_json_from_text, parse_jobs_from_json
-from backend.scraping.site_prompts import EXTRACTION_PROMPTS, SITE_CONTENT_SELECTORS
+from backend.scraping.site_prompts import (
+    EXTRACTION_PROMPTS,
+    SITE_CONTENT_SELECTORS,
+    google_domain,
+    indeed_domain,
+)
 
 if TYPE_CHECKING:
     from backend.llm.gemini_client import GeminiClient
@@ -56,8 +61,14 @@ class ScraplingFetcher:
         location: str = "",
         country_code: str = "",
         max_age_days: int | None = None,
+        page: int = 1,
     ) -> list[RawJob]:
         """Fetch a job listings page and extract jobs with a single Gemini call.
+
+        ``page`` is 1-indexed. Page > 1 is best-effort: not every adapter
+        supports pagination cleanly (see ``_build_search_url``). Callers
+        wanting more than one page's worth should drive the page loop
+        themselves and merge the results — this method does not crawl.
 
         Returns an empty list on any failure (caller should fall back to Tier 2).
         """
@@ -68,7 +79,7 @@ class ScraplingFetcher:
         search_url = self._build_search_url(
             base_url=url, site=site, keywords=keywords,
             location=location, country_code=country_code,
-            max_age_days=max_age_days,
+            max_age_days=max_age_days, page=page,
         )
         logger.info(
             "[Tier 1] START scrape — site=%s search_url=%s keywords=%r fetcher=%s headless=%s",
@@ -198,48 +209,55 @@ class ScraplingFetcher:
         location: str = "",
         country_code: str = "",
         max_age_days: int | None = None,
+        page: int = 1,
     ) -> str:
         """Build a keyword-aware search URL for the given site.
 
         Falls back to base_url if no template is defined for the site.
         country_code is a 2-letter ISO code (e.g. 'fr', 'gb').
         max_age_days limits results to jobs posted within the last N days.
+        page is 1-indexed. Pagination support varies per adapter:
+
+        * LinkedIn — ``&start={N}`` (25 jobs per page)
+        * Indeed — ``&start={N}`` (10 jobs per page)
+        * WTTJ — ``&page={N}`` (algolia pagination, 1-indexed)
+        * Glassdoor — ``_IP{N}.htm`` page suffix (1-indexed; brittle)
+        * Google Jobs — no clean public pagination; ``page`` is ignored.
+          The ``udm=8`` SERP only ever shows one page of cards. (KNOWN GAP)
         """
         kw = quote_plus(" ".join(keywords)) if keywords else ""
         loc = quote_plus(location) if location else ""
         cc = (country_code or "fr").lower()
-
-        # Indeed domain per country
-        _INDEED_DOMAINS: dict[str, str] = {
-            "fr": "fr.indeed.com", "gb": "uk.indeed.com", "de": "de.indeed.com",
-            "us": "www.indeed.com", "ca": "ca.indeed.com", "au": "au.indeed.com",
-            "nl": "indeed.nl", "es": "es.indeed.com", "it": "it.indeed.com",
-        }
-        # Google domain per country
-        _GOOGLE_DOMAINS: dict[str, str] = {
-            "fr": "www.google.fr", "gb": "www.google.co.uk", "de": "www.google.de",
-            "us": "www.google.com", "nl": "www.google.nl", "es": "www.google.es",
-        }
+        page = max(1, int(page))
 
         if site == "linkedin":
-            # LinkedIn f_TPR: r86400=24h, r604800=week, r2592000=month
+            # LinkedIn f_TPR: r86400=24h, r604800=week, r2592000=month.
+            # Pagination: &start=25, 50, … (25 jobs per page).
             params = f"keywords={kw}"
             if loc:
                 params += f"&location={loc}"
             if max_age_days is not None:
                 seconds = max_age_days * 86400
                 params += f"&f_TPR=r{seconds}&sortBy=DD"
+            if page > 1:
+                params += f"&start={(page - 1) * 25}"
             return f"https://www.linkedin.com/jobs/search/?{params}"
 
         if site == "indeed":
-            domain = _INDEED_DOMAINS.get(cc, f"{cc}.indeed.com")
+            # Pagination: &start=10, 20, … (10 jobs per page).
+            domain = indeed_domain(cc)
             url = f"https://{domain}/jobs?q={kw}&l={loc}"
             if max_age_days is not None:
                 url += f"&fromage={max_age_days}"
+            if page > 1:
+                url += f"&start={(page - 1) * 10}"
             return url
 
         if site == "google_jobs":
-            domain = _GOOGLE_DOMAINS.get(cc, "www.google.com")
+            # Google Jobs SERP (udm=8) does not expose a pagination param
+            # that survives the SERP layout. We accept `page` for API
+            # symmetry but always fetch page 1 — see docstring KNOWN GAP.
+            domain = google_domain(cc)
             query = quote_plus(f"{' '.join(keywords)} emplois {location}") if keywords else "jobs"
             url = f"https://{domain}/search?q={query}&udm=8"
             if max_age_days is not None:
@@ -255,17 +273,25 @@ class ScraplingFetcher:
             return url
 
         if site == "welcome_to_the_jungle":
+            # WTTJ uses Algolia pagination via &page= (1-indexed).
             url = (
                 f"https://www.welcometothejungle.com/en/jobs?query={kw}"
                 f"&refinementList[offices.country_reference_code][0]={cc.upper()}"
             )
+            if page > 1:
+                url += f"&page={page}"
             return url
 
         if site == "glassdoor":
             # Glassdoor web UI does not reliably support date URL params.
             # Recency filtering is handled by the post-scrape date filter instead.
+            # Pagination: Glassdoor swaps `.htm` for `_IP{N}.htm` (1-indexed).
+            base = (
+                f"https://www.glassdoor.fr/Emploi/emplois"
+            )
+            suffix = f"_IP{page}.htm" if page > 1 else ".htm"
             return (
-                f"https://www.glassdoor.fr/Emploi/emplois.htm"
+                f"{base}{suffix}"
                 f"?suggestChosen=false&clickSource=searchBtn&typedKeyword={kw}&locT=N&locId=0&jobType=all"
             )
 

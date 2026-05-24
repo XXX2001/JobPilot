@@ -72,6 +72,72 @@ def test_update_application_status(test_app: TestClient):
     assert patch_resp.json()["status"] == "interview"
 
 
+def test_patch_status_rejects_invalid_literal(test_app: TestClient):
+    """PATCH /api/applications/{id} rejects status strings outside the Literal set.
+
+    Pre-fix: ``UpdateApplicationRequest.status: Optional[str]`` had no
+    constraint, so a PATCH with ``{"status": "definitely-not-a-status"}``
+    succeeded and corrupted the lifecycle FSM (deep-dive HIGH-2 in
+    docs/reports/2026-05-23-codebase-deep-dive/01-app-shell-and-api.md).
+
+    Post-fix: ``UpdateApplicationRequest.status`` uses the module-level
+    ``ApplicationStatus`` Literal alias shared with ``CreateApplicationRequest``;
+    Pydantic returns 422 for unknown values, matching the create-time contract.
+    """
+    create_resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "pending"},
+    )
+    app_id = create_resp.json()["id"]
+
+    bad_patch = test_app.patch(
+        f"/api/applications/{app_id}",
+        json={"status": "definitely-not-a-status"},
+    )
+    assert bad_patch.status_code == 422, (
+        "PATCH with an unknown status string must be rejected — currently "
+        f"got {bad_patch.status_code}: {bad_patch.text}"
+    )
+
+    # Confirm DB row is unchanged (no partial mutation slipped through).
+    get_resp = test_app.get(f"/api/applications/{app_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["status"] == "pending"
+
+
+def test_patch_status_accepts_every_valid_literal(test_app: TestClient):
+    """Each value of the Literal must round-trip via PATCH.
+
+    Locks the create-time and update-time vocabularies together: if a value
+    is removed from one Literal but not the other, this test fails.
+    """
+    create_resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "pending"},
+    )
+    app_id = create_resp.json()["id"]
+
+    valid_statuses = [
+        "pending",
+        "applied",
+        "cancelled",
+        "failed",
+        "interview",
+        "offer",
+        "rejected",
+    ]
+    for status in valid_statuses:
+        resp = test_app.patch(
+            f"/api/applications/{app_id}",
+            json={"status": status},
+        )
+        assert resp.status_code == 200, (
+            f"Valid status {status!r} should be accepted; got "
+            f"{resp.status_code}: {resp.text}"
+        )
+        assert resp.json()["status"] == status
+
+
 def test_add_application_event(test_app: TestClient):
     """POST /api/applications/{id}/events adds a lifecycle event."""
     create_resp = test_app.post(

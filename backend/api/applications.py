@@ -61,17 +61,25 @@ class ApplicationListOut(BaseModel):
     total: int
 
 
+# Module-level alias so create/update share the same lifecycle vocabulary.
+# Changing this list updates both endpoints in lockstep — preventing the
+# previous drift where PATCH accepted arbitrary strings and create rejected
+# them (deep-dive HIGH-2 in
+# docs/reports/2026-05-23-codebase-deep-dive/01-app-shell-and-api.md).
+ApplicationStatus = Literal[
+    "pending", "applied", "cancelled", "failed", "interview", "offer", "rejected"
+]
+
+
 class CreateApplicationRequest(BaseModel):
     job_match_id: Optional[int] = None
     method: Literal["auto", "assisted", "manual"] = "manual"
-    status: Literal[
-        "pending", "applied", "cancelled", "failed", "interview", "offer", "rejected"
-    ] = "pending"
+    status: ApplicationStatus = "pending"
     notes: Optional[str] = None
 
 
 class UpdateApplicationRequest(BaseModel):
-    status: Optional[str] = None
+    status: Optional[ApplicationStatus] = None
     notes: Optional[str] = None
     applied_at: Optional[datetime] = None
     error_log: Optional[str] = None

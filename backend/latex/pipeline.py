@@ -250,48 +250,8 @@ class DiffEntry:
     change_description: str
 
 
-def generate_diff(
-    original_sections,
-    edits,
-) -> list[DiffEntry]:
-    """Produce structured diff entries from editor outputs.
-
-    Args:
-        original_sections: LaTeXSections parsed from the base template.
-        edits: A tuple/list of (CVSummaryEdit | None, CVExperienceEdit | None, LetterEdit | None).
-    """
-    diff: list[DiffEntry] = []
-    summary_edit, exp_edit, letter_edit = edits if len(edits) == 3 else (None, None, None)
-
-    if summary_edit and summary_edit.edited_summary:
-        diff.append(
-            DiffEntry(
-                section="summary",
-                original_text=original_sections.summary or "",
-                edited_text=summary_edit.edited_summary,
-                change_description="; ".join(summary_edit.changes_made),
-            )
-        )
-
-    if exp_edit:
-        for e in exp_edit.edits:
-            diff.append(
-                DiffEntry(
-                    section="experience",
-                    original_text=e.original,
-                    edited_text=e.edited,
-                    change_description=e.reason,
-                )
-            )
-
-    if letter_edit and letter_edit.edited_paragraph:
-        diff.append(
-            DiffEntry(
-                section="letter",
-                original_text=original_sections.letter_paragraph or "",
-                edited_text=letter_edit.edited_paragraph,
-                change_description=f"Customized for {letter_edit.company_name}",
-            )
-        )
-
-    return diff
+# NOTE: ``generate_diff`` (and the implicit two-call edits-tuple flow it
+# depended on) was removed in the 2026-05-24 dead-code purge. It referenced
+# ``CVSummaryEdit`` / ``CVExperienceEdit`` types that were never defined in
+# ``backend.llm.validators``. The current pipeline builds the diff inline in
+# ``CVPipeline.generate_tailored_cv`` from ``CVApplicator`` output.

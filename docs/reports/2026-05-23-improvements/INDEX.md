@@ -24,16 +24,16 @@ Ordered by combination of **user value** × **effort to ship**.
 
 | # | ID | Title | Source | Effort | Why now |
 |---|---|---|---|---|---|
-| 1 | **PG-PRE** | Wire CV upload to actually POST bytes (FE-12 stub) *(Shipped 2026-05-23)* | UX-3c | XS | First-run trust-break. Users complete onboarding, the dashboard reports `setup_complete=true`, and the first batch fails. |
+| 1 | **PG-PRE** | Wire CV upload to actually POST bytes (FE-12 stub) *(Foundation only — re-opened 2026-05-24)* | UX-3c | XS | First-run trust-break. Users complete onboarding, the dashboard reports `setup_complete=true`, and the first batch fails. Re-open scope: backend endpoint shipped, but the client `apiFetch` wrapper forced `Content-Type: application/json` on every request — multipart uploads went out malformed. Fixed in T1a (2026-05-24); the apiFetch wrapper now omits Content-Type when `body instanceof FormData`. |
 | 2 | **BE-DEAD** | Delete `backend/utils/retry.py` + `backend/utils/source_health.py` *(Shipped 2026-05-23)* | BE-D1+D2 | XS | 150 LOC dead. Zero importers. Standalone PR. |
 | 3 | **UX-HOTKEY** | Global `j/k/a/m/s/Enter/Esc` hotkeys + queue navigation *(Shipped 2026-05-23)* | UX-2a | S | No hotkeys exist today. Single `lib/utils/hotkeys.ts` + `svelte:window` in `+layout.svelte`. |
-| 4 | **PG-1** | Follow-up reminders (7-day post-apply nudge) *(Shipped 2026-05-23)* | PG-1 | S–M | `applied_at` already stored but never read. Highest-impact small feature; jumps response rate. |
+| 4 | **PG-1** | Follow-up reminders (7-day post-apply nudge) *(Foundation only — re-opened 2026-05-24)* | PG-1 | S–M | `applied_at` already stored but never read. Highest-impact small feature; jumps response rate. Re-open scope: scanner shipped but read `applied_at` only — the new `last_correspondence_at` column was write-only, so a recruiter reply linked via Gmail did NOT push the reminder window forward. Fixed in T1a (2026-05-24); freshness anchor is now `MAX(applied_at, last_correspondence_at)`. |
 | 5 | **UX-LIMIT** | Daily-limit budget meter in sidebar *(Shipped 2026-05-23)* | UX-2d | S | Backend tracks it (`DailyLimitGuard`); FE never surfaces it. New `GET /api/applications/limit-status`. |
 | 6 | **PG-3** | Application portfolio CSV/PDF export *(Shipped 2026-05-23)* | PG-3 | S | Required for unemployment-benefit reporting in EU. Pure read-side join. |
 | 7 | **BE-R3** | `_upsert_singleton` helper for settings endpoints *(Shipped 2026-05-23)* | BE-R3 | S | Same field-by-field upsert × 2 today. Prevents the exact bug fixed in PR-10 (F-Q4 bonus). |
 | 8 | **PG-INT-1** | Gmail integration Phase 1 (read-only sync) *(Shipped 2026-05-23)* | PG-Int-1 | M | Already designed in [`../2026-05-22-audit/03-gmail-integration-design.md`](../2026-05-22-audit/03-gmail-integration-design.md). 3× user-perceived value of any other single feature. |
 | 9 | **UX-BET** | "Today" dashboard replaces raw queue as `/` *(Shipped 2026-05-23)* | UX-3 | M | Re-frames product from "tool I trigger" to "ritual I check daily". Earns the open-tab. |
-| 10 | **BE-R4** | Extract apply-flow state machine (`backend/applier/state.py`) *(Shipped 2026-05-23 — foundation; strategy collapse deferred to follow-up sprint)* | BE-1bet | L | Deletes ~400 LOC, eliminates the "did we release/close/rollback?" bug class. Foundation for everything else apply-side. |
+| 10 | **BE-R4** | Extract apply-flow state machine (`backend/applier/state.py`) *(Foundation only — re-opened 2026-05-24)* | BE-1bet | L | Deletes ~400 LOC, eliminates the "did we release/close/rollback?" bug class. Foundation for everything else apply-side. Re-open scope: the FSM skeleton exists but 4 of 5 middle states are pass-throughs and `ApplyContext.browser` is declared-but-unassigned (deep-dive 03-applier-subsystem.md). Strategy collapse + real state transitions tracked under T4a/T4b. |
 
 ---
 

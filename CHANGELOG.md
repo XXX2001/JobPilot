@@ -4,6 +4,21 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## fix-sprint 2026-05-24
+
+Sprint kicked off the day after the 2026-05-23 deep-dive (see [`docs/reports/2026-05-23-codebase-deep-dive/INDEX.md`](docs/reports/2026-05-23-codebase-deep-dive/INDEX.md)) flagged that three items in [`docs/reports/2026-05-23-improvements/INDEX.md`](docs/reports/2026-05-23-improvements/INDEX.md) were "claimed shipped" but only the foundation had landed. Each item below was verified against current code, regression-tested, then fixed.
+
+### T1a — Re-open claimed-shipped
+
+- **PG-PRE (CV upload):** `frontend/src/lib/api.ts` was hardcoding `Content-Type: application/json` for every request and spreading caller headers _after_ it; FormData uploads went out as JSON with a multipart body and no boundary. Fixed by detecting `body instanceof FormData` and omitting `Content-Type` so the browser sets `multipart/form-data; boundary=...` itself.
+- **PG-1 (Follow-up freshness anchor):** `backend/applier/follow_up.scan_overdue` read `applied_at` only — the `last_correspondence_at` column written by `POST /api/correspondence/link` was ignored. A recruiter reply 1 day ago would still trigger a 7-day-stale `follow_up_due`. Fixed by using `MAX(applied_at, last_correspondence_at) <= cutoff` as the per-row freshness anchor; falls back to `applied_at` when the correspondence column is NULL.
+- **Lifespan singleton-init (deep-dive CRIT):** `backend/main.py` lifespan was demoting singleton-init failures to `logger.warning(...)`, letting the app boot half-broken (no `apply_engine`, no `batch_runner`). Replaced with `logger.exception(...)` + `raise` — startup now fails fast with the original traceback so the operator sees the failure immediately.
+- **PATCH /api/applications/{id} status validation (deep-dive HIGH-2):** `UpdateApplicationRequest.status` was `Optional[str]` while `CreateApplicationRequest.status` used a `Literal[...]`. A PATCH with `{"status": "ANYTHING"}` succeeded and corrupted the lifecycle FSM. Both requests now share a module-level `ApplicationStatus = Literal[...]` alias; the two endpoints can no longer drift.
+
+Tests: +6 new regression tests across `tests/test_follow_up.py`, `tests/test_main_lifespan.py` (new file), `tests/test_api_routes.py`, and `tests/test_settings_cv_upload.py`. Pins both the contract (multipart accepted, JSON rejected on the CV-upload route) and the bug behaviour (recent correspondence suppresses follow-up).
+
+---
+
 ## 2026-05-23 — Gmail Phase 1 sprint (gm-1 .. gm-12)
 
 **Scope.** Read-only Gmail integration shipped as 12 PR-style commits on `gm-phase-1`. Designed at [`docs/reports/2026-05-22-audit/03-gmail-integration-design.md`](docs/reports/2026-05-22-audit/03-gmail-integration-design.md); plan at [`docs/superpowers/plans/2026-05-23-gmail-phase-1.md`](docs/superpowers/plans/2026-05-23-gmail-phase-1.md). Resolved open questions: single account, polling-only (Pub/Sub deferred to Phase 2), heuristic-only classifier (LLM tiers deferred), reuse `ConnectionManager.register_handler`.

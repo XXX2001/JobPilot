@@ -25,8 +25,20 @@ logger = logging.getLogger(__name__)
 REPO_ROOT = Path(__file__).parent.parent
 BIN_DIR = REPO_ROOT / "bin"
 
-# Tectonic GitHub releases API
-RELEASES_API = "https://api.github.com/repos/tectonic-typesetting/tectonic/releases/latest"
+# Tectonic version pin — MUST stay aligned with the ``TECTONIC_VERSION`` ARG
+# in ``Dockerfile``. The container build pins to this so the local-dev path
+# (this script) and the prod-container path install the same engine. Override
+# via the ``TECTONIC_VERSION`` env var if a one-off upgrade is needed.
+import os as _os
+
+TECTONIC_VERSION = _os.environ.get("TECTONIC_VERSION", "0.15.0")
+
+# Tectonic GitHub releases API — pinned to a specific tag so we don't drift
+# from the Dockerfile.
+RELEASES_API = (
+    f"https://api.github.com/repos/tectonic-typesetting/tectonic/releases/tags/"
+    f"tectonic%40{TECTONIC_VERSION}"
+)
 
 
 def _get_asset_name() -> str:

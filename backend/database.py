@@ -26,12 +26,16 @@ engine = create_async_engine(
 
 
 @event.listens_for(engine.sync_engine, "connect")
-def set_wal_mode(dbapi_conn, connection_record):
+def _set_sqlite_pragmas(dbapi_conn, connection_record):
     try:
         dbapi_conn.execute("PRAGMA journal_mode=WAL")
     except Exception:
         # some environments may not allow changing journal mode here
         logger.debug("Could not set WAL mode on connect; continuing")
+    try:
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        logger.debug("Could not enable foreign_keys on connect; continuing")
 
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)

@@ -139,6 +139,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                         handler(msg)
                     except Exception as exc:
                         logger.debug("Handler for %s failed: %s", msg_type, exc)
+                else:
+                    logger.warning("WS received unknown message type: %r", msg_type)
             except Exception as exc:
                 logger.debug("WS message dispatch failed: %s", exc)
     finally:

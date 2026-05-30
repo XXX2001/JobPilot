@@ -7,7 +7,10 @@ from backend.models import Base
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers must stay False: the default (True) silently
+    # mutes every application logger already imported before a migration runs
+    # (e.g. backend.api.ws), turning real WARN/ERROR output into silence.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

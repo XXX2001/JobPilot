@@ -1,13 +1,28 @@
 """
-Windows Playwright / browser-use diagnostic tests.
+Windows Playwright / browser-use diagnostic suite.
 
-Run on the Windows machine with:
-    uv run pytest tests/test_windows_playwright.py -v -s
+THIS FILE IS NOT A PYTEST REGRESSION SUITE — it is a manual,
+ordered, print-heavy troubleshooting script for the Windows-only
+``browser-use deadlock`` and storage-state failure modes. It was
+previously located under ``tests/test_windows_playwright.py`` and
+pytest collected it on every run, launching a real Chromium twice
+on Linux CI (+5-10s wall time, plus the Selenium / browser-use
+dependencies).
 
-Each test is independent and prints diagnostic info so you can see exactly
-where the chain breaks. Tests are ordered from low-level to high-level —
-run them in order and stop at the first failure.
+Relocated under T8 (test infrastructure) so the main ``pytest``
+collection skips it. To run on Windows when debugging:
+
+    uv run pytest scripts/diagnostics/windows_playwright.py -v -s
+
+Each test is independent and prints diagnostic info so you can see
+exactly where the chain breaks. Tests are ordered from low-level to
+high-level — run them in order and stop at the first failure.
+
+If browser-use / playwright tests need to be part of CI later, port
+them into ``tests/`` behind a ``@pytest.mark.browser`` marker that
+the default ``addopts`` excludes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +38,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 IS_WINDOWS = platform.system() == "Windows"
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _print(msg: str) -> None:
@@ -249,8 +264,9 @@ async def test_11_storage_state_roundtrip(tmp_path):
 
 def test_12_adaptive_scraper_storage_path():
     """AdaptiveScraper must produce an absolute POSIX storage_state path."""
-    from backend.config import settings
     from pathlib import Path
+
+    from backend.config import settings
 
     site = "linkedin"
     storage_path = (

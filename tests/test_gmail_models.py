@@ -1,25 +1,29 @@
-from __future__ import annotations
+"""Gmail model / schema tests — refactored to use ``tests/factories``.
 
-from datetime import datetime, timezone
+T8 dropped the per-file ``_init_db_for_each_test`` fixture: the
+session-scoped ``_bootstrap_test_db`` in ``conftest.py`` runs ``init_db()``
+exactly once per worker, and the autouse per-test wipe keeps the tables
+empty without a teardown.
+"""
+
+from __future__ import annotations
 
 import pytest
 from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
-from backend.database import AsyncSessionLocal, engine, init_db
+from backend.database import AsyncSessionLocal, engine
 from backend.models.gmail import GmailCredential, GmailMessage
 
-
-@pytest.fixture(autouse=True)
-async def _init_db_for_each_test():
-    await init_db()
-    yield
+from tests.factories import make_gmail_message
 
 
 async def test_gmail_tables_created():
     """init_db creates all three Gmail tables."""
     async with engine.begin() as conn:
-        names = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_table_names())
+        names = await conn.run_sync(
+            lambda sync_conn: inspect(sync_conn).get_table_names()
+        )
     assert "gmail_credentials" in names
     assert "gmail_messages" in names
     assert "application_correspondence" in names
@@ -45,7 +49,9 @@ async def test_gmail_credential_roundtrip():
         await session.commit()
 
         result = await session.execute(
-            select(GmailCredential).where(GmailCredential.email_address == "user@example.com")
+            select(GmailCredential).where(
+                GmailCredential.email_address == "user@example.com"
+            )
         )
         loaded = result.scalar_one()
         assert loaded.encrypted_refresh_token == "enc-token-blob"
@@ -56,18 +62,9 @@ async def test_gmail_credential_roundtrip():
 async def test_gmail_message_unique_constraint():
     """Inserting the same gmail_message_id twice raises."""
     async with AsyncSessionLocal() as session:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        session.add(GmailMessage(
-            gmail_message_id="m-1", gmail_thread_id="t-1",
-            account_email="u@e.com", from_address="r@ats.io", from_domain="ats.io",
-            received_at=now,
-        ))
+        session.add(make_gmail_message(gmail_message_id="m-1", gmail_thread_id="t-1"))
         await session.commit()
 
-        session.add(GmailMessage(
-            gmail_message_id="m-1", gmail_thread_id="t-1",
-            account_email="u@e.com", from_address="r@ats.io", from_domain="ats.io",
-            received_at=now,
-        ))
+        session.add(make_gmail_message(gmail_message_id="m-1", gmail_thread_id="t-1"))
         with pytest.raises(IntegrityError):
             await session.commit()

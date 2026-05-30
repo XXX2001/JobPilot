@@ -118,12 +118,13 @@ async def _run_scan() -> int:
 
 
 def test_scan_overdue_empty_db(test_app: TestClient) -> None:
-    """(a) Empty DB → scan_overdue returns 0 (or ≥ 0 if prior tests ran)."""
-    # test_app fixture ensures tables exist. No applied rows ≥ 7 days old
-    # should exist at this point in a clean test run.
+    """(a) Empty DB → scan_overdue returns exactly 0.
+
+    T8: with per-test DB wipe, this can now assert == 0 instead of >= 0.
+    Pre-T8 the test had to be lenient because prior tests left rows behind.
+    """
     result = asyncio.run(_run_scan())
-    assert isinstance(result, int)
-    assert result >= 0
+    assert result == 0
 
 
 def test_scan_overdue_recent_app_not_flagged(test_app: TestClient) -> None:

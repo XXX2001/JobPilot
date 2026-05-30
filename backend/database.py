@@ -5,6 +5,7 @@ SQLAlchemy installed. We keep runtime imports but add type ignores and
 silencing comments to reduce noisy diagnostics from the language server.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -42,15 +43,31 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def init_db():
-    from backend.models import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    await _migrate_add_columns()
-
-    # Seed job_sources from SITE_CONFIGS if the table is empty
+    # Alembic is the single source of truth. Running upgrade head creates a
+    # fresh schema from scratch AND brings an existing DB forward, replacing
+    # the old create_all + _migrate_add_columns dual path.
+    await asyncio.get_running_loop().run_in_executor(None, _alembic_upgrade_head)
     await _seed_default_sources()
+
+
+def _alembic_upgrade_head() -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    from backend.config import PROJECT_ROOT
+
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    # Point Alembic at the same database the async engine uses. The ini ships a
+    # fixed relative URL (``data/jobpilot.db``); without this override Alembic
+    # would migrate the wrong file under a custom JOBPILOT_DATA_DIR (e.g. the
+    # per-worker test databases).
+    cfg.set_main_option(
+        "sqlalchemy.url",
+        f"sqlite+aiosqlite:///{settings.jobpilot_data_dir}/jobpilot.db",
+    )
+    command.upgrade(cfg, "head")
+
 
 @asynccontextmanager  # type: ignore
 async def db_session() -> AsyncSession:  # type: ignore[override]
@@ -71,31 +88,6 @@ async def db_session() -> AsyncSession:  # type: ignore[override]
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
-
-
-async def _migrate_add_columns() -> None:
-    """Add columns that may be missing from existing databases."""
-    from sqlalchemy import text
-
-    migrations = [
-        ("search_settings", "cv_tailoring_enabled", "BOOLEAN NOT NULL DEFAULT 1"),
-        ("search_settings", "max_results_per_source", "INTEGER NOT NULL DEFAULT 20"),
-        ("search_settings", "max_job_age_days", "INTEGER"),
-        ("applications", "last_correspondence_at", "DATETIME"),
-    ]
-    try:
-        async with engine.begin() as conn:
-            for table, column, col_type in migrations:
-                # Check if column exists
-                result = await conn.execute(text(f"PRAGMA table_info({table})"))
-                existing = {row[1] for row in result.fetchall()}
-                if column not in existing:
-                    await conn.execute(
-                        text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
-                    )
-                    logger.info("Added column %s.%s", table, column)
-    except Exception as exc:
-        logger.debug("Column migration check: %s", exc)
 
 
 async def _seed_default_sources() -> None:

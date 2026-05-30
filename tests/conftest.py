@@ -16,8 +16,8 @@ Test-DB isolation strategy (T8):
   setting the env var here is the only way to redirect it.
 
 This file deliberately keeps ``init_db()`` as the table-creation hook (so the
-runtime ``_migrate_add_columns`` shim is exercised against every test DB),
-rather than running raw ``Base.metadata.create_all``.
+Alembic ``upgrade head`` path is exercised against every test DB), rather than
+running raw ``Base.metadata.create_all``.
 """
 
 from __future__ import annotations

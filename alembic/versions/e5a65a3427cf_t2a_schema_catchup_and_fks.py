@@ -28,11 +28,36 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _has_table(bind, name: str) -> bool:
+    """True if ``name`` already exists in the bound SQLite database."""
+    return sa.inspect(bind).has_table(name)
+
+
+def _has_column(bind, table: str, column: str) -> bool:
+    """True if ``table.column`` already exists (via ``PRAGMA table_info``)."""
+    rows = bind.execute(sa.text(f"PRAGMA table_info({table})")).fetchall()
+    return column in {r[1] for r in rows}
+
+
+def _add_column_if_missing(bind, table: str, column: sa.Column) -> None:
+    """Idempotent ``op.add_column`` — skipped if the column already exists.
+
+    Existing databases may already carry these columns: a ``create_all`` DB has
+    every drifted column, and a DB that ran the old ``_migrate_add_columns``
+    shim has ``last_correspondence_at`` / ``cv_tailoring_enabled`` /
+    ``max_results_per_source`` / ``max_job_age_days``.
+    """
+    if not _has_column(bind, table, column.name):
+        op.add_column(table, column)
+
+
 def upgrade() -> None:
     """Upgrade schema."""
     bind = op.get_bind()
 
-    # 1. Delete orphan rows so the new FK constraints can be added safely.
+    # 1. Reconcile dangling references so the new FK constraints hold.
+    #    CASCADE children with a missing parent are deleted; nullable SET NULL
+    #    back-references with a missing parent are nulled out.
     bind.execute(sa.text(
         "DELETE FROM application_events WHERE application_id NOT IN "
         "(SELECT id FROM applications)"
@@ -44,19 +69,32 @@ def upgrade() -> None:
     bind.execute(sa.text(
         "DELETE FROM job_matches WHERE job_id NOT IN (SELECT id FROM jobs)"
     ))
+    bind.execute(sa.text(
+        "UPDATE applications SET job_match_id = NULL WHERE job_match_id IS NOT NULL "
+        "AND job_match_id NOT IN (SELECT id FROM job_matches)"
+    ))
+    bind.execute(sa.text(
+        "UPDATE jobs SET source_id = NULL WHERE source_id IS NOT NULL "
+        "AND source_id NOT IN (SELECT id FROM job_sources)"
+    ))
 
     # 2. Add the columns the runtime shim and later model edits introduced.
-    op.add_column(
-        "applications",
+    #    Guarded so a create_all / shimmed DB that already has them is a no-op.
+    _add_column_if_missing(
+        bind, "applications",
         sa.Column("last_correspondence_at", sa.DateTime(), nullable=True),
     )
-    op.add_column("job_matches", sa.Column("gap_severity", sa.Float(), nullable=True))
-    op.add_column("job_matches", sa.Column("ats_score", sa.Float(), nullable=True))
-    op.add_column("job_matches", sa.Column("fit_assessment_json", sa.JSON(), nullable=True))
-    op.add_column("jobs", sa.Column("country", sa.String(), nullable=True))
-    op.add_column("search_settings", sa.Column("countries", sa.JSON(), nullable=True))
-    op.add_column(
-        "search_settings",
+    _add_column_if_missing(
+        bind, "job_matches", sa.Column("gap_severity", sa.Float(), nullable=True))
+    _add_column_if_missing(
+        bind, "job_matches", sa.Column("ats_score", sa.Float(), nullable=True))
+    _add_column_if_missing(
+        bind, "job_matches", sa.Column("fit_assessment_json", sa.JSON(), nullable=True))
+    _add_column_if_missing(bind, "jobs", sa.Column("country", sa.String(), nullable=True))
+    _add_column_if_missing(
+        bind, "search_settings", sa.Column("countries", sa.JSON(), nullable=True))
+    _add_column_if_missing(
+        bind, "search_settings",
         sa.Column(
             "cv_modification_sensitivity",
             sa.String(),
@@ -64,8 +102,8 @@ def upgrade() -> None:
             server_default="balanced",
         ),
     )
-    op.add_column(
-        "search_settings",
+    _add_column_if_missing(
+        bind, "search_settings",
         sa.Column(
             "cv_tailoring_enabled",
             sa.Boolean(),
@@ -73,8 +111,8 @@ def upgrade() -> None:
             server_default="1",
         ),
     )
-    op.add_column(
-        "search_settings",
+    _add_column_if_missing(
+        bind, "search_settings",
         sa.Column(
             "max_results_per_source",
             sa.Integer(),
@@ -82,112 +120,116 @@ def upgrade() -> None:
             server_default="20",
         ),
     )
-    op.add_column(
-        "search_settings", sa.Column("max_job_age_days", sa.Integer(), nullable=True)
-    )
-    op.add_column("user_profile", sa.Column("linkedin_url", sa.String(), nullable=True))
-    op.add_column("user_profile", sa.Column("driver_license", sa.String(), nullable=True))
-    op.add_column("user_profile", sa.Column("mobility", sa.String(), nullable=True))
+    _add_column_if_missing(
+        bind, "search_settings", sa.Column("max_job_age_days", sa.Integer(), nullable=True))
+    _add_column_if_missing(
+        bind, "user_profile", sa.Column("linkedin_url", sa.String(), nullable=True))
+    _add_column_if_missing(
+        bind, "user_profile", sa.Column("driver_license", sa.String(), nullable=True))
+    _add_column_if_missing(
+        bind, "user_profile", sa.Column("mobility", sa.String(), nullable=True))
 
     # 3. Drop dead column (guard: only if present).
-    cols = {
-        r[1]
-        for r in bind.execute(sa.text("PRAGMA table_info(search_settings)")).fetchall()
-    }
-    if "batch_time" in cols:
+    if _has_column(bind, "search_settings", "batch_time"):
         with op.batch_alter_table("search_settings") as batch:
             batch.drop_column("batch_time")
 
-    # 4. Create the Gmail tables (previously only created by create_all).
-    op.create_table(
-        "gmail_credentials",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("email_address", sa.String(), nullable=False),
-        sa.Column("encrypted_refresh_token", sa.Text(), nullable=False),
-        sa.Column("scopes", sa.String(), nullable=False),
-        sa.Column("history_id", sa.String(), nullable=True),
-        sa.Column("enabled", sa.Boolean(), nullable=False),
-        sa.Column("last_synced_at", sa.DateTime(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("email_address"),
-    )
-    op.create_table(
-        "gmail_messages",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("gmail_message_id", sa.String(), nullable=False),
-        sa.Column("gmail_thread_id", sa.String(), nullable=False),
-        sa.Column("account_email", sa.String(), nullable=False),
-        sa.Column("from_address", sa.String(), nullable=False),
-        sa.Column("from_domain", sa.String(), nullable=False),
-        sa.Column("to_address", sa.String(), nullable=True),
-        sa.Column("subject", sa.String(), nullable=True),
-        sa.Column("snippet", sa.Text(), nullable=True),
-        sa.Column("received_at", sa.DateTime(), nullable=False),
-        sa.Column("category", sa.String(), nullable=True),
-        sa.Column("category_confidence", sa.Float(), nullable=True),
-        sa.Column("classified_by", sa.String(), nullable=True),
-        sa.Column("ats_vendor", sa.String(), nullable=True),
-        sa.Column("extracted_company", sa.String(), nullable=True),
-        sa.Column("extracted_role", sa.String(), nullable=True),
-        sa.Column("extracted_interview_at", sa.DateTime(), nullable=True),
-        sa.Column("extracted_salary_text", sa.String(), nullable=True),
-        sa.Column("extracted_questions_json", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("gmail_message_id"),
-    )
-    op.create_index(
-        "ix_gmail_messages_account_received",
-        "gmail_messages",
-        ["account_email", "received_at"],
-    )
-    op.create_index("ix_gmail_messages_category", "gmail_messages", ["category"])
-    op.create_index("ix_gmail_messages_from_domain", "gmail_messages", ["from_domain"])
-    op.create_index(
-        "ix_gmail_messages_gmail_thread_id", "gmail_messages", ["gmail_thread_id"]
-    )
-    op.create_index("ix_gmail_messages_received_at", "gmail_messages", ["received_at"])
-    op.create_table(
-        "application_correspondence",
-        sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
-        sa.Column("application_id", sa.Integer(), nullable=False),
-        sa.Column("message_id", sa.Integer(), nullable=False),
-        sa.Column("gmail_thread_id", sa.String(), nullable=False),
-        sa.Column("direction", sa.String(), nullable=False),
-        sa.Column("link_confidence", sa.Float(), nullable=False),
-        sa.Column("link_method", sa.String(), nullable=False),
-        sa.Column("confirmed_by_user", sa.Boolean(), nullable=False),
-        sa.Column("created_at", sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(
-            ["application_id"], ["applications.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["message_id"], ["gmail_messages.id"], ondelete="CASCADE"
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ix_application_correspondence_app_created",
-        "application_correspondence",
-        ["application_id", "created_at"],
-    )
-    op.create_index(
-        "ix_application_correspondence_application_id",
-        "application_correspondence",
-        ["application_id"],
-    )
-    op.create_index(
-        "ix_application_correspondence_gmail_thread_id",
-        "application_correspondence",
-        ["gmail_thread_id"],
-    )
-    op.create_index(
-        "ix_application_correspondence_message_id",
-        "application_correspondence",
-        ["message_id"],
-    )
+    # 4. Create the Gmail tables (previously only created by create_all). Each
+    #    is guarded so a create_all DB that already has the table is skipped.
+    if not _has_table(bind, "gmail_credentials"):
+        op.create_table(
+            "gmail_credentials",
+            sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+            sa.Column("email_address", sa.String(), nullable=False),
+            sa.Column("encrypted_refresh_token", sa.Text(), nullable=False),
+            sa.Column("scopes", sa.String(), nullable=False),
+            sa.Column("history_id", sa.String(), nullable=True),
+            sa.Column("enabled", sa.Boolean(), nullable=False),
+            sa.Column("last_synced_at", sa.DateTime(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(), nullable=False),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint("email_address"),
+        )
+    if not _has_table(bind, "gmail_messages"):
+        op.create_table(
+            "gmail_messages",
+            sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+            sa.Column("gmail_message_id", sa.String(), nullable=False),
+            sa.Column("gmail_thread_id", sa.String(), nullable=False),
+            sa.Column("account_email", sa.String(), nullable=False),
+            sa.Column("from_address", sa.String(), nullable=False),
+            sa.Column("from_domain", sa.String(), nullable=False),
+            sa.Column("to_address", sa.String(), nullable=True),
+            sa.Column("subject", sa.String(), nullable=True),
+            sa.Column("snippet", sa.Text(), nullable=True),
+            sa.Column("received_at", sa.DateTime(), nullable=False),
+            sa.Column("category", sa.String(), nullable=True),
+            sa.Column("category_confidence", sa.Float(), nullable=True),
+            sa.Column("classified_by", sa.String(), nullable=True),
+            sa.Column("ats_vendor", sa.String(), nullable=True),
+            sa.Column("extracted_company", sa.String(), nullable=True),
+            sa.Column("extracted_role", sa.String(), nullable=True),
+            sa.Column("extracted_interview_at", sa.DateTime(), nullable=True),
+            sa.Column("extracted_salary_text", sa.String(), nullable=True),
+            sa.Column("extracted_questions_json", sa.JSON(), nullable=True),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint("gmail_message_id"),
+        )
+        op.create_index(
+            "ix_gmail_messages_account_received",
+            "gmail_messages",
+            ["account_email", "received_at"],
+        )
+        op.create_index("ix_gmail_messages_category", "gmail_messages", ["category"])
+        op.create_index(
+            "ix_gmail_messages_from_domain", "gmail_messages", ["from_domain"])
+        op.create_index(
+            "ix_gmail_messages_gmail_thread_id", "gmail_messages", ["gmail_thread_id"]
+        )
+        op.create_index(
+            "ix_gmail_messages_received_at", "gmail_messages", ["received_at"])
+    if not _has_table(bind, "application_correspondence"):
+        op.create_table(
+            "application_correspondence",
+            sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
+            sa.Column("application_id", sa.Integer(), nullable=False),
+            sa.Column("message_id", sa.Integer(), nullable=False),
+            sa.Column("gmail_thread_id", sa.String(), nullable=False),
+            sa.Column("direction", sa.String(), nullable=False),
+            sa.Column("link_confidence", sa.Float(), nullable=False),
+            sa.Column("link_method", sa.String(), nullable=False),
+            sa.Column("confirmed_by_user", sa.Boolean(), nullable=False),
+            sa.Column("created_at", sa.DateTime(), nullable=False),
+            sa.ForeignKeyConstraint(
+                ["application_id"], ["applications.id"], ondelete="CASCADE"
+            ),
+            sa.ForeignKeyConstraint(
+                ["message_id"], ["gmail_messages.id"], ondelete="CASCADE"
+            ),
+            sa.PrimaryKeyConstraint("id"),
+        )
+        op.create_index(
+            "ix_application_correspondence_app_created",
+            "application_correspondence",
+            ["application_id", "created_at"],
+        )
+        op.create_index(
+            "ix_application_correspondence_application_id",
+            "application_correspondence",
+            ["application_id"],
+        )
+        op.create_index(
+            "ix_application_correspondence_gmail_thread_id",
+            "application_correspondence",
+            ["gmail_thread_id"],
+        )
+        op.create_index(
+            "ix_application_correspondence_message_id",
+            "application_correspondence",
+            ["message_id"],
+        )
 
     # 5. Add FK constraints by recreating the affected tables (SQLite batch).
     #    Child rows that cannot exist without their parent use CASCADE; nullable

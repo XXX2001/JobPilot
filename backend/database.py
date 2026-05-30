@@ -51,10 +51,32 @@ async def init_db():
 
 
 def _alembic_upgrade_head() -> None:
+    """Bring the database to the Alembic head, reconciling both provenances.
+
+    Runs in a worker thread (``run_in_executor``) because Alembic's env drives
+    its own ``asyncio.run`` loop. Detection uses a short-lived *sync* engine so
+    no nested event loop is involved.
+
+    Three cases:
+
+    * **Fresh DB** (no application tables): ``upgrade head`` builds everything
+      from base.
+    * **Legacy create_all DB** (application tables exist but there is no
+      ``alembic_version`` stamp): Alembic would otherwise replay the initial
+      migration against already-existing tables and die with
+      ``table ... already exists``. We ``stamp`` it at the pre-T2a head
+      (``e3a1f2b8c9d7``) so ONLY the idempotent T2a catch-up migration runs.
+    * **Already-managed DB**: ``upgrade head`` is a normal forward migration.
+
+    Any genuine migration failure propagates — the app lifespan fails fast.
+    """
     from alembic import command
     from alembic.config import Config
+    from sqlalchemy import create_engine, inspect
 
     from backend.config import PROJECT_ROOT
+
+    db_path = f"{settings.jobpilot_data_dir}/jobpilot.db"
 
     cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
@@ -62,10 +84,21 @@ def _alembic_upgrade_head() -> None:
     # fixed relative URL (``data/jobpilot.db``); without this override Alembic
     # would migrate the wrong file under a custom JOBPILOT_DATA_DIR (e.g. the
     # per-worker test databases).
-    cfg.set_main_option(
-        "sqlalchemy.url",
-        f"sqlite+aiosqlite:///{settings.jobpilot_data_dir}/jobpilot.db",
-    )
+    cfg.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{db_path}")
+
+    sync_engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        tables = set(inspect(sync_engine).get_table_names())
+    finally:
+        sync_engine.dispose()
+
+    if "alembic_version" not in tables and "applications" in tables:
+        logger.info(
+            "Existing pre-Alembic database detected; stamping at %s before upgrade",
+            "e3a1f2b8c9d7",
+        )
+        command.stamp(cfg, "e3a1f2b8c9d7")
+
     command.upgrade(cfg, "head")
 
 

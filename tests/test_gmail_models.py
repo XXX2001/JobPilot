@@ -30,7 +30,7 @@ async def test_gmail_tables_created():
 
 
 async def test_applications_last_correspondence_at_column_added():
-    """_migrate_add_columns adds last_correspondence_at to existing applications table."""
+    """The T2a catch-up migration adds last_correspondence_at to applications."""
     async with engine.begin() as conn:
         result = await conn.execute(text("PRAGMA table_info(applications)"))
         cols = {row[1] for row in result.fetchall()}

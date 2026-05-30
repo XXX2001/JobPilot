@@ -459,6 +459,22 @@ class ApplyRequest(BaseModel):
         return v[:5000]
 
 
+@router.get("/{job_id}/review-state")
+async def get_review_state(job_id: int, request: Request) -> dict:
+    """Return the cached pending-review snapshot for *job_id*.
+
+    Lets a client that lost its WS connection re-fetch the apply_review
+    payload over HTTP instead of silently losing the in-flight review.
+    """
+    engine = getattr(request.app.state, "apply_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=404, detail="No apply engine")
+    payload = engine.get_pending_review(job_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="No pending review")
+    return payload
+
+
 @router.post("/{match_id}/apply", status_code=200, response_model=ApplicationResult)
 async def apply_to_job(
     match_id: int, body: ApplyRequest, db: DBSession, request: Request

@@ -70,6 +70,9 @@ class ApplicationEngine:
         # Per-job asyncio events for confirm/cancel coming from WS
         self._confirm_events: dict[int, asyncio.Event] = {}
         self._cancel_events: dict[int, asyncio.Event] = {}
+        # Cached review snapshots so a reconnecting client can re-fetch the
+        # pending apply_review payload over HTTP (engine survives no WS client).
+        self._pending_reviews: dict[int, dict] = {}
         # T4a: guard the re-entrancy check (read-then-write of the events
         # dicts) so two concurrent apply() calls for the same job_match_id
         # cannot both pass the membership check before either one inserts.
@@ -87,6 +90,21 @@ class ApplicationEngine:
         """Trigger confirmation for *job_id* (``confirm_submit`` WS message)."""
         if job_id in self._confirm_events:
             self._confirm_events[job_id].set()
+        self._pending_reviews.pop(job_id, None)
+
+    def record_pending_review(
+        self, job_id: int, *, filled_fields: dict, screenshot_b64: Optional[str]
+    ) -> None:
+        """Cache the review snapshot so a reconnecting client can fetch it."""
+        self._pending_reviews[job_id] = {
+            "job_id": job_id,
+            "filled_fields": filled_fields,
+            "screenshot_b64": screenshot_b64,
+        }
+
+    def get_pending_review(self, job_id: int) -> Optional[dict]:
+        """Return the cached snapshot for *job_id*, or None."""
+        return self._pending_reviews.get(job_id)
 
     def signal_cancel(self, job_id: int) -> None:
         """Trigger cancellation for *job_id* (``cancel_apply`` WS message)."""

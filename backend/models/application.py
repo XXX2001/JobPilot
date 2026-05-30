@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
-
-
-def _now() -> datetime:
-    # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
-    # DB rows (stored naive in SQLite) remain comparable.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from backend.utils.time import naive_utc_now
 
 
 class Application(Base):
@@ -25,7 +20,7 @@ class Application(Base):
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now, index=True)
     last_correspondence_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )
@@ -45,4 +40,4 @@ class ApplicationEvent(Base):
     application_id: Mapped[int] = mapped_column(Integer)
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     details: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    event_date: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    event_date: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

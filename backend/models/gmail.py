@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
@@ -17,12 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
-
-
-def _now() -> datetime:
-    # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
-    # DB rows (stored naive in SQLite) remain comparable.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from backend.utils.time import naive_utc_now
 
 
 class GmailCredential(Base):
@@ -43,8 +38,8 @@ class GmailCredential(Base):
     history_id: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 
 class GmailMessage(Base):
@@ -81,7 +76,7 @@ class GmailMessage(Base):
     extracted_salary_text: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     extracted_questions_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 
 class ApplicationCorrespondence(Base):
@@ -107,4 +102,4 @@ class ApplicationCorrespondence(Base):
     link_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     link_method: Mapped[str] = mapped_column(String, nullable=False)
     confirmed_by_user: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

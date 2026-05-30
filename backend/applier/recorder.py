@@ -25,7 +25,7 @@ from backend.applier import (
     SUCCESS_RESULT_STATUSES,
     normalize_result_status,
 )
-from backend.applier.daily_limit import _utc_now
+from backend.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class ApplicationRecorder:
 
             is_success = result_status in SUCCESS_RESULT_STATUSES
             persisted_status = normalize_result_status(result_status)
-            applied_at_value = _utc_now() if is_success else None
+            applied_at_value = utc_now() if is_success else None
 
             if reserved_app_id is not None:
                 stmt = select(Application).where(Application.id == reserved_app_id)

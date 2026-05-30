@@ -19,19 +19,15 @@ Design decisions:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import exists, func, select
 
 from backend.database import AsyncSessionLocal
 from backend.models.application import Application, ApplicationEvent
+from backend.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
-
-
-def _utc_now() -> datetime:
-    """Return current UTC time as a naive datetime (matches DB storage convention)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 async def scan_overdue(threshold_days: int = 7) -> int:
@@ -60,7 +56,7 @@ async def scan_overdue(threshold_days: int = 7) -> int:
     a session and the function never commits inside a borrowed long-lived
     session (which would expire ORM objects still in use by the caller).
     """
-    cutoff: datetime = _utc_now() - timedelta(days=threshold_days)
+    cutoff: datetime = utc_now() - timedelta(days=threshold_days)
 
     # Find applied applications older than the threshold that do NOT yet
     # have a follow_up_due event (idempotency: safe to call repeatedly).
@@ -97,7 +93,7 @@ async def scan_overdue(threshold_days: int = 7) -> int:
         if not candidates:
             return 0
 
-        now = _utc_now()
+        now = utc_now()
         count = 0
         for app in candidates:
             event = ApplicationEvent(

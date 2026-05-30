@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Response
@@ -11,12 +11,9 @@ from sqlalchemy.exc import IntegrityError
 from backend.api.deps import DBSession
 from backend.models.application import Application
 from backend.models.gmail import ApplicationCorrespondence, GmailMessage
+from backend.utils.time import utc_now
 
 router = APIRouter(prefix="/api/correspondence", tags=["correspondence"])
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class CorrespondenceItemOut(BaseModel):
@@ -118,7 +115,7 @@ async def link(body: LinkBody, db: DBSession) -> CorrespondenceLinkOut:
         confirmed_by_user=True,
     )
     db.add(link_row)
-    app.last_correspondence_at = _now()
+    app.last_correspondence_at = utc_now()
     try:
         await db.commit()
     except IntegrityError:

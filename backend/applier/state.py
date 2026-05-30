@@ -34,10 +34,10 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 if TYPE_CHECKING:
-    # BrowserSession is the concrete browser type from browser-use.
-    # Imported under TYPE_CHECKING only to avoid the heavy browser_use import
-    # at runtime — the attribute is always Optional and may be None.
-    from browser_use.browser.session import BrowserSession
+    # Browser is the concrete type the Tier-2 strategies instantiate
+    # (auto_apply / assisted_apply use ``from browser_use import Browser``).
+    # Imported under TYPE_CHECKING only to avoid the heavy runtime import.
+    from browser_use import Browser
 
 from backend.applier import RESULT_FAILED
 
@@ -103,11 +103,10 @@ class ApplyContext:
     outcome_method: str = "auto"
     outcome_message: Optional[str] = None
 
-    # Extra: browser reference (optional, for cleanup).
-    # Typed as Optional[BrowserSession] so callers can call .stop() without
-    # type: ignore — the import is guarded by TYPE_CHECKING to avoid the
-    # heavy browser_use import at runtime.
-    browser: Optional[BrowserSession] = None
+    # Extra: live Tier-2 browser (set by the engine from the strategy after
+    # dispatch, for centralized cleanup in terminal states). None for Tier-1
+    # and manual flows.
+    browser: Optional["Browser"] = None
 
     # Free-form extras (strategy-specific)
     extras: dict = field(default_factory=dict)

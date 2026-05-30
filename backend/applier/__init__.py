@@ -61,6 +61,13 @@ APPLICATION_STATUSES: frozenset[str] = frozenset({
 #: Legacy values previously written for successful applies. Read-side
 #: filters treat these as aliases for :data:`STATUS_APPLIED` so existing
 #: DB rows remain countable without a data migration.
+#:
+#: .. deprecated:: 2026-05-24
+#:    Slated for removal once the legacy rows have been migrated via
+#:    ``scripts/migrate_legacy_applied.py``. Writers MUST emit
+#:    :data:`STATUS_APPLIED` directly; the alias set exists purely so old
+#:    DB rows remain queryable until the data migration runs in production.
+#:    See ``CHANGELOG.md`` "fix-sprint 2026-05-24 / T9".
 LEGACY_APPLIED_ALIASES: frozenset[str] = frozenset({"manual", "assisted"})
 
 #: All values that should be treated as "a submission was made" — used by
@@ -106,6 +113,28 @@ def normalize_result_status(result_status: str) -> str:
     return result_status
 
 
+def warn_if_legacy_status(status: str) -> None:
+    """Emit a one-shot deprecation warning if ``status`` is a legacy alias.
+
+    Used by read-side filters that handle DB rows persisted before the
+    2026-05-24 vocabulary consolidation. The matching data-migration
+    script lives at ``scripts/migrate_legacy_applied.py`` — once that
+    has run in every deployed environment the alias path can be removed
+    along with :data:`LEGACY_APPLIED_ALIASES`.
+    """
+    if status in LEGACY_APPLIED_ALIASES:
+        import warnings
+
+        warnings.warn(
+            f"Legacy Application.status={status!r} detected. Run "
+            "`uv run python scripts/migrate_legacy_applied.py` to migrate "
+            "rows to the canonical 'applied' status; the alias path will "
+            "be removed in a future release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
+
 __all__ = [
     "APPLICATION_STATUSES",
     "ApplicationRecordError",
@@ -125,4 +154,5 @@ __all__ = [
     "STATUS_OFFER",
     "STATUS_REJECTED",
     "normalize_result_status",
+    "warn_if_legacy_status",
 ]

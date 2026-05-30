@@ -7,6 +7,16 @@ logger = logging.getLogger(__name__)
 
 
 class LaTeXInjector:
+    """Marker-based text replacement for the letter-pipeline.
+
+    The CV pipeline is marker-free (see ``backend.latex.applicator.CVApplicator``);
+    only the letter pipeline still uses JOBPILOT markers. The historical
+    ``inject_summary_edit`` / ``inject_experience_edits`` methods were
+    removed in the 2026-05-24 dead-code purge — they relied on
+    ``CVSummaryEdit`` / ``CVExperienceEdit`` types that were never
+    defined.
+    """
+
     def _replace_marker_content(self, tex: str, marker: str, new_content: str) -> str:
         """Replace content between JOBPILOT:MARKER:START and END."""
         pattern = re.compile(
@@ -18,22 +28,6 @@ class LaTeXInjector:
         if count == 0:
             raise ValueError(f"Marker JOBPILOT:{marker} not found in LaTeX content")
         return result
-
-    def inject_summary_edit(self, original_tex: str, new_summary: str) -> str:
-        """Replace summary section. Returns modified copy, never touches original."""
-        return self._replace_marker_content(original_tex, "SUMMARY", new_summary)
-
-    def inject_experience_edits(self, original_tex: str, edits: list) -> str:
-        """Replace only specific \\item lines that were edited."""
-        tex = original_tex
-        for edit in edits:
-            # Replace the specific bullet at this index
-            bullets = re.findall(r"(\\item\s+.+?)(?=\\item|\\end|$)", tex, re.DOTALL)
-            if edit.index < len(bullets):
-                old_bullet = bullets[edit.index]
-                new_bullet = f"\\item {edit.edited}"
-                tex = tex.replace(old_bullet.rstrip(), new_bullet, 1)
-        return tex
 
     def inject_letter_edit(self, original_tex: str, new_paragraph: str, company_name: str) -> str:
         """Replace letter paragraph and {company_name} placeholders."""

@@ -113,17 +113,30 @@ def main():
     ]:
         (PROJECT_ROOT / d).mkdir(parents=True, exist_ok=True)
 
-    host = "127.0.0.1"
-    port = 8000
+    # T9 (deep-dive CRIT-OPS-7): honor JOBPILOT_HOST / JOBPILOT_PORT so the
+    # launcher matches the values backend/config.py already reads. Previously
+    # these were hard-coded, silently ignoring .env edits.
+    host = os.environ.get("JOBPILOT_HOST", "127.0.0.1")
+    try:
+        port = int(os.environ.get("JOBPILOT_PORT", "8000"))
+    except ValueError:
+        print(
+            f"⚠  Invalid JOBPILOT_PORT={os.environ.get('JOBPILOT_PORT')!r}; "
+            "falling back to 8000."
+        )
+        port = 8000
 
     free_port(port)
 
     print(f"\n  JobPilot starting on http://{host}:{port}\n")
 
-    # Open browser after a short delay
+    # Open browser after a short delay. Use the loopback alias when bound to
+    # 0.0.0.0 so the tab points at something the user's browser can resolve.
+    browser_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+
     import threading
 
-    threading.Timer(2.0, lambda: webbrowser.open(f"http://{host}:{port}")).start()
+    threading.Timer(2.0, lambda: webbrowser.open(f"http://{browser_host}:{port}")).start()
 
     # Start FastAPI
     uvicorn.run(

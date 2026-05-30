@@ -265,6 +265,32 @@ npm run build --prefix frontend    # Rebuild the frontend
 </details>
 
 <details>
+<summary><strong>Backup & restore</strong></summary>
+
+JobPilot keeps everything in a single SQLite database at
+`data/jobpilot.db`. To take a hot, online snapshot while the app is
+running:
+
+```bash
+uv run python scripts/backup_db.py
+# → /…/data/backups/jobpilot-20260524T143000Z.db
+```
+
+The script uses SQLite's `VACUUM INTO` so it is safe to run while the
+server is live (no shutdown required). By default the snapshot lands in
+`data/backups/`; override with `--out /elsewhere` if you prefer.
+
+To restore: stop the app, replace `data/jobpilot.db` with the snapshot
+(and delete any `jobpilot.db-wal` / `jobpilot.db-shm` siblings), then
+restart.
+
+Your encryption key (`CREDENTIAL_KEY` in `.env`) is **not** part of the
+DB backup — see [`docs/architecture.md` → "Credentials & encryption"](docs/architecture.md#credentials--encryption)
+for how to back it up separately.
+
+</details>
+
+<details>
 <summary><strong>Project layout</strong></summary>
 
 ```text

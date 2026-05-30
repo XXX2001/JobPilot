@@ -36,6 +36,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /tmp/tectonic
 # Pin a known-good release; static musl build, no extra runtime deps.
+# MUST stay aligned with ``TECTONIC_VERSION`` in ``scripts/download_tectonic.py``
+# so the container image and the local-dev installer get the same engine.
 ARG TECTONIC_VERSION=0.15.0
 RUN ARCH="$(uname -m)" && \
     case "$ARCH" in \

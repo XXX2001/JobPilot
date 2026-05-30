@@ -343,6 +343,11 @@ async def health(response: Response) -> HealthOut:
         db_status = "error"
         db_error_code = "db_unreachable"
 
+    # T9: conservative degradation — only DB failure flips overall status,
+    # mirroring the pre-existing contract used by Docker / k8s probes. The
+    # ``tectonic`` and ``gemini_key_set`` booleans surface as advisory
+    # component flags; downstream code paths handle their absence
+    # gracefully (LaTeX routes return 422, Gemini calls 5xx).
     overall_status: Literal["ok", "degraded"] = "ok" if db_status == "ok" else "degraded"
     if db_status == "error":
         # 503 lets orchestrators (k8s liveness, Docker healthcheck) react.

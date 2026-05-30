@@ -1,42 +1,19 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 
-# Convenience type alias for route handlers
+# Convenience type alias for route handlers — the only public symbol in this module.
 DBSession = Annotated[AsyncSession, Depends(get_db)]
 
 
-# ── Singleton dependency getters ──────────────────────────────────────────────
-# These pull module-level singletons from ``app.state`` (set in main.py lifespan).
-
-if TYPE_CHECKING:  # pragma: no cover
-    from backend.applier.engine import ApplicationEngine
-    from backend.latex.pipeline import CVPipeline
-    from backend.scheduler.batch_runner import BatchRunner
-    from backend.scraping.orchestrator import ScrapingOrchestrator
-    from backend.scraping.session_manager import BrowserSessionManager
-
-
-def get_session_manager(request: Request) -> "BrowserSessionManager":
-    return request.app.state.session_manager
-
-
-def get_apply_engine(request: Request) -> "ApplicationEngine":
-    return request.app.state.apply_engine
-
-
-def get_cv_pipeline(request: Request) -> "CVPipeline":
-    return request.app.state.cv_pipeline
-
-
-def get_scraping_orchestrator(request: Request) -> "ScrapingOrchestrator":
-    return request.app.state.scraping_orchestrator
-
-
-def get_batch_runner(request: Request) -> "BatchRunner":
-    return request.app.state.batch_runner
+# NOTE: The earlier ``get_session_manager`` / ``get_apply_engine`` /
+# ``get_cv_pipeline`` / ``get_scraping_orchestrator`` / ``get_batch_runner``
+# helpers were removed in the 2026-05-24 dead-code purge (T9). None of the
+# routers ever called them — singletons are read directly off
+# ``request.app.state`` inside each endpoint. Re-add them if a future router
+# adopts Depends-based access to the same singletons.

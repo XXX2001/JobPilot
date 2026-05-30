@@ -504,6 +504,44 @@ async def test_middle_states_are_not_terminals():
         assert state not in TERMINALS, f"{state} should not be a terminal"
 
 
+# ── Browser lifecycle (T4a items 4 & 5) ──────────────────────────────────────
+
+
+class _FakeBrowser:
+    def __init__(self) -> None:
+        self.stopped = False
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+class _DummyApplicant:
+    full_name = email = phone = location = additional_answers_json = ""
+
+
+@pytest.mark.asyncio
+async def test_dispatch_copies_strategy_browser_onto_ctx(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from backend.applier.engine import ApplicationEngine, ApplyMode
+    from backend.applier.manual_apply import ApplicationResult
+    from backend.applier.state import ApplyContext
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    fake = _FakeBrowser()
+    engine._auto._active_browser = fake
+    engine._auto.apply = AsyncMock(
+        return_value=ApplicationResult(status="applied", method="auto")
+    )
+
+    ctx = ApplyContext(
+        job_match_id=1, mode="auto", apply_url="https://x", db=None,
+        extras={"mode": ApplyMode.AUTO, "applicant": _DummyApplicant(), "cv_pdf": None, "letter_pdf": None},
+    )
+    await engine._dispatch(ctx)
+    assert ctx.browser is fake
+
+
 @pytest.mark.asyncio
 async def test_full_pipeline_fails_partway_through_middle_state():
     """If a middle-state next() raises, driver should land in FAILED.

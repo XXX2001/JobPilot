@@ -68,6 +68,10 @@ class AutoApplyStrategy:
             logger.warning("Could not initialise PlaywrightFormFiller: %s — Tier 1 disabled", exc)
             self._form_filler = None  # type: ignore[assignment]
 
+        # Live Tier-2 browser for the current apply() call, surfaced to the
+        # engine so the FSM owns failure-path cleanup. Reset per apply().
+        self._active_browser = None
+
     async def apply(
         self,
         job_id: int,
@@ -83,6 +87,8 @@ class AutoApplyStrategy:
         cancel_event: asyncio.Event | None = None,
     ) -> ApplicationResult:
         """Run fill + review + submit. Tier 1 → Tier 2 fallback."""
+
+        self._active_browser = None
 
         apply_url = sanitize_url(apply_url)
         if not apply_url:
@@ -301,6 +307,7 @@ class AutoApplyStrategy:
             logger.warning("[Tier 2] No saved session at %s — browser will not be logged in", state_path)
 
         browser = Browser(**browser_kwargs)
+        self._active_browser = browser
         try:
             llm = ChatGoogle(
                 model=self._model,

@@ -62,6 +62,10 @@ class AssistedApplyStrategy:
             logger.warning("Could not initialise PlaywrightFormFiller: %s — Tier 1 disabled", exc)
             self._form_filler = None  # type: ignore[assignment]
 
+        # Live Tier-2 browser for the current apply() call, surfaced to the
+        # engine so the FSM owns failure-path cleanup. Reset per apply().
+        self._active_browser = None
+
     async def apply(
         self,
         apply_url: str,
@@ -73,6 +77,8 @@ class AssistedApplyStrategy:
         cv_pdf: Path | None = None,
         letter_pdf: Path | None = None,
     ) -> ApplicationResult:
+        self._active_browser = None
+
         apply_url = sanitize_url(apply_url)
         if not apply_url:
             return ApplicationResult(
@@ -161,6 +167,7 @@ class AssistedApplyStrategy:
             logger.warning("[Tier 2 assisted] No saved session — browser will not be logged in")
 
         browser = Browser(**browser_kwargs)
+        self._active_browser = browser
         try:
             llm = ChatGoogle(
                 model=self._model,

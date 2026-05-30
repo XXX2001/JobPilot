@@ -431,7 +431,7 @@ class ApplicationEngine:
         letter_pdf: Optional[Path] = ctx.extras["letter_pdf"]
 
         if mode == ApplyMode.AUTO:
-            return await self._auto.apply(
+            result = await self._auto.apply(
                 job_id=ctx.job_match_id,
                 apply_url=ctx.apply_url,
                 full_name=applicant.full_name,
@@ -444,8 +444,10 @@ class ApplicationEngine:
                 confirm_event=ctx.confirm_event,
                 cancel_event=ctx.cancel_event,
             )
+            ctx.browser = getattr(self._auto, "_active_browser", None)
+            return result
         if mode == ApplyMode.ASSISTED:
-            return await self._assisted.apply(
+            result = await self._assisted.apply(
                 apply_url=ctx.apply_url,
                 full_name=applicant.full_name,
                 email=applicant.email,
@@ -455,7 +457,9 @@ class ApplicationEngine:
                 cv_pdf=cv_pdf,
                 letter_pdf=letter_pdf,
             )
-        # MANUAL
+            ctx.browser = getattr(self._assisted, "_active_browser", None)
+            return result
+        # MANUAL — no browser.
         return await self._manual.apply(
             apply_url=ctx.apply_url,
             cv_pdf=cv_pdf,

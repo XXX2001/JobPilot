@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from backend.models.schemas import RawJob
 from backend.scraping.site_prompts import SITE_CONFIGS, SITE_PROMPTS
+from backend.scraping.source_health import SourceHealthTracker
 
 if TYPE_CHECKING:
     from backend.matching.filters import JobFilters
@@ -91,12 +92,16 @@ class ScrapingOrchestrator:
         session_mgr: "BrowserSessionManager | None" = None,
         deduplicator: "JobDeduplicator | None" = None,
         scrapling_fetcher: "ScraplingFetcher | None" = None,
+        source_health: SourceHealthTracker | None = None,
     ) -> None:
         self.adzuna = adzuna_client
         self.adaptive_scraper = adaptive_scraper
         self.session_mgr = session_mgr
         self.deduplicator = deduplicator
         self.scrapling_fetcher = scrapling_fetcher
+        # Per-source health is intentionally in-memory only. Lives as long
+        # as this orchestrator (one instance per app process).
+        self.source_health = source_health or SourceHealthTracker()
 
     async def scrape_batch(
         self,
@@ -157,7 +162,18 @@ class ScrapingOrchestrator:
                 api_tasks.append(task)
 
             api_results = await asyncio.gather(*api_tasks, return_exceptions=True)
-            phase1_jobs = _flatten_results(list(api_results))
+            phase1_jobs: list[RawJob] = []
+            for src, r in zip(api_sources, api_results):
+                if isinstance(r, Exception):
+                    logger.warning("Source %s failed: %s", src.name, r)
+                    self.source_health.record(src.name, outcome="error", error=str(r))
+                elif isinstance(r, list):
+                    phase1_jobs.extend(r)
+                    self.source_health.record(
+                        src.name,
+                        outcome="ok" if r else "empty",
+                        job_count=len(r),
+                    )
             all_jobs.extend(phase1_jobs)
             logger.info("Phase 1 done: %d jobs from API sources", len(phase1_jobs))
             await broadcast_status(f"Phase 1 done: {len(phase1_jobs)} jobs from API", progress=0.3)
@@ -173,8 +189,14 @@ class ScrapingOrchestrator:
                     max_days_old=max_age_days,
                 )
                 all_jobs.extend(jobs)
+                self.source_health.record(
+                    "adzuna",
+                    outcome="ok" if jobs else "empty",
+                    job_count=len(jobs),
+                )
                 logger.info("Phase 1 (default Adzuna): %d jobs, country=%s, keywords=%s", len(jobs), country, keywords)
             except Exception as exc:
+                self.source_health.record("adzuna", outcome="error", error=str(exc))
                 logger.warning("Default Adzuna search failed: %s", exc, exc_info=True)
 
         # ------------------------------------------------------------------
@@ -210,27 +232,44 @@ class ScrapingOrchestrator:
                     # combined queries that return 0 results. Distribute
                     # max_jobs across keywords so each search stays small.
                     source_jobs: list[RawJob] = []
+                    source_errors: list[str] = []
                     search_keywords = keywords if keywords else [""]
                     per_kw_max = max(5, max_results_per_source // len(search_keywords)) if search_keywords else max_results_per_source
+
+                    # Pagination budget. Per-source health tracking handles
+                    # short-page early-termination — we stop paginating once
+                    # Tier 1 returns < per_kw_max jobs for a given keyword.
+                    max_pages = int((source.config or {}).get("max_pages", 1))
+                    max_pages = max(1, min(max_pages, 5))  # hard cap
 
                     for kw in search_keywords:
                         kw_list = [kw] if kw else []
                         jobs: list[RawJob] = []
+                        kw_failed = False
 
                         # Tier 1: ScraplingFetcher (fast HTTP + single Gemini call)
                         tier1_attempted = False
                         if self.scrapling_fetcher and source.name in self.TIER1_SITES:
                             tier1_attempted = True
                             try:
-                                jobs = await self.scrapling_fetcher.scrape_job_listings(
-                                    url=source.url or "",
-                                    keywords=kw_list,
-                                    max_jobs=per_kw_max,
-                                    site=source.name,
-                                    location=location,
-                                    country_code=src_country_code,
-                                    max_age_days=max_age_days,
-                                )
+                                page_jobs_total: list[RawJob] = []
+                                for page in range(1, max_pages + 1):
+                                    page_jobs = await self.scrapling_fetcher.scrape_job_listings(
+                                        url=source.url or "",
+                                        keywords=kw_list,
+                                        max_jobs=per_kw_max,
+                                        site=source.name,
+                                        location=location,
+                                        country_code=src_country_code,
+                                        max_age_days=max_age_days,
+                                        page=page,
+                                    )
+                                    page_jobs_total.extend(page_jobs)
+                                    # Stop early on partial / empty page —
+                                    # avoids spending Gemini calls on dead pages.
+                                    if not page_jobs or len(page_jobs) < per_kw_max:
+                                        break
+                                jobs = page_jobs_total
                                 if jobs:
                                     logger.info(
                                         "Phase 2 [Tier 1]: %d jobs from %s for keyword %r",
@@ -247,6 +286,7 @@ class ScrapingOrchestrator:
                                     source.name, kw, exc,
                                 )
                                 jobs = []
+                                source_errors.append(f"tier1 kw={kw!r}: {exc}")
 
                         # Tier 2: AdaptiveScraper (full browser-use agent) — used as fallback
                         # or when Tier 1 is not applicable
@@ -271,6 +311,8 @@ class ScrapingOrchestrator:
                                     "Phase 2: %s keyword %r failed (continuing): %s",
                                     source.name, kw, exc,
                                 )
+                                kw_failed = True
+                                source_errors.append(f"tier2 kw={kw!r}: {exc}")
 
                         try:
                             for job in jobs:
@@ -282,17 +324,38 @@ class ScrapingOrchestrator:
                                 "Phase 2: %s keyword %r failed (continuing): %s",
                                 source.name, kw, exc,
                             )
+                            kw_failed = True
+                            source_errors.append(f"normalize kw={kw!r}: {exc}")
+
                         # Brief delay between keyword searches on the same site
                         if kw != search_keywords[-1]:
                             await asyncio.sleep(random.uniform(1, 2))
 
                     all_jobs.extend(source_jobs)
+                    # Record per-source outcome once per scrape pass. A
+                    # site is "ok" only when it returned >=1 job; an
+                    # error-free 0-job pass is "empty" so the UI can
+                    # show "degraded".
+                    if source_jobs:
+                        self.source_health.record(
+                            source.name, outcome="ok", job_count=len(source_jobs),
+                        )
+                    elif source_errors:
+                        self.source_health.record(
+                            source.name,
+                            outcome="error",
+                            error="; ".join(source_errors[:3]),
+                        )
+                    else:
+                        self.source_health.record(source.name, outcome="empty")
+
                     logger.info("Phase 2: %d total jobs from %s", len(source_jobs), source.name)
                     await broadcast_status(
                         f"Phase 2: {len(source_jobs)} jobs from {source.name}", progress=0.5
                     )
                 except Exception as exc:
                     logger.warning("Phase 2: scraping %s failed (continuing): %s", source.name, exc)
+                    self.source_health.record(source.name, outcome="error", error=str(exc))
 
                 # Brief delay between sites to avoid hammering servers
                 if browser_sources.index(source) < len(browser_sources) - 1:
@@ -318,7 +381,18 @@ class ScrapingOrchestrator:
                 for s in lab_sources
             ]
             lab_results = await asyncio.gather(*lab_tasks, return_exceptions=True)
-            phase3_jobs = _flatten_results(list(lab_results))
+            phase3_jobs: list[RawJob] = []
+            for src, r in zip(lab_sources, lab_results):
+                if isinstance(r, Exception):
+                    logger.warning("Lab source %s failed: %s", src.name, r)
+                    self.source_health.record(src.name, outcome="error", error=str(r))
+                elif isinstance(r, list):
+                    phase3_jobs.extend(r)
+                    self.source_health.record(
+                        src.name,
+                        outcome="ok" if r else "empty",
+                        job_count=len(r),
+                    )
             for job in phase3_jobs:
                 if not job.country:
                     job.country = _normalize_country(location)

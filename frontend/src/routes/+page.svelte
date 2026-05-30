@@ -5,6 +5,7 @@
 	import NewMatchesFeed from '$lib/components/NewMatchesFeed.svelte';
 	import BlockedActionsStrip from '$lib/components/BlockedActionsStrip.svelte';
 	import WeekStats from '$lib/components/WeekStats.svelte';
+	import SourceHealthPills from '$lib/components/SourceHealthPills.svelte';
 	import type { TodayResponse } from '$lib/types/today';
 
 	let data = $state<TodayResponse | null>(null);
@@ -63,6 +64,8 @@
 		</button>
 	</div>
 </div>
+
+<SourceHealthPills />
 
 {#if error}
 	<div

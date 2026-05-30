@@ -115,9 +115,10 @@ class MockAdzuna:
         page: int = 1,
         results_per_page: int = 20,
         max_days_old: int | None = None,
+        **kwargs,  # tolerate any extra kwargs the real adapter gains
     ) -> list[RawJob]:
-        # **kwargs would also work, but mirroring the real signature keeps
-        # the test honest if a kwarg renamed.
+        # Mirroring the real signature keeps the test honest if a kwarg is
+        # renamed; **kwargs guards against a newly-added one breaking the mock.
         if self._fail:
             raise RuntimeError("Adzuna API down")
         return self._result

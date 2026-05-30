@@ -32,8 +32,46 @@ class AdzunaClient:
         page: int = 1,
         results_per_page: int = 20,
         max_days_old: int | None = None,
+        max_pages: int = 1,
     ) -> list[RawJob]:
-        """Search Adzuna for jobs matching keywords + filters."""
+        """Search Adzuna for jobs matching keywords + filters.
+
+        Args:
+            page: Starting 1-indexed page number.
+            max_pages: How many sequential pages to fetch starting from ``page``.
+                Defaults to 1 (backward-compat). Loop stops early if a page
+                returns fewer than ``results_per_page`` results.
+        """
+        all_jobs: list[RawJob] = []
+        max_pages = max(1, int(max_pages))
+        for offset in range(max_pages):
+            current_page = page + offset
+            jobs = await self._fetch_page(
+                keywords=keywords,
+                filters=filters,
+                country=country,
+                page=current_page,
+                results_per_page=results_per_page,
+                max_days_old=max_days_old,
+            )
+            all_jobs.extend(jobs)
+            # Stop early once a page comes back partial — Adzuna has no
+            # explicit "has_next" flag; a short page means the result set
+            # is exhausted.
+            if len(jobs) < results_per_page:
+                break
+        return all_jobs
+
+    async def _fetch_page(
+        self,
+        *,
+        keywords: list[str],
+        filters: JobFilters,
+        country: str,
+        page: int,
+        results_per_page: int,
+        max_days_old: int | None,
+    ) -> list[RawJob]:
         params: dict = {
             "app_id": self.app_id,
             "app_key": self.app_key,
@@ -48,7 +86,10 @@ class AdzunaClient:
             params["full_time"] = 1
         params = {k: v for k, v in params.items() if v is not None and v != ""}
         url = f"{self.BASE_URL}/{country}/search/{page}"
-        logger.debug("Adzuna request: url=%s params=%s", url, {k: v for k, v in params.items() if k != 'app_key'})
+        logger.debug(
+            "Adzuna request: url=%s params=%s",
+            url, {k: v for k, v in params.items() if k != "app_key"},
+        )
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(url, params=params)
             if response.status_code != 200:

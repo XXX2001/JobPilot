@@ -2,6 +2,42 @@
 
 from __future__ import annotations
 
+# ---------------------------------------------------------------------------
+# Per-country domain maps — single source of truth.
+# Consumed by both ``format_prompt`` (Tier 2) and ``ScraplingFetcher._build_search_url``
+# (Tier 1). Drift between the two used to be a confirmed bug (see
+# docs/reports/2026-05-23-codebase-deep-dive/04-scraping-subsystem.md §9).
+# ---------------------------------------------------------------------------
+
+INDEED_DOMAINS: dict[str, str] = {
+    "fr": "fr.indeed.com", "gb": "uk.indeed.com", "de": "de.indeed.com",
+    "es": "es.indeed.com", "it": "it.indeed.com", "nl": "indeed.nl",
+    "be": "be.indeed.com", "ca": "ca.indeed.com", "au": "au.indeed.com",
+    "us": "www.indeed.com", "in": "in.indeed.com", "br": "br.indeed.com",
+    "sg": "sg.indeed.com",
+}
+
+GOOGLE_DOMAINS: dict[str, str] = {
+    "fr": "www.google.fr", "gb": "www.google.co.uk", "de": "www.google.de",
+    "es": "www.google.es", "it": "www.google.it", "nl": "www.google.nl",
+    "be": "www.google.be", "ca": "www.google.ca", "au": "www.google.com.au",
+    "us": "www.google.com", "in": "www.google.co.in", "br": "www.google.com.br",
+    "sg": "www.google.com.sg",
+}
+
+
+def indeed_domain(country_code: str) -> str:
+    """Resolve an Indeed regional domain for the given 2-letter country code."""
+    cc = (country_code or "fr").lower()
+    return INDEED_DOMAINS.get(cc, f"{cc}.indeed.com")
+
+
+def google_domain(country_code: str) -> str:
+    """Resolve a Google regional domain for the given 2-letter country code."""
+    cc = (country_code or "us").lower()
+    return GOOGLE_DOMAINS.get(cc, "www.google.com")
+
+
 SITE_PROMPTS: dict[str, str] = {
 
     "linkedin": """
@@ -503,25 +539,12 @@ def format_prompt(site: str, **kwargs) -> str:
 
     # Provide sensible defaults for all substitution variables
 
-    # Build country_domain from country_code if not explicitly provided
+    # Build country_domain from country_code if not explicitly provided.
+    # Domain maps live at module scope (INDEED_DOMAINS / GOOGLE_DOMAINS)
+    # so Tier 1 (scrapling_fetcher) and Tier 2 (this function) stay in sync.
     _country_code = str(kwargs.get("country_code", "gb")).lower()
-    _INDEED_DOMAINS = {
-        "fr": "fr.indeed.com", "gb": "uk.indeed.com", "de": "de.indeed.com",
-        "es": "es.indeed.com", "it": "it.indeed.com", "nl": "indeed.nl",
-        "be": "be.indeed.com", "ca": "ca.indeed.com", "au": "au.indeed.com",
-        "us": "www.indeed.com", "in": "in.indeed.com", "br": "br.indeed.com",
-        "sg": "sg.indeed.com",
-    }
-    _country_domain = _INDEED_DOMAINS.get(_country_code, f"{_country_code}.indeed.com")
-
-    _GOOGLE_DOMAINS = {
-        "fr": "www.google.fr", "gb": "www.google.co.uk", "de": "www.google.de",
-        "es": "www.google.es", "it": "www.google.it", "nl": "www.google.nl",
-        "be": "www.google.be", "ca": "www.google.ca", "au": "www.google.com.au",
-        "us": "www.google.com", "in": "www.google.co.in", "br": "www.google.com.br",
-        "sg": "www.google.com.sg",
-    }
-    _google_domain = _GOOGLE_DOMAINS.get(_country_code, "www.google.com")
+    _country_domain = indeed_domain(_country_code)
+    _google_domain = google_domain(_country_code)
 
     defaults: dict[str, str] = {
 

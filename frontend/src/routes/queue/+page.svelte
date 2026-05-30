@@ -9,29 +9,8 @@
 	import { getEmptyState } from '$lib/utils/easterEggs';
 	import { register, deregister } from '$lib/utils/hotkeys';
 	import type { BindingHandle } from '$lib/utils/hotkeys';
-
-	interface Job {
-		id: number;
-		title: string;
-		company: string;
-		location: string;
-		salary_min?: number;
-		salary_max?: number;
-		description?: string;
-		url: string;
-		apply_url: string;
-		apply_method: string;
-		posted_at?: string;
-	}
-	interface QueueMatch {
-		id: number;
-		job_id: number;
-		score: number;
-		status: string;
-		batch_date: string;
-		matched_at: string;
-		job: Job;
-	}
+	import type { Job, QueueMatch } from '$lib/types/api';
+	import { focusTrap } from '$lib/utils/focusTrap';
 
 	type ApplyMode = 'auto' | 'manual' | 'skip';
 	type Phase = 'select' | 'review';
@@ -235,7 +214,11 @@
 			m:      { label: 'Set focused card → Manual', action: () => setFocusedMode('manual') },
 			s:      { label: 'Set focused card → Skip',   action: () => setFocusedMode('skip') },
 			Enter:  { label: 'Review & apply',        action: () => { if (activeMatches.length > 0 && phase === 'select') proceedToReview(); } },
-			Escape: { label: 'Clear card focus',      action: () => { if (phase === 'select') focusedIndex = -1; } }
+			Escape: { label: 'Close modal / clear focus', action: () => {
+				// Confirm-apply modal takes precedence when open.
+				if (confirmModal) { cancelApply(); return; }
+				if (phase === 'select') focusedIndex = -1;
+			} }
 		}, { group: 'Job Queue' });
 	});
 
@@ -357,13 +340,24 @@
 {/if}
 
 {#if confirmModal}
-	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+		onclick={(e) => { if (e.target === e.currentTarget) cancelApply(); }}
+	>
 		<div
 			class="bg-card border-border mx-4 w-full max-w-lg overflow-hidden rounded-xl border shadow-2xl"
+			role="dialog"
+			tabindex="-1"
+			aria-modal="true"
+			aria-labelledby="confirm-apply-title"
+			aria-describedby="confirm-apply-desc"
+			use:focusTrap
 		>
 			<div class="border-border border-b p-5">
-				<h2 class="font-semibold">Confirm Auto Apply</h2>
-				<p class="text-muted-foreground mt-1 text-xs">Review the filled fields before submitting.</p>
+				<h2 id="confirm-apply-title" class="font-semibold">Confirm Auto Apply</h2>
+				<p id="confirm-apply-desc" class="text-muted-foreground mt-1 text-xs">Review the filled fields before submitting.</p>
 			</div>
 			{#if confirmModal.screenshot}
 				<div class="px-5 pt-4">

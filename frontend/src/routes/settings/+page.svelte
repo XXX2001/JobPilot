@@ -4,6 +4,7 @@ import { apiFetch } from '$lib/api';
 import { getProfileStatus } from '$lib/utils/easterEggs';
 	import { AlertCircle, CheckCircle2, Key, Info, Globe, Trash2, User, Search, Code, Cpu, X, Plus, Save, Plug } from 'lucide-svelte';
 	import GmailConnectCard from '$lib/components/GmailConnectCard.svelte';
+	import type { SetupStatus } from '$lib/types/api';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -39,14 +40,6 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 	interface Sources {
 		adzuna: { configured: boolean; app_id_hint?: string };
 		gemini: { configured: boolean };
-	}
-
-	interface SetupStatus {
-		gemini_key_set: boolean;
-		adzuna_key_set: boolean;
-		tectonic_found: boolean;
-		base_cv_uploaded: boolean;
-		setup_complete: boolean;
 	}
 
 	interface SiteItem {

@@ -4,16 +4,7 @@
 	import { Upload, FileText, CheckCircle2, AlertCircle, Eye, GitCompare, Clock } from 'lucide-svelte';
 	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
 	import { getEmptyState } from '$lib/utils/easterEggs';
-
-	interface Document {
-		id: number;
-		job_match_id?: number;
-		doc_type: string;
-		tex_path?: string;
-		pdf_path?: string;
-		diff_json?: unknown;
-		created_at: string;
-	}
+	import type { Document } from '$lib/types/api';
 
 	let documents = $state<Document[]>([]);
 	let docsLoading = $state(true);

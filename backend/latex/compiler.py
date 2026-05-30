@@ -86,6 +86,8 @@ class LaTeXCompiler:
             )
         except asyncio.TimeoutError as exc:
             proc.kill()
+            # Reap the killed child so its transport is closed (no ResourceWarning).
+            await proc.wait()
             raise LaTeXCompileTimeout(
                 f"Tectonic timed out after {settings.TECTONIC_TIMEOUT_SECONDS}s "
                 f"compiling {tex_path.name}"

@@ -92,6 +92,10 @@ class ApplicationEngine:
             self._confirm_events[job_id].set()
         self._pending_reviews.pop(job_id, None)
 
+    # NOTE: the assisted/auto review-pause path does not call this yet — the
+    # cache + GET review-state endpoint shipped per plan Task 11, but wiring the
+    # broadcast site to populate the snapshot is deferred (needs design out of
+    # this lot's scope) and tracked for a follow-on.
     def record_pending_review(
         self, job_id: int, *, filled_fields: dict, screenshot_b64: Optional[str]
     ) -> None:
@@ -110,6 +114,7 @@ class ApplicationEngine:
         """Trigger cancellation for *job_id* (``cancel_apply`` WS message)."""
         if job_id in self._cancel_events:
             self._cancel_events[job_id].set()
+        self._pending_reviews.pop(job_id, None)
 
     # ------------------------------------------------------------------ #
     #  Main entry point                                                    #
@@ -201,6 +206,7 @@ class ApplicationEngine:
         finally:
             self._confirm_events.pop(job_match_id, None)
             self._cancel_events.pop(job_match_id, None)
+            self._pending_reviews.pop(job_match_id, None)
 
         return ApplicationResult(status=status, method=method, message=message or "")
 

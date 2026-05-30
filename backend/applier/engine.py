@@ -70,6 +70,14 @@ class ApplicationEngine:
         # Per-job asyncio events for confirm/cancel coming from WS
         self._confirm_events: dict[int, asyncio.Event] = {}
         self._cancel_events: dict[int, asyncio.Event] = {}
+        # T4a: guard the re-entrancy check (read-then-write of the events
+        # dicts) so two concurrent apply() calls for the same job_match_id
+        # cannot both pass the membership check before either one inserts.
+        # The window is real because the API route awaits reserve_slot()
+        # *before* this check; under high concurrency two requests can be
+        # mid-reservation simultaneously and both arrive at the check
+        # with no entry present yet.
+        self._registry_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ #
     #  WS signal handlers (called by ws.py on incoming client messages)  #
@@ -122,7 +130,19 @@ class ApplicationEngine:
                 )
 
         # ── Guard against concurrent apply for the same job ────────────
-        if job_match_id in self._confirm_events:
+        # T4a: serialise the membership-check + insert under
+        # ``_registry_lock`` so two concurrent calls cannot both pass the
+        # check before either one inserts. ``asyncio.Lock`` is cheap and
+        # uncontended in the normal single-request case.
+        already_in_flight = False
+        async with self._registry_lock:
+            if job_match_id in self._confirm_events:
+                already_in_flight = True
+            else:
+                self._confirm_events[job_match_id] = asyncio.Event()
+                self._cancel_events[job_match_id] = asyncio.Event()
+
+        if already_in_flight:
             if reserved_app_id is not None:
                 try:
                     await self._recorder.release_reserved_slot(db, reserved_app_id)
@@ -133,9 +153,6 @@ class ApplicationEngine:
                 method=mode.value,
                 message=f"Job {job_match_id} already has an application in progress.",
             )
-
-        self._confirm_events[job_match_id] = asyncio.Event()
-        self._cancel_events[job_match_id] = asyncio.Event()
 
         # ── Build FSM context ───────────────────────────────────────────
         ctx = ApplyContext(

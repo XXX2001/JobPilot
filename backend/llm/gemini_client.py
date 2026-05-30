@@ -67,6 +67,10 @@ class GeminiRateLimitError(Exception):
     pass
 
 
+class GeminiCallFailed(Exception):
+    """A non-rate-limit Gemini failure (bad key, network, backend 5xx)."""
+
+
 class GeminiJSONError(Exception):
     pass
 
@@ -194,8 +198,10 @@ class GeminiClient:
                         )
                         await asyncio.sleep(delay)
                         continue
-                    raise GeminiRateLimitError(str(e)) from e
-        raise GeminiRateLimitError(f"All model candidates failed: {last_exc}")
+                    if "429" in msg:
+                        raise GeminiRateLimitError(str(e)) from e
+                    raise GeminiCallFailed(str(e)) from e
+        raise GeminiCallFailed(f"All model candidates failed: {last_exc}")
 
     async def generate_json(self, prompt: str, schema: Type[T]) -> T:
         """Generate structured JSON output from the model.

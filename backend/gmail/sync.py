@@ -30,6 +30,16 @@ logger = logging.getLogger(__name__)
 _CONCURRENCY = 10
 
 
+def _is_gmail_dedup_violation(exc: IntegrityError) -> bool:
+    """True only for the gmail_messages dedup UNIQUE violation.
+
+    A FK violation (post-T2a) must NOT be classified as dedup — that would
+    silently swallow a real referential-integrity bug.
+    """
+    text = str(getattr(exc, "orig", exc)).lower()
+    return "unique constraint failed" in text and "gmail_message" in text
+
+
 def _now() -> datetime:
     # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
     # DB rows (stored naive in SQLite) remain comparable.
@@ -193,9 +203,11 @@ class GmailSyncWorker:
             session.add(row)
             try:
                 await session.commit()
-            except IntegrityError:
+            except IntegrityError as exc:
                 await session.rollback()
-                return False
+                if _is_gmail_dedup_violation(exc):
+                    return False
+                raise
         await broadcast_gmail_message_received(
             gmail_message_id=row.gmail_message_id,
             from_address=row.from_address,

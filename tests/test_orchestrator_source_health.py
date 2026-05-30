@@ -103,7 +103,7 @@ async def test_adzuna_ok_records_healthy():
         deduplicator=_DummyDedup(),
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[_mock_adzuna_source()],
@@ -122,7 +122,7 @@ async def test_adzuna_empty_records_degraded():
         deduplicator=_DummyDedup(),
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[_mock_adzuna_source()],
@@ -141,7 +141,7 @@ async def test_adzuna_error_records_error():
         deduplicator=_DummyDedup(),
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[_mock_adzuna_source()],
@@ -162,7 +162,7 @@ async def test_default_adzuna_path_records_health():
         deduplicator=_DummyDedup(),
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[],
@@ -182,7 +182,7 @@ async def test_browser_source_tier1_ok_records_healthy():
         scrapling_fetcher=scrapling,
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[_mock_browser_source("linkedin")],
@@ -203,7 +203,7 @@ async def test_browser_source_all_empty_records_empty():
         scrapling_fetcher=_DummyScrapling(jobs=[]),
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[_mock_browser_source("linkedin")],
@@ -224,7 +224,7 @@ async def test_browser_source_tier1_error_then_tier2_empty_records_error():
         scrapling_fetcher=_DummyScrapling(raise_exc=RuntimeError("403 blocked")),
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[_mock_browser_source("linkedin")],
@@ -243,7 +243,7 @@ async def test_lab_source_records_health():
         deduplicator=_DummyDedup(),
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[_mock_lab_source()],
@@ -263,7 +263,7 @@ async def test_tracker_persists_across_runs():
         source_health=tracker,
     )
     for _ in range(3):
-        await orch.run_morning_batch(
+        await orch.scrape_batch(
             keywords=["python"],
             filters=_filters(),
             sources=[_mock_adzuna_source()],
@@ -297,7 +297,7 @@ async def test_browser_pagination_loops_when_max_pages_set():
         scrapling_fetcher=scrapling,
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[src],
@@ -321,7 +321,7 @@ async def test_browser_pagination_stops_early_on_short_page():
         scrapling_fetcher=scrapling,
         source_health=tracker,
     )
-    await orch.run_morning_batch(
+    await orch.scrape_batch(
         keywords=["python"],
         filters=_filters(),
         sources=[src],

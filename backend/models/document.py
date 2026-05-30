@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
@@ -14,7 +14,10 @@ class TailoredDocument(Base):
     __tablename__ = "tailored_documents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    job_match_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    job_match_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("job_matches.id", ondelete="CASCADE"),
+        nullable=True, index=True,
+    )
     doc_type: Mapped[str] = mapped_column(String, nullable=False)
     tex_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     pdf_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)

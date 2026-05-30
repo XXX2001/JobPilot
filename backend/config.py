@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
     APPLY_TIER1_ENABLED: bool = Field(True, env="APPLY_TIER1_ENABLED")
 
+    # Timeouts (seconds) — fail loudly instead of hanging forever.
+    TECTONIC_TIMEOUT_SECONDS: float = Field(60.0, env="TECTONIC_TIMEOUT_SECONDS")
+    GEMINI_TIMEOUT_SECONDS: float = Field(45.0, env="GEMINI_TIMEOUT_SECONDS")
+
     # ── Gmail integration (Phase 1) ──────────────────────────────────────
     GMAIL_CLIENT_ID: str = Field("", env="GMAIL_CLIENT_ID")
     GMAIL_CLIENT_SECRET: SecretStr = SecretStr("")

@@ -223,6 +223,13 @@ class ApplicationEngine:
         """
         recorder = self._recorder
 
+        async def _close_browser(c: ApplyContext) -> None:
+            if c.browser is not None:
+                try:
+                    await c.browser.stop()
+                except Exception:
+                    pass  # best-effort; never shadow the outcome
+
         # ── RESERVED ──────────────────────────────────────────────────
         async def reserved_next(c: ApplyContext) -> State:
             # Slot already reserved by the time we enter this state.
@@ -335,32 +342,31 @@ class ApplicationEngine:
 
         # ── APPLIED (terminal) ─────────────────────────────────────────
         async def applied_on_enter(c: ApplyContext) -> None:
-            # Nothing extra — outcome already set in recording_next.
-            pass
+            # Auto-apply submitted and is done — close its browser. Assisted
+            # success intentionally leaves the browser open so the user can
+            # review and submit manually.
+            if c.mode != ApplyMode.ASSISTED.value:
+                await _close_browser(c)
 
         # ── CANCELLED (terminal) ───────────────────────────────────────
         async def cancelled_on_enter(c: ApplyContext) -> None:
-            """Release daily-limit slot on cancellation."""
+            """Release daily-limit slot + close browser on cancellation."""
             if c.reserved_app_id is not None:
                 try:
                     await recorder.release_reserved_slot(c.db, c.reserved_app_id)
                 except Exception:
                     pass  # Already logged; don't shadow the cancel outcome.
+            await _close_browser(c)
 
         # ── FAILED (terminal) ──────────────────────────────────────────
         async def failed_on_enter(c: ApplyContext) -> None:
-            """Release slot + best-effort browser cleanup."""
+            """Release slot + close browser cleanly."""
             if c.reserved_app_id is not None:
                 try:
                     await recorder.release_reserved_slot(c.db, c.reserved_app_id)
                 except Exception:
                     pass  # Already logged.
-            # Close browser if one was left open
-            if c.browser is not None:
-                try:
-                    await c.browser.stop()
-                except Exception:
-                    pass
+            await _close_browser(c)
             if c.outcome_status != RESULT_FAILED:
                 c.outcome_status = RESULT_FAILED
 

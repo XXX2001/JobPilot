@@ -542,6 +542,67 @@ async def test_dispatch_copies_strategy_browser_onto_ctx(monkeypatch):
     assert ctx.browser is fake
 
 
+def _build_ctx(engine, mode: str):
+    from backend.applier.engine import ApplyMode
+    from backend.applier.state import ApplyContext
+    return ApplyContext(
+        job_match_id=1, mode=mode, apply_url="https://x", db=None,
+        extras={"mode": ApplyMode(mode)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_terminal_closes_browser():
+    from backend.applier.engine import ApplicationEngine
+    from backend.applier.state import State
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    ctx = _build_ctx(engine, "auto")
+    ctx.browser = _FakeBrowser()
+    transitions = engine._build_transitions(ctx)
+    await transitions[State.FAILED].on_enter(ctx)
+    assert ctx.browser.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_terminal_closes_browser():
+    from backend.applier.engine import ApplicationEngine
+    from backend.applier.state import State
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    ctx = _build_ctx(engine, "auto")
+    ctx.browser = _FakeBrowser()
+    transitions = engine._build_transitions(ctx)
+    await transitions[State.CANCELLED].on_enter(ctx)
+    assert ctx.browser.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_assisted_success_leaves_browser_open():
+    from backend.applier.engine import ApplicationEngine
+    from backend.applier.state import State
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    ctx = _build_ctx(engine, "assisted")
+    ctx.browser = _FakeBrowser()
+    transitions = engine._build_transitions(ctx)
+    await transitions[State.APPLIED].on_enter(ctx)
+    assert ctx.browser.stopped is False
+
+
+@pytest.mark.asyncio
+async def test_auto_success_closes_browser():
+    from backend.applier.engine import ApplicationEngine
+    from backend.applier.state import State
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    ctx = _build_ctx(engine, "auto")
+    ctx.browser = _FakeBrowser()
+    transitions = engine._build_transitions(ctx)
+    await transitions[State.APPLIED].on_enter(ctx)
+    assert ctx.browser.stopped is True
+
+
 @pytest.mark.asyncio
 async def test_full_pipeline_fails_partway_through_middle_state():
     """If a middle-state next() raises, driver should land in FAILED.

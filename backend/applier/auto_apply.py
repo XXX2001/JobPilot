@@ -353,10 +353,6 @@ class AutoApplyStrategy:
 
         except Exception as exc:
             logger.error("Auto-apply fill phase failed for job_id=%d: %s", job_id, exc, exc_info=True)
-            try:
-                await browser.stop()
-            except Exception:
-                pass
             return ApplicationResult(
                 status="cancelled",
                 method="auto",
@@ -396,10 +392,6 @@ class AutoApplyStrategy:
 
         if not done:
             logger.warning("Auto-apply confirmation timed out for job_id=%d", job_id)
-            try:
-                await browser.stop()
-            except Exception:
-                pass
             return ApplicationResult(
                 status="cancelled",
                 method="auto",
@@ -408,10 +400,6 @@ class AutoApplyStrategy:
 
         if not confirm_event.is_set():
             logger.info("User cancelled auto-apply for job_id=%d", job_id)
-            try:
-                await browser.stop()
-            except Exception:
-                pass
             return ApplicationResult(
                 status="cancelled", method="auto", message="Cancelled by user."
             )
@@ -439,11 +427,6 @@ class AutoApplyStrategy:
                 method="auto",
                 message=f"Submit phase failed: {exc}",
             )
-        finally:
-            try:
-                await browser.stop()
-            except Exception:
-                pass
 
 
 __all__ = ["AutoApplyStrategy"]

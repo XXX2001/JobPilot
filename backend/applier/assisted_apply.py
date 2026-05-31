@@ -189,10 +189,6 @@ class AssistedApplyStrategy:
             logger.exception(
                 "Assisted apply agent failed for %s: %s", apply_url, exc
             )
-            try:
-                await browser.stop()
-            except Exception:
-                pass
             # Do NOT return a success "assisted" result — the agent
             # never finished pre-filling, so there is nothing for the
             # user to review. Surface the failure to the caller. This

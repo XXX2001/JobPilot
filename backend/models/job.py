@@ -92,6 +92,15 @@ class JobMatch(Base):
             "'rejected', 'selected')",
             name="ck_job_matches_status",
         ),
+        # Queue listing filters by ``status`` and orders by ``batch_date`` /
+        # ``score`` (``backend/api/queue.py``); this covering index serves that
+        # hot path without scanning the table.
+        Index(
+            "ix_job_matches_status_batch_date_score",
+            "status",
+            "batch_date",
+            "score",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

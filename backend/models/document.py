@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -24,6 +25,14 @@ class TailoredDocument(Base):
         CheckConstraint(
             "doc_type IN ('cv', 'letter')",
             name="ck_tailored_documents_doc_type",
+        ),
+        # Document lookups by match + type + recency
+        # (``backend/api/documents.py``) are served by this covering index.
+        Index(
+            "ix_tailored_documents_match_doc_created",
+            "job_match_id",
+            "doc_type",
+            "created_at",
         ),
     )
 

@@ -37,6 +37,9 @@ class Application(Base):
             "method = 'manual' OR job_match_id IS NOT NULL",
             name="ck_applications_job_match_required",
         ),
+        # Tracker listing filters by ``status`` and orders by ``created_at``
+        # (``backend/api/applications.py``); this covering index serves it.
+        Index("ix_applications_status_created", "status", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

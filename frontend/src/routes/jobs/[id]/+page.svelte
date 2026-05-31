@@ -5,6 +5,7 @@
 	import { fetchThread } from '$lib/api/gmail';
 	import { getApplyConfirmation } from '$lib/utils/easterEggs';
 	import ScoreIndicator from '$lib/components/ScoreIndicator.svelte';
+	import { computeScoreBreakdown, type KeywordHits } from '$lib/utils/scoreBreakdown';
 	import {
 		ArrowLeft,
 		Briefcase,
@@ -18,9 +19,22 @@
 		FileText,
 		Mail,
 		AlertCircle,
-		CheckCircle2
+		CheckCircle2,
+		Sparkles,
+		Target
 	} from 'lucide-svelte';
 	import type { QueueMatch, DiffEntry } from '$lib/types/api';
+
+	interface JobScoreResponse {
+		job_id: number;
+		score: number | null;
+		keyword_hits: KeywordHits;
+	}
+
+	interface SearchSettingsResponse {
+		keywords?: { include?: string[] };
+		salary_min?: number | null;
+	}
 
 	interface DiffResponse {
 		match_id: number;
@@ -65,8 +79,25 @@
 	let applyLoading = $state('');
 	let error = $state('');
 	let successMsg = $state('');
-	let activeTab = $state<'description' | 'diff' | 'emails'>('description');
+	let activeTab = $state<'description' | 'score' | 'diff' | 'emails'>('description');
 	let enriching = $state(false);
+
+	// "Why this score" inputs, composed client-side from existing endpoints:
+	// keyword_hits comes from GET /api/jobs/{job_id}/score and the configured
+	// include-keywords + salary target come from GET /api/settings/search.
+	let keywordHits = $state<KeywordHits>(null);
+	let searchSettings = $state<SearchSettingsResponse | null>(null);
+	const breakdown = $derived(
+		job
+			? computeScoreBreakdown(
+					keywordHits,
+					searchSettings?.keywords?.include ?? [],
+					{ min: job.salary_min ?? null, max: job.salary_max ?? null },
+					searchSettings?.salary_min ?? null
+				)
+			: null
+	);
+	const fmtSalary = (v: number | null) => (v == null ? '—' : `${Math.round(v / 1000)}k€`);
 
 	// Linked-emails state. applicationId is resolved by looking up the
 	// Application row whose job_match_id matches the current matchId.
@@ -111,10 +142,28 @@
 			// we can light up the "Linked emails" tab. Tracker is the
 			// authoritative source for application rows.
 			resolveApplicationId();
+			// Fire-and-forget: pull keyword_hits + search settings for the
+			// "Why this score" breakdown. Non-fatal — the panel degrades
+			// gracefully to "all configured keywords missing" if either fails.
+			loadScoreBreakdown();
 		} catch (e: any) {
 			error = e.message ?? 'Failed to load job';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function loadScoreBreakdown() {
+		if (!matchData) return;
+		try {
+			const [scoreRes, settingsRes] = await Promise.all([
+				apiFetch<JobScoreResponse>(`/api/jobs/${matchData.job_id}/score`),
+				apiFetch<SearchSettingsResponse>('/api/settings/search')
+			]);
+			keywordHits = scoreRes.keyword_hits ?? null;
+			searchSettings = settingsRes;
+		} catch {
+			// Non-fatal: leave defaults so the breakdown still renders.
 		}
 	}
 
@@ -294,6 +343,15 @@
 			Description
 		</button>
 		<button
+			onclick={() => (activeTab = 'score')}
+			class="flex items-center gap-1.5 text-xs px-4 py-2 border-b-2 transition-colors {activeTab === 'score'
+				? 'border-primary text-foreground font-medium'
+				: 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<Sparkles size={12} />
+			Why this score
+		</button>
+		<button
 			onclick={() => (activeTab = 'diff')}
 			class="flex items-center gap-1.5 text-xs px-4 py-2 border-b-2 transition-colors {activeTab === 'diff'
 				? 'border-primary text-foreground font-medium'
@@ -356,6 +414,98 @@
 					{enriching ? 'Fetching full description…' : 'Fetch Full Description'}
 				</button>
 			{/if}
+		</div>
+	{:else if activeTab === 'score'}
+		<!-- Why this score: keyword match + salary comparison -->
+		<div class="max-w-3xl space-y-4">
+			<div class="flex items-center gap-4 bg-card border border-border rounded-lg p-5">
+				<ScoreIndicator score={Math.round(score)} />
+				<div>
+					<h2 class="text-sm font-semibold">Match score: {Math.round(score)}/100</h2>
+					<p class="text-xs text-muted-foreground mt-0.5">
+						Based on your configured keywords and salary target.
+					</p>
+				</div>
+			</div>
+
+			<!-- Keywords -->
+			<div class="bg-card border border-border rounded-lg p-5">
+				<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+					Matched keywords
+				</h3>
+				{#if breakdown && breakdown.matched.length > 0}
+					<div class="flex flex-wrap gap-1.5">
+						{#each breakdown.matched as kw (kw)}
+							<span
+								class="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/20"
+							>
+								<CheckCircle2 size={11} />
+								{kw}
+							</span>
+						{/each}
+					</div>
+				{:else}
+					<p class="text-xs text-muted-foreground">No matched keywords recorded for this match.</p>
+				{/if}
+
+				{#if breakdown && breakdown.missing.length > 0}
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mt-4 mb-3">
+						Missing keywords
+					</h3>
+					<div class="flex flex-wrap gap-1.5">
+						{#each breakdown.missing as kw (kw)}
+							<span
+								class="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border"
+							>
+								{kw}
+							</span>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Salary comparison -->
+			<div class="bg-card border border-border rounded-lg p-5">
+				<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 flex items-center gap-1.5">
+					<Target size={12} />
+					Salary vs target
+				</h3>
+				{#if breakdown}
+					<div class="flex items-center gap-6 text-sm">
+						<div>
+							<p class="text-xs text-muted-foreground">Job range</p>
+							<p class="font-medium">
+								{#if breakdown.salary.jobMin == null && breakdown.salary.jobMax == null}
+									Not disclosed
+								{:else}
+									{fmtSalary(breakdown.salary.jobMin)} – {fmtSalary(breakdown.salary.jobMax)}
+								{/if}
+							</p>
+						</div>
+						<div>
+							<p class="text-xs text-muted-foreground">Your target</p>
+							<p class="font-medium">{fmtSalary(breakdown.salary.target)}</p>
+						</div>
+						<div class="ml-auto">
+							{#if breakdown.salary.meetsTarget === true}
+								<span class="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-green-500/15 text-green-400 border border-green-500/20">
+									<CheckCircle2 size={12} />
+									Meets target
+								</span>
+							{:else if breakdown.salary.meetsTarget === false}
+								<span class="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 border border-red-500/20">
+									<AlertCircle size={12} />
+									Below target
+								</span>
+							{:else}
+								<span class="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground border border-border">
+									Unknown
+								</span>
+							{/if}
+						</div>
+					</div>
+				{/if}
+			</div>
 		</div>
 	{:else if activeTab === 'diff'}
 		<!-- CV Diff view -->

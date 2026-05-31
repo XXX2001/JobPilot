@@ -87,7 +87,8 @@ async def oauth_callback(code: str, state: str, error: Optional[str] = None) -> 
         logger.warning("Gmail OAuth callback error: %s", error)
         return RedirectResponse("/settings?gmail_error=" + error, status_code=302)
     if not _verify_state(state):
-        raise HTTPException(status_code=400, detail="Invalid or expired OAuth state")
+        logger.warning("Gmail OAuth callback: invalid or expired state")
+        return RedirectResponse("/settings?gmail_error=invalid_state", status_code=302)
     _ensure_oauth_configured()
 
     async with httpx.AsyncClient(timeout=15.0) as client:

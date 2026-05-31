@@ -1,18 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import JSON, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
-
-
-def _now() -> datetime:
-    # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
-    # DB rows (stored naive in SQLite) remain comparable.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from backend.utils.time import naive_utc_now
 
 
 class UserProfile(Base):
@@ -30,8 +25,8 @@ class UserProfile(Base):
     base_letter_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_info: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     last_dashboard_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
 
 
 class SearchSettings(Base):
@@ -72,5 +67,5 @@ class SiteCredential(Base):
     site_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     encrypted_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     encrypted_password: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

@@ -74,14 +74,25 @@ The dirty working tree resolved into two logical commits:
 
 This consolidation does **not** make the codebase production-ready. Outstanding:
 
-- **T4a items 4 & 5** — `ApplyContext.browser` assignment + browser-cleanup
-  centralization in the FSM. (Item 6 is now landed; see above.)
-- **T3 — silent failures** — killed in flight, 0 commits. Partial work may
-  exist in worktree `agent-a64f24b01801aedbc`.
-- **T2a — schema enforcement** — killed in flight, 0 commits. Stub files in
-  worktree `agent-a5129daaf3667d24f`.
+- ~~**T4a items 4 & 5**~~ — **DONE 2026-05-30** on branch
+  `fix/finish-inflight-sprint`. `ApplyContext.browser` is now populated and
+  browser cleanup is centralized in the FSM terminals (mode-aware; assisted
+  success leaves the browser open). See CHANGELOG "fix-sprint (finish) 2026-05-30".
+- ~~**T3 — silent failures**~~ — **DONE 2026-05-30**. All 10 deliverables landed,
+  proven by `tests/test_silent_failures.py` (16→0 failing). Rebuilt fresh on
+  `main` using the killed worktree's test file as the contract.
+- ~~**T2a — schema enforcement**~~ — **DONE 2026-05-30** (full unification): FK
+  enforcement on, Alembic the sole schema source (`_migrate_add_columns`
+  removed), `backend/utils/time.py` helper, integrity + migration tests.
 - **Follow-on tracks never started** — T1b (honest endpoints), T4b (strategy
-  collapse), T7b (Settings split + WS backoff), T2b (schema tightening).
+  collapse), T7b (Settings split + WS backoff), T2b (schema tightening). Still
+  deferred.
+
+> **2026-05-30 finish sprint:** the three in-flight tracks above were completed
+> on `fix/finish-inflight-sprint` via subagent-driven development (per-lot
+> implement + spec review + code-quality review). Design:
+> `docs/superpowers/specs/2026-05-30-finish-inflight-sprint-design.md`; plans:
+> `docs/superpowers/plans/2026-05-30-finish-sprint-lot{1,2,3}-*.md`.
 
 ## Reference
 

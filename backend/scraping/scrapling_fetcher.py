@@ -47,6 +47,7 @@ class ScraplingFetcher:
 
     def __init__(self, gemini_client: "GeminiClient") -> None:
         self._gemini = gemini_client
+        self._selector_miss_counts: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -342,8 +343,14 @@ class ScraplingFetcher:
                     continue
             if matched_sel:
                 logger.info("[Tier 1] scoped to selector %r — site=%s", matched_sel, site)
+                self._selector_miss_counts[site] = 0
             else:
-                logger.debug("[Tier 1] no content selector matched for site=%s (using full page)", site)
+                self._selector_miss_counts[site] = self._selector_miss_counts.get(site, 0) + 1
+                logger.warning(
+                    "[Tier 1] content selector matched no nodes for site=%s "
+                    "(miss #%d) — using full page",
+                    site, self._selector_miss_counts[site],
+                )
 
         # Step 3: remove noise tags
         _NOISE_TAGS = {"script", "style", "nav", "footer", "header", "noscript", "svg", "iframe"}

@@ -5,6 +5,30 @@ import re
 
 logger = logging.getLogger(__name__)
 
+_LATEX_SPECIALS = [
+    ("\\", r"\textbackslash{}"),  # must run first
+    ("&", r"\&"),
+    ("%", r"\%"),
+    ("$", r"\$"),
+    ("#", r"\#"),
+    ("_", r"\_"),
+    ("{", r"\{"),
+    ("}", r"\}"),
+]
+
+
+def _escape_latex(value: str) -> str:
+    """Escape LaTeX-special characters so substituted text cannot inject commands."""
+    # Backslash is replaced first (via a sentinel) so the braces it introduces
+    # as part of ``\textbackslash{}`` are not re-escaped by the { / } passes.
+    sentinel = "\x00"
+    out = value.replace("\\", sentinel)
+    for char, replacement in _LATEX_SPECIALS:
+        if char == "\\":
+            continue
+        out = out.replace(char, replacement)
+    return out.replace(sentinel, r"\textbackslash{}")
+
 
 class LaTeXInjector:
     """Marker-based text replacement for the letter-pipeline.
@@ -32,5 +56,5 @@ class LaTeXInjector:
     def inject_letter_edit(self, original_tex: str, new_paragraph: str, company_name: str) -> str:
         """Replace letter paragraph and {company_name} placeholders."""
         tex = self._replace_marker_content(original_tex, "LETTER:PARA", new_paragraph)
-        tex = tex.replace("{company_name}", company_name)
+        tex = tex.replace("{company_name}", _escape_latex(company_name))
         return tex

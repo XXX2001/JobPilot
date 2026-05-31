@@ -70,6 +70,9 @@ class ApplicationEngine:
         # Per-job asyncio events for confirm/cancel coming from WS
         self._confirm_events: dict[int, asyncio.Event] = {}
         self._cancel_events: dict[int, asyncio.Event] = {}
+        # Cached review snapshots so a reconnecting client can re-fetch the
+        # pending apply_review payload over HTTP (engine survives no WS client).
+        self._pending_reviews: dict[int, dict] = {}
         # T4a: guard the re-entrancy check (read-then-write of the events
         # dicts) so two concurrent apply() calls for the same job_match_id
         # cannot both pass the membership check before either one inserts.
@@ -87,11 +90,31 @@ class ApplicationEngine:
         """Trigger confirmation for *job_id* (``confirm_submit`` WS message)."""
         if job_id in self._confirm_events:
             self._confirm_events[job_id].set()
+        self._pending_reviews.pop(job_id, None)
+
+    # NOTE: the assisted/auto review-pause path does not call this yet — the
+    # cache + GET review-state endpoint shipped per plan Task 11, but wiring the
+    # broadcast site to populate the snapshot is deferred (needs design out of
+    # this lot's scope) and tracked for a follow-on.
+    def record_pending_review(
+        self, job_id: int, *, filled_fields: dict, screenshot_b64: Optional[str]
+    ) -> None:
+        """Cache the review snapshot so a reconnecting client can fetch it."""
+        self._pending_reviews[job_id] = {
+            "job_id": job_id,
+            "filled_fields": filled_fields,
+            "screenshot_b64": screenshot_b64,
+        }
+
+    def get_pending_review(self, job_id: int) -> Optional[dict]:
+        """Return the cached snapshot for *job_id*, or None."""
+        return self._pending_reviews.get(job_id)
 
     def signal_cancel(self, job_id: int) -> None:
         """Trigger cancellation for *job_id* (``cancel_apply`` WS message)."""
         if job_id in self._cancel_events:
             self._cancel_events[job_id].set()
+        self._pending_reviews.pop(job_id, None)
 
     # ------------------------------------------------------------------ #
     #  Main entry point                                                    #
@@ -180,9 +203,23 @@ class ApplicationEngine:
 
         try:
             status, method, message = await chart.run(ctx)
+        except BaseException:
+            # Abnormal exit (incl. asyncio.CancelledError, which the FSM's
+            # ``except Exception`` does NOT catch) bypasses the terminal
+            # compensation, so close the live browser here before propagating.
+            # Safe: an exception path is never the assisted-success case
+            # (that returns normally), so we never close a browser the user
+            # still needs.
+            if ctx.browser is not None:
+                try:
+                    await ctx.browser.stop()
+                except Exception:
+                    pass
+            raise
         finally:
             self._confirm_events.pop(job_match_id, None)
             self._cancel_events.pop(job_match_id, None)
+            self._pending_reviews.pop(job_match_id, None)
 
         return ApplicationResult(status=status, method=method, message=message or "")
 
@@ -198,6 +235,13 @@ class ApplicationEngine:
         and MANUAL lives in the ``_dispatch_state`` function.
         """
         recorder = self._recorder
+
+        async def _close_browser(c: ApplyContext) -> None:
+            if c.browser is not None:
+                try:
+                    await c.browser.stop()
+                except Exception:
+                    pass  # best-effort; never shadow the outcome
 
         # ── RESERVED ──────────────────────────────────────────────────
         async def reserved_next(c: ApplyContext) -> State:
@@ -311,32 +355,31 @@ class ApplicationEngine:
 
         # ── APPLIED (terminal) ─────────────────────────────────────────
         async def applied_on_enter(c: ApplyContext) -> None:
-            # Nothing extra — outcome already set in recording_next.
-            pass
+            # Auto-apply submitted and is done — close its browser. Assisted
+            # success intentionally leaves the browser open so the user can
+            # review and submit manually.
+            if c.mode != ApplyMode.ASSISTED.value:
+                await _close_browser(c)
 
         # ── CANCELLED (terminal) ───────────────────────────────────────
         async def cancelled_on_enter(c: ApplyContext) -> None:
-            """Release daily-limit slot on cancellation."""
+            """Release daily-limit slot + close browser on cancellation."""
             if c.reserved_app_id is not None:
                 try:
                     await recorder.release_reserved_slot(c.db, c.reserved_app_id)
                 except Exception:
                     pass  # Already logged; don't shadow the cancel outcome.
+            await _close_browser(c)
 
         # ── FAILED (terminal) ──────────────────────────────────────────
         async def failed_on_enter(c: ApplyContext) -> None:
-            """Release slot + best-effort browser cleanup."""
+            """Release slot + close browser cleanly."""
             if c.reserved_app_id is not None:
                 try:
                     await recorder.release_reserved_slot(c.db, c.reserved_app_id)
                 except Exception:
                     pass  # Already logged.
-            # Close browser if one was left open
-            if c.browser is not None:
-                try:
-                    await c.browser.stop()
-                except Exception:
-                    pass
+            await _close_browser(c)
             if c.outcome_status != RESULT_FAILED:
                 c.outcome_status = RESULT_FAILED
 
@@ -360,6 +403,12 @@ class ApplicationEngine:
                     "Could not persist db_write_failed event for job_match_id=%d",
                     c.job_match_id,
                 )
+            # Auto-apply already submitted remotely; its browser is no longer
+            # needed, so close it the same mode-aware way as APPLIED. Assisted
+            # keeps the browser open so the user can still review/submit even
+            # though the local record failed.
+            if c.mode != ApplyMode.ASSISTED.value:
+                await _close_browser(c)
 
         return {
             State.RESERVED: Transition(
@@ -407,31 +456,42 @@ class ApplicationEngine:
         letter_pdf: Optional[Path] = ctx.extras["letter_pdf"]
 
         if mode == ApplyMode.AUTO:
-            return await self._auto.apply(
-                job_id=ctx.job_match_id,
-                apply_url=ctx.apply_url,
-                full_name=applicant.full_name,
-                email=applicant.email,
-                phone=applicant.phone,
-                location=applicant.location,
-                additional_answers=applicant.additional_answers_json,
-                cv_pdf=cv_pdf,
-                letter_pdf=letter_pdf,
-                confirm_event=ctx.confirm_event,
-                cancel_event=ctx.cancel_event,
-            )
+            # Copy the live browser onto ctx in a finally so the FSM/cleanup
+            # net can close it even when apply() raises or is cancelled before
+            # returning (otherwise the handle would leak).
+            try:
+                result = await self._auto.apply(
+                    job_id=ctx.job_match_id,
+                    apply_url=ctx.apply_url,
+                    full_name=applicant.full_name,
+                    email=applicant.email,
+                    phone=applicant.phone,
+                    location=applicant.location,
+                    additional_answers=applicant.additional_answers_json,
+                    cv_pdf=cv_pdf,
+                    letter_pdf=letter_pdf,
+                    confirm_event=ctx.confirm_event,
+                    cancel_event=ctx.cancel_event,
+                )
+            finally:
+                ctx.browser = getattr(self._auto, "_active_browser", None)
+            return result
         if mode == ApplyMode.ASSISTED:
-            return await self._assisted.apply(
-                apply_url=ctx.apply_url,
-                full_name=applicant.full_name,
-                email=applicant.email,
-                phone=applicant.phone,
-                location=applicant.location,
-                additional_answers=applicant.additional_answers_json,
-                cv_pdf=cv_pdf,
-                letter_pdf=letter_pdf,
-            )
-        # MANUAL
+            try:
+                result = await self._assisted.apply(
+                    apply_url=ctx.apply_url,
+                    full_name=applicant.full_name,
+                    email=applicant.email,
+                    phone=applicant.phone,
+                    location=applicant.location,
+                    additional_answers=applicant.additional_answers_json,
+                    cv_pdf=cv_pdf,
+                    letter_pdf=letter_pdf,
+                )
+            finally:
+                ctx.browser = getattr(self._assisted, "_active_browser", None)
+            return result
+        # MANUAL — no browser.
         return await self._manual.apply(
             apply_url=ctx.apply_url,
             cv_pdf=cv_pdf,

@@ -34,6 +34,7 @@ from backend.applier.daily_limit import COUNTABLE_STATUSES
 from backend.models.application import Application
 from backend.models.job import Job, JobMatch
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
+from backend.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,6 @@ def _iso(dt: datetime | None) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.isoformat()
-
-
-def _utc_now() -> datetime:
-    """Return current time as naive UTC (matches DB storage convention)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 class MatchBrief(BaseModel):
@@ -111,7 +107,7 @@ async def get_today(db: DBSession) -> TodayOut:
     inside the same flush so two concurrent GETs cannot both see the
     same "new" matches.
     """
-    now = _utc_now()
+    now = utc_now()
 
     # ── 1. Read & update last_dashboard_seen_at ─────────────────────────────
     profile_result = await db.execute(select(UserProfile).where(UserProfile.id == 1))

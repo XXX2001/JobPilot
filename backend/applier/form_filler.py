@@ -160,7 +160,7 @@ class PlaywrightFormFiller:
                     await page.fill(sel, val, timeout=3_000)
                     filled_fields[sel] = val
                 except Exception as exc:
-                    logger.debug("Could not fill %r: %s", sel, exc)
+                    logger.warning("Form fill failed: selector=%r: %s", sel, exc)
 
             # Phase 4: file uploads
             if cv_pdf and cv_pdf.exists():
@@ -170,7 +170,7 @@ class PlaywrightFormFiller:
                             await page.set_input_files(fi["selector"], str(cv_pdf), timeout=3_000)
                             logger.info("Uploaded CV: %s", cv_pdf)
                         except Exception as exc:
-                            logger.debug("CV upload failed for %r: %s", fi["selector"], exc)
+                            logger.warning("CV upload failed: selector=%r: %s", fi["selector"], exc)
 
             if letter_pdf and letter_pdf.exists():
                 for fi in mapping.get("file_inputs", []):
@@ -179,7 +179,7 @@ class PlaywrightFormFiller:
                             await page.set_input_files(fi["selector"], str(letter_pdf), timeout=3_000)
                             logger.info("Uploaded letter: %s", letter_pdf)
                         except Exception as exc:
-                            logger.debug("Letter upload failed for %r: %s", fi["selector"], exc)
+                            logger.warning("Letter upload failed: selector=%r: %s", fi["selector"], exc)
 
             # Phase 5: screenshot
             screenshot_b64: str | None = None
@@ -314,7 +314,7 @@ class PlaywrightFormFiller:
                     await page.fill(sel, val, timeout=3_000)
                     filled_fields[sel] = val
                 except Exception as exc:
-                    logger.debug("Could not fill %r: %s", sel, exc)
+                    logger.warning("Form fill failed: selector=%r: %s", sel, exc)
 
             if cv_pdf and cv_pdf.exists():
                 for fi in mapping.get("file_inputs", []):
@@ -322,7 +322,7 @@ class PlaywrightFormFiller:
                         try:
                             await page.set_input_files(fi["selector"], str(cv_pdf), timeout=3_000)
                         except Exception as exc:
-                            logger.debug("CV upload failed: %s", exc)
+                            logger.warning("CV upload failed: selector=%r: %s", fi["selector"], exc)
 
             if letter_pdf and letter_pdf.exists():
                 for fi in mapping.get("file_inputs", []):
@@ -330,7 +330,7 @@ class PlaywrightFormFiller:
                         try:
                             await page.set_input_files(fi["selector"], str(letter_pdf), timeout=3_000)
                         except Exception as exc:
-                            logger.debug("Letter upload failed: %s", exc)
+                            logger.warning("Letter upload failed: selector=%r: %s", fi["selector"], exc)
 
             logger.info("[Tier 1 assisted] Form pre-filled for %s", apply_url)
             # Keep browser open — user completes submission manually

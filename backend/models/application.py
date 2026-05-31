@@ -1,31 +1,29 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
-
-
-def _now() -> datetime:
-    # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
-    # DB rows (stored naive in SQLite) remain comparable.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from backend.utils.time import naive_utc_now
 
 
 class Application(Base):
     __tablename__ = "applications"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    job_match_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    job_match_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("job_matches.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+    )
     method: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="pending", index=True)
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     error_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now, index=True)
     last_correspondence_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, nullable=True
     )
@@ -42,7 +40,9 @@ class ApplicationEvent(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    application_id: Mapped[int] = mapped_column(Integer)
+    application_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("applications.id", ondelete="CASCADE"),
+    )
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     details: Mapped[Optional[str]] = mapped_column(String, nullable=True)
-    event_date: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    event_date: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

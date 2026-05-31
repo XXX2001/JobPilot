@@ -20,6 +20,7 @@ def _make_fetcher() -> ScraplingFetcher:
     """Create a ScraplingFetcher without a real GeminiClient (bypass __init__)."""
     fetcher = ScraplingFetcher.__new__(ScraplingFetcher)
     fetcher._gemini = None  # type: ignore[assignment]
+    fetcher._selector_miss_counts = {}
     return fetcher
 
 

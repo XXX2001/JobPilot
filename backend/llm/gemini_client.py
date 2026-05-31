@@ -67,6 +67,10 @@ class GeminiRateLimitError(Exception):
     pass
 
 
+class GeminiCallFailed(Exception):
+    """A non-rate-limit Gemini failure (bad key, network, backend 5xx)."""
+
+
 class GeminiJSONError(Exception):
     pass
 
@@ -77,7 +81,12 @@ class GeminiClient:
     RPM_LIMIT = 15
 
     def __init__(self) -> None:
-        self._client = genai.Client(api_key=settings.GOOGLE_API_KEY.get_secret_value())
+        self._client = genai.Client(
+            api_key=settings.GOOGLE_API_KEY.get_secret_value(),
+            http_options=genai_types.HttpOptions(
+                timeout=int(settings.GEMINI_TIMEOUT_SECONDS * 1000)  # SDK uses ms
+            ),
+        )
         # Build ordered list of candidate models: primary + fallbacks
         primary = settings.GOOGLE_MODEL or GEMINI_FALLBACK_MODEL
         fallbacks = [m.strip() for m in (settings.GOOGLE_MODEL_FALLBACKS or "").split(",")]
@@ -189,8 +198,10 @@ class GeminiClient:
                         )
                         await asyncio.sleep(delay)
                         continue
-                    raise GeminiRateLimitError(str(e)) from e
-        raise GeminiRateLimitError(f"All model candidates failed: {last_exc}")
+                    if "429" in msg:
+                        raise GeminiRateLimitError(str(e)) from e
+                    raise GeminiCallFailed(str(e)) from e
+        raise GeminiCallFailed(f"All model candidates failed: {last_exc}")
 
     async def generate_json(self, prompt: str, schema: Type[T]) -> T:
         """Generate structured JSON output from the model.

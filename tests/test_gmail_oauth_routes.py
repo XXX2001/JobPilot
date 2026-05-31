@@ -92,11 +92,14 @@ def test_oauth_callback_exchanges_and_persists(app_with_gmail: TestClient):
 
 
 def test_oauth_callback_with_bad_state_rejects(app_with_gmail: TestClient):
+    # T3-7: an invalid/forged state now redirects the SPA to /settings with a
+    # gmail_error marker instead of returning a bare 400 the frontend can't act on.
     resp = app_with_gmail.get(
         "/api/gmail/oauth/callback?code=anything&state=forged-state",
         follow_redirects=False,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/settings?gmail_error=invalid_state"
 
 
 def test_disconnect_removes_credential(app_with_gmail: TestClient):

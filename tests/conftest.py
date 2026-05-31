@@ -16,8 +16,8 @@ Test-DB isolation strategy (T8):
   setting the env var here is the only way to redirect it.
 
 This file deliberately keeps ``init_db()`` as the table-creation hook (so the
-runtime ``_migrate_add_columns`` shim is exercised against every test DB),
-rather than running raw ``Base.metadata.create_all``.
+Alembic ``upgrade head`` path is exercised against every test DB), rather than
+running raw ``Base.metadata.create_all``.
 """
 
 from __future__ import annotations
@@ -109,10 +109,13 @@ async def _wipe_all_tables() -> None:
     from backend.database import engine
 
     async with engine.begin() as conn:
-        # Defer FK checks during a wipe so the order isn't load-bearing for
-        # the ones that ARE declared (currently just ApplicationCorrespondence).
-        # PRAGMA foreign_keys toggling is connection-scoped on SQLite.
-        await conn.execute(text("PRAGMA foreign_keys = OFF"))
+        # Defer FK checks until COMMIT so the wipe order isn't load-bearing
+        # for the declared FK constraints. ``defer_foreign_keys`` is scoped to
+        # the current transaction and auto-resets at COMMIT, so the persistent
+        # ``foreign_keys=ON`` set by the connect listener survives — unlike
+        # toggling ``foreign_keys=OFF``, which would leave pooled connections
+        # with enforcement disabled for the rest of the session.
+        await conn.execute(text("PRAGMA defer_foreign_keys = ON"))
         for table in _WIPE_ORDER:
             try:
                 await conn.execute(text(f"DELETE FROM {table}"))

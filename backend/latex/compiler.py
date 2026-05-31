@@ -13,6 +13,10 @@ class LaTeXCompilationError(Exception):
     """Raised when Tectonic compilation fails or Tectonic is not found."""
 
 
+class LaTeXCompileTimeout(LaTeXCompilationError):
+    """Raised when Tectonic exceeds settings.TECTONIC_TIMEOUT_SECONDS."""
+
+
 class LaTeXCompiler:
     """Async wrapper around the Tectonic LaTeX compiler."""
 
@@ -69,12 +73,25 @@ class LaTeXCompiler:
         cmd = [tectonic, "--outdir", str(output_dir), str(tex_path)]
         logger.info("Compiling %s with tectonic -> %s", tex_path.name, output_dir)
 
+        from backend.config import settings
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=settings.TECTONIC_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError as exc:
+            proc.kill()
+            # Reap the killed child so its transport is closed (no ResourceWarning).
+            await proc.wait()
+            raise LaTeXCompileTimeout(
+                f"Tectonic timed out after {settings.TECTONIC_TIMEOUT_SECONDS}s "
+                f"compiling {tex_path.name}"
+            ) from exc
 
         if proc.returncode != 0:
             stderr_text = stderr.decode("utf-8", errors="replace")

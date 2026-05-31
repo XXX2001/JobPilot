@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import platform
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional, Type, TypeVar
 
@@ -20,12 +20,9 @@ from backend.models.base import Base
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.scraping.site_prompts import SITE_CONFIGS
+from backend.utils.time import utc_now
 
 _T = TypeVar("_T", bound=Base)
-
-
-def _utc_now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 logger = logging.getLogger(__name__)
@@ -66,7 +63,7 @@ async def _upsert_singleton(
     else:
         for field, value in updates.items():
             setattr(row, field, value)
-        setattr(row, "updated_at", _utc_now())
+        setattr(row, "updated_at", utc_now())
 
     await db.commit()
     await db.refresh(row)
@@ -229,8 +226,8 @@ async def get_profile(db: DBSession):
             base_cv_path=None,
             base_letter_path=None,
             additional_info=None,
-            created_at=_utc_now(),
-            updated_at=_utc_now(),
+            created_at=utc_now(),
+            updated_at=utc_now(),
         )
     return ProfileOut.model_validate(profile)
 
@@ -447,7 +444,7 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
         db.add(profile)
     else:
         profile.base_cv_path = relative_path
-        profile.updated_at = _utc_now()
+        profile.updated_at = utc_now()
 
     try:
         await db.commit()
@@ -661,7 +658,7 @@ async def save_credential(
     else:
         row.encrypted_email = enc_email
         row.encrypted_password = enc_pass
-        row.updated_at = _utc_now()
+        row.updated_at = utc_now()
 
     await db.commit()
     return CredentialSaveResponse(site_name=site_name, saved=True)

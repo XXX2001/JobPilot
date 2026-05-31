@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
@@ -12,6 +20,17 @@ from backend.utils.time import naive_utc_now
 
 class Application(Base):
     __tablename__ = "applications"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'applied', 'cancelled', 'failed', "
+            "'interview', 'offer', 'rejected')",
+            name="ck_applications_status",
+        ),
+        CheckConstraint(
+            "method IN ('auto', 'assisted', 'manual')",
+            name="ck_applications_method",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_match_id: Mapped[Optional[int]] = mapped_column(

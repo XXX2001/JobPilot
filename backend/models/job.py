@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -68,6 +69,11 @@ class JobMatch(Base):
     __table_args__ = (
         Index("ix_job_matches_job_id_matched_at", "job_id", "matched_at"),
         Index("ix_job_matches_job_id_batch_date", "job_id", "batch_date"),
+        CheckConstraint(
+            "status IN ('new', 'skipped', 'applying', 'applied', "
+            "'rejected', 'selected')",
+            name="ck_job_matches_status",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

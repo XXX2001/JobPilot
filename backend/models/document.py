@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
@@ -12,6 +20,12 @@ from backend.utils.time import naive_utc_now
 
 class TailoredDocument(Base):
     __tablename__ = "tailored_documents"
+    __table_args__ = (
+        CheckConstraint(
+            "doc_type IN ('cv', 'letter')",
+            name="ck_tailored_documents_doc_type",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_match_id: Mapped[Optional[int]] = mapped_column(

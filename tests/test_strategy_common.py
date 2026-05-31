@@ -66,7 +66,7 @@ def test_build_browser_loads_saved_session(monkeypatch, tmp_path) -> None:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(_strategy_common, "Browser", _FakeBrowser)
+    monkeypatch.setattr(_strategy_common, "_Browser", _FakeBrowser)
 
     state = tmp_path / "state.json"
     state.write_text("{}")
@@ -89,7 +89,7 @@ def test_build_browser_no_session(monkeypatch, tmp_path) -> None:
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    monkeypatch.setattr(_strategy_common, "Browser", _FakeBrowser)
+    monkeypatch.setattr(_strategy_common, "_Browser", _FakeBrowser)
 
     missing = tmp_path / "nope.json"
     base_kwargs: dict = dict(headless=False, disable_security=True)

@@ -14,6 +14,7 @@ prompt scaffolding; only the truly-shared fragments live here.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 # Canonical profile-directory key. Re-exported so the strategies have a single
@@ -21,13 +22,17 @@ from urllib.parse import urlparse
 # (the old per-strategy ``_site_key`` copies were removed in T4a).
 from backend.applier.captcha_handler import site_profile_key
 
-try:
-    from browser_use import Browser  # type: ignore
+if TYPE_CHECKING:
+    # Concrete type the Tier-2 strategies instantiate. Imported under
+    # TYPE_CHECKING only so the return annotation stays precise without the
+    # heavy runtime import; the runtime binding below may be ``None`` when
+    # browser_use is not installed, so it is aliased to avoid shadowing.
+    from browser_use import Browser
 
-    _BROWSER_USE_AVAILABLE = True
+try:
+    from browser_use import Browser as _Browser  # type: ignore
 except ImportError:
-    _BROWSER_USE_AVAILABLE = False
-    Browser = None  # type: ignore
+    _Browser = None  # type: ignore
 
 # Sites that require clicking "Apply" / "Easy Apply" before the form appears.
 _MULTI_STEP_DOMAINS = {"linkedin.com", "www.linkedin.com"}
@@ -47,12 +52,12 @@ def build_browser(browser_kwargs: dict, saved_session_path: Path | None) -> "Bro
     ``Browser(**browser_kwargs)``. Callers remain responsible for assigning the
     result to ``self._active_browser`` and for their own session-load logging.
     """
-    if Browser is None:  # pragma: no cover - guarded at the call sites
+    if _Browser is None:  # pragma: no cover - guarded at the call sites
         raise RuntimeError("browser_use is not available")
     if saved_session_path is not None and saved_session_path.exists():
         browser_kwargs["storage_state"] = saved_session_path.resolve().as_posix()
         browser_kwargs["user_data_dir"] = None
-    return Browser(**browser_kwargs)
+    return _Browser(**browser_kwargs)
 
 
 # Identical phone-prefix guidance embedded in both strategies' fill prompts.

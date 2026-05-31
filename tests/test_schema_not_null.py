@@ -19,6 +19,7 @@ Two layers of coverage, mirroring ``tests/test_schema_checks.py`` and
 """
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 import tempfile
 
@@ -204,6 +205,15 @@ def test_migration_cleans_up_null_columns_then_enforces():
                 "dedup_hash) VALUES (1, 'Engineer', 'Acme', 'Paris', "
                 "'https://example.com/1', datetime('now'), NULL)"
             )
+            # A job with a NULL dedup_hash AND a NULL location — the backfill
+            # must match the app's RAW f-string formula (None -> "none"), NOT a
+            # coalesced "" — otherwise the app re-duplicates this job on the
+            # next scrape.
+            conn.execute(
+                "INSERT INTO jobs (id, title, company, location, url, scraped_at, "
+                "dedup_hash) VALUES (2, 'Dev', 'Globex', NULL, "
+                "'https://example.com/2', datetime('now'), NULL)"
+            )
             # A valid match so the orphan tailored_document below is the ONLY
             # NULL-job_match_id row (and not mistaken for a real child).
             conn.execute(
@@ -233,6 +243,9 @@ def test_migration_cleans_up_null_columns_then_enforces():
             dedup_hash = conn.execute(
                 "SELECT dedup_hash FROM jobs WHERE id = 1"
             ).fetchone()
+            dedup_hash_null_loc = conn.execute(
+                "SELECT dedup_hash FROM jobs WHERE id = 2"
+            ).fetchone()
             orphan_doc = conn.execute(
                 "SELECT COUNT(*) FROM tailored_documents WHERE id = 1"
             ).fetchone()
@@ -243,6 +256,17 @@ def test_migration_cleans_up_null_columns_then_enforces():
             # The NULL dedup_hash was backfilled deterministically.
             assert dedup_hash is not None and dedup_hash[0] is not None, (
                 f"dedup_hash not backfilled: {dedup_hash}"
+            )
+            # The NULL-location row's backfilled hash must EQUAL the app's raw
+            # formula for that exact row (None -> "None" -> "none"), proving
+            # alignment — not merely that it is non-NULL.
+            location = None  # the row's location column is NULL
+            expected = hashlib.md5(
+                f"{'Globex'}|{'Dev'}|{location}".lower().encode()
+            ).hexdigest()
+            assert dedup_hash_null_loc == (expected,), (
+                f"NULL-location backfill diverges from app formula: "
+                f"{dedup_hash_null_loc} != {expected!r}"
             )
             # The orphan tailored_document was removed.
             assert orphan_doc == (0,), f"orphan tailored_document survived: {orphan_doc}"

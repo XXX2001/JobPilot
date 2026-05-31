@@ -65,14 +65,19 @@ logger = logging.getLogger("alembic.runtime.migration")
 CK_APPLICATIONS_JOB_MATCH_REQUIRED = "method = 'manual' OR job_match_id IS NOT NULL"
 
 
-def _dedup_hash(company: str, title: str, location: str) -> str:
-    """Replicate the application's dedup hash (NULL/empty-safe).
+def _dedup_hash(company, title, location) -> str:
+    """Replicate the application's dedup hash BYTE-FOR-BYTE.
 
     Mirrors ``hashlib.md5(f"{company}|{title}|{location}".lower())`` from
-    ``backend/scheduler/batch_runner.py`` and ``backend/api/jobs.py``; a None
-    field is treated as the empty string so the formatting never raises.
+    ``backend/scheduler/batch_runner.py`` (``_store_matches``) and
+    ``backend/api/jobs.py`` — same field order, same single ``.lower()`` over
+    the whole joined string, and the SAME raw f-string interpolation with NO
+    ``or ''`` coalescing. A NULL field comes back from sqlite as Python ``None``
+    and stringifies to ``"None"`` -> ``"none"`` after ``.lower()``, exactly as
+    the app does, so a backfilled row matches what the app would recompute on
+    the next scrape (preserving the dedup invariant).
     """
-    key = f"{company or ''}|{title or ''}|{location or ''}".lower()
+    key = f"{company}|{title}|{location}".lower()
     return hashlib.md5(key.encode()).hexdigest()
 
 

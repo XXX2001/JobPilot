@@ -15,6 +15,7 @@ from backend.gmail.classifier_heuristics import classify
 from backend.gmail.client import GmailRestClient
 from backend.gmail.credentials import load_credential
 from backend.models.gmail import GmailMessage
+from backend.utils.time import naive_utc_now
 
 try:
     from backend.api.ws import (
@@ -38,12 +39,6 @@ def _is_gmail_dedup_violation(exc: IntegrityError) -> bool:
     """
     text = str(getattr(exc, "orig", exc)).lower()
     return "unique constraint failed" in text and "gmail_message" in text
-
-
-def _now() -> datetime:
-    # Naive UTC, matching the legacy `datetime.utcnow()` behaviour so existing
-    # DB rows (stored naive in SQLite) remain comparable.
-    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _header(headers: list[dict], name: str) -> Optional[str]:
@@ -74,7 +69,7 @@ def _parse_date(value: Optional[str], fallback_ms: Optional[str]) -> datetime:
             return datetime.fromtimestamp(int(fallback_ms) / 1000, tz=timezone.utc).replace(tzinfo=None)
         except Exception:
             pass
-    return _now()
+    return naive_utc_now()
 
 
 class GmailSyncWorker:
@@ -225,5 +220,5 @@ class GmailSyncWorker:
             if cred is None:
                 return
             cred.history_id = new_history_id
-            cred.last_synced_at = _now()
+            cred.last_synced_at = naive_utc_now()
             await session.commit()

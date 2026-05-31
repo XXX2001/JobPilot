@@ -91,6 +91,11 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 	const profileEasterEgg = $derived(getProfileStatus(profileForm));
 	let profileLoading = $state(true);
 
+	// Compile-test ("Test template") state
+	let compileTesting = $state(false);
+	let compileOk = $state<boolean | null>(null);
+	let compileErrorLog = $state('');
+
 	// Search settings form
 	let keywordsInput = $state('');
 	let keywords = $state<string[]>([]);
@@ -273,6 +278,25 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 			error = e.message ?? 'Save failed';
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function testTemplate() {
+		compileTesting = true;
+		compileOk = null;
+		compileErrorLog = '';
+		try {
+			const res = await apiFetch<{ ok: boolean; error_log: string | null }>(
+				'/api/documents/compile-test',
+				{ method: 'POST' }
+			);
+			compileOk = res.ok;
+			compileErrorLog = res.error_log ?? '';
+		} catch (e: any) {
+			compileOk = false;
+			compileErrorLog = e.message ?? 'Template test failed';
+		} finally {
+			compileTesting = false;
 		}
 	}
 
@@ -523,7 +547,29 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 				></textarea>
 			</div>
 			
-			<div class="pt-4 border-t border-border/30 flex justify-end">
+			{#if compileOk === true}
+				<div class="flex items-center gap-2 text-sm font-medium text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-3">
+					<CheckCircle2 size={16} />
+					Template compiles ✓
+				</div>
+			{:else if compileOk === false}
+				<div class="space-y-2 bg-destructive/10 border border-destructive/20 rounded-lg px-4 py-3">
+					<div class="flex items-center gap-2 text-sm font-medium text-destructive">
+						<AlertCircle size={16} />
+						Template failed to compile
+					</div>
+					{#if compileErrorLog}
+						<pre class="text-xs font-mono text-destructive/90 whitespace-pre-wrap break-words max-h-64 overflow-auto bg-background/40 rounded-md p-3">{compileErrorLog}</pre>
+					{/if}
+				</div>
+			{/if}
+
+			<div class="pt-4 border-t border-border/30 flex flex-wrap justify-end gap-3">
+				<button type="button" onclick={testTemplate} disabled={compileTesting}
+					class="flex items-center gap-2 text-sm font-medium px-5 py-2.5 rounded-lg border border-border/60 bg-background/50 text-foreground hover:bg-muted/60 transition-all shadow-sm disabled:opacity-50 active:scale-[0.98]">
+					<Code size={16} />
+					{compileTesting ? 'Testing template...' : 'Test template'}
+				</button>
 				<button type="submit" disabled={saving}
 					class="flex items-center gap-2 text-sm font-medium px-5 py-2.5 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all shadow-sm hover:shadow disabled:opacity-50 active:scale-[0.98]">
 					<Save size={16} />

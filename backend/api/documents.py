@@ -51,6 +51,15 @@ class ValidateTemplateResponse(BaseModel):
     warnings: list[str]
 
 
+class CompileTestResponse(BaseModel):
+    ok: bool
+    error_log: Optional[str] = None
+
+
+# Cap the captured compile log so a huge Tectonic dump can't bloat the response.
+_MAX_ERROR_LOG_CHARS = 8000
+
+
 class CVDiffResponse(BaseModel):
     match_id: int
     diff: Any
@@ -95,6 +104,29 @@ def _resolve_letter_path(profile: Optional[UserProfile], data_dir: Path) -> Opti
     return None
 
 
+def _resolve_cv_path(profile: Optional[UserProfile], data_dir: Path) -> Optional[Path]:
+    """Return the base CV template to compile, or ``None``.
+
+    Mirrors ``backend.scheduler.batch_runner._resolve_cv_path``: prefer the
+    profile's ``base_cv_path`` (absolute or relative to the data dir) when the
+    file exists, otherwise auto-detect the alphabetically first ``*.tex``
+    template under ``<data_dir>/templates/``.
+    """
+    if profile and profile.base_cv_path:
+        raw = Path(profile.base_cv_path)
+        candidate = raw if raw.is_absolute() else data_dir / raw
+        if candidate.exists():
+            return candidate
+
+    templates_dir = data_dir / "templates"
+    candidates = sorted(templates_dir.glob("*.tex")) if templates_dir.is_dir() else []
+    if candidates:
+        logger.warning("No base_cv_path in profile — using auto-detected CV: %s", candidates[0])
+        return candidates[0]
+
+    return None
+
+
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 
@@ -116,6 +148,48 @@ async def validate_template(body: ValidateTemplateRequest) -> ValidateTemplateRe
     sections = parser.extract_sections(body.tex_content)
     warnings = parser.validate_markers(body.tex_content)
     return ValidateTemplateResponse(has_markers=sections.has_markers, warnings=warnings)
+
+
+@router.post("/compile-test", response_model=CompileTestResponse)
+async def compile_test(db: DBSession) -> CompileTestResponse:
+    """Compile the configured base CV template to surface Tectonic errors early.
+
+    Resolves the stored base CV (same resolution as CV generation) and runs a
+    real Tectonic compile on it. The JOBPILOT markers are LaTeX comments, so a
+    bare, un-substituted template still compiles — no placeholder substitution
+    is needed.
+
+    A failed compile is a *successful test*: it returns ``{ok: false,
+    error_log: ...}`` rather than a 5xx. Only a missing template (a
+    configuration problem) raises 400.
+    """
+    import tempfile
+
+    from backend.latex.compiler import (
+        LaTeXCompilationError,
+        LaTeXCompiler,
+    )
+
+    profile = (await db.execute(select(UserProfile).limit(1))).scalar_one_or_none()
+    data_dir = Path(settings.jobpilot_data_dir)
+    cv_path = _resolve_cv_path(profile, data_dir)
+    if cv_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No base CV template configured",
+        )
+
+    compiler = LaTeXCompiler()
+    # Compile into a throwaway directory so the test never pollutes the
+    # templates folder with a stray PDF. ``LaTeXCompileTimeout`` is a subclass
+    # of ``LaTeXCompilationError``, so the single ``except`` covers both.
+    with tempfile.TemporaryDirectory(prefix="jobpilot-compile-test-") as tmp:
+        try:
+            await compiler.compile(cv_path, output_dir=Path(tmp))
+        except LaTeXCompilationError as exc:
+            return CompileTestResponse(ok=False, error_log=str(exc)[:_MAX_ERROR_LOG_CHARS])
+
+    return CompileTestResponse(ok=True, error_log=None)
 
 
 @router.get("/{match_id}/cv/pdf", response_class=FileResponse)

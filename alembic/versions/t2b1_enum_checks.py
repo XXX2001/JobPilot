@@ -21,6 +21,7 @@ Revises: e5a65a3427cf
 Create Date: 2026-05-31 14:00:00.000000
 
 """
+import logging
 from typing import Sequence, Union
 
 from alembic import op
@@ -32,6 +33,8 @@ revision: str = 't2b1_enum_checks'
 down_revision: Union[str, Sequence[str], None] = 'e5a65a3427cf'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+logger = logging.getLogger("alembic.runtime.migration")
 
 
 # ── Canonical CHECK conditions (must match the model __table_args__) ─────────
@@ -59,12 +62,24 @@ def upgrade() -> None:
     """Upgrade schema."""
     bind = op.get_bind()
 
+    def _run(description: str, sql: str) -> None:
+        """Execute a cleanup UPDATE and log how many rows it coerced.
+
+        A fresh test DB is empty so every count is 0 (silent); on a real
+        user DB a non-zero count leaves an audit trail of data that was
+        normalised to satisfy the new CHECKs.
+        """
+        result = bind.execute(sa.text(sql))
+        if result.rowcount and result.rowcount > 0:
+            logger.info("t2b1: %s normalised %d row(s)", description, result.rowcount)
+
     # 1. Migrate legacy Application.status aliases to the canonical value.
     #    Mirrors ``scripts/migrate_legacy_applied.py`` + LEGACY_APPLIED_ALIASES.
-    bind.execute(sa.text(
+    _run(
+        "applications.status legacy alias -> 'applied'",
         "UPDATE applications SET status = 'applied' "
-        "WHERE status IN ('manual', 'assisted')"
-    ))
+        "WHERE status IN ('manual', 'assisted')",
+    )
 
     # 2. Normalise any remaining out-of-vocabulary stragglers to a safe
     #    fallback so the new CHECKs hold on existing data. Each fallback is
@@ -76,35 +91,43 @@ def upgrade() -> None:
     #      - application_correspondence.direction -> 'inbound' (received mail)
     #      - gmail_messages.category  -> 'unknown'  (only non-NULL values)
     #      - search_settings.cv_modification_sensitivity -> 'balanced' (default)
-    bind.execute(sa.text(
+    _run(
+        "applications.status -> 'pending'",
         f"UPDATE applications SET status = 'pending' "
-        f"WHERE NOT ({CK_APPLICATIONS_STATUS})"
-    ))
-    bind.execute(sa.text(
+        f"WHERE NOT ({CK_APPLICATIONS_STATUS})",
+    )
+    _run(
+        "applications.method -> 'manual'",
         f"UPDATE applications SET method = 'manual' "
-        f"WHERE NOT ({CK_APPLICATIONS_METHOD})"
-    ))
-    bind.execute(sa.text(
+        f"WHERE NOT ({CK_APPLICATIONS_METHOD})",
+    )
+    _run(
+        "job_matches.status -> 'new'",
         f"UPDATE job_matches SET status = 'new' "
-        f"WHERE NOT ({CK_JOB_MATCHES_STATUS})"
-    ))
-    bind.execute(sa.text(
+        f"WHERE NOT ({CK_JOB_MATCHES_STATUS})",
+    )
+    _run(
+        "tailored_documents.doc_type -> 'cv'",
         f"UPDATE tailored_documents SET doc_type = 'cv' "
-        f"WHERE NOT ({CK_TAILORED_DOCUMENTS_DOC_TYPE})"
-    ))
-    bind.execute(sa.text(
+        f"WHERE NOT ({CK_TAILORED_DOCUMENTS_DOC_TYPE})",
+    )
+    _run(
+        "application_correspondence.direction -> 'inbound'",
         f"UPDATE application_correspondence SET direction = 'inbound' "
-        f"WHERE NOT ({CK_APPLICATION_CORRESPONDENCE_DIRECTION})"
-    ))
-    bind.execute(sa.text(
-        "UPDATE gmail_messages SET category = 'unknown' "
-        "WHERE category IS NOT NULL AND category NOT IN "
-        "('noise', 'rejection', 'offer', 'interview_invite', 'ats_ack', 'unknown')"
-    ))
-    bind.execute(sa.text(
+        f"WHERE NOT ({CK_APPLICATION_CORRESPONDENCE_DIRECTION})",
+    )
+    # NULL stays untouched: ``NOT (category IS NULL OR ...)`` is NULL for a
+    # NULL category, so the WHERE clause never matches those rows.
+    _run(
+        "gmail_messages.category -> 'unknown'",
+        f"UPDATE gmail_messages SET category = 'unknown' "
+        f"WHERE NOT ({CK_GMAIL_MESSAGES_CATEGORY})",
+    )
+    _run(
+        "search_settings.cv_modification_sensitivity -> 'balanced'",
         f"UPDATE search_settings SET cv_modification_sensitivity = 'balanced' "
-        f"WHERE NOT ({CK_SEARCH_SETTINGS_CV_SENSITIVITY})"
-    ))
+        f"WHERE NOT ({CK_SEARCH_SETTINGS_CV_SENSITIVITY})",
+    )
 
     # 3. Add the CHECKs by recreating each affected table (SQLite batch). One
     #    batch block per table; the batch reflects and re-creates the existing

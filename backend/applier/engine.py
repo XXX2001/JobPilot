@@ -203,6 +203,19 @@ class ApplicationEngine:
 
         try:
             status, method, message = await chart.run(ctx)
+        except BaseException:
+            # Abnormal exit (incl. asyncio.CancelledError, which the FSM's
+            # ``except Exception`` does NOT catch) bypasses the terminal
+            # compensation, so close the live browser here before propagating.
+            # Safe: an exception path is never the assisted-success case
+            # (that returns normally), so we never close a browser the user
+            # still needs.
+            if ctx.browser is not None:
+                try:
+                    await ctx.browser.stop()
+                except Exception:
+                    pass
+            raise
         finally:
             self._confirm_events.pop(job_match_id, None)
             self._cancel_events.pop(job_match_id, None)
@@ -390,6 +403,12 @@ class ApplicationEngine:
                     "Could not persist db_write_failed event for job_match_id=%d",
                     c.job_match_id,
                 )
+            # Auto-apply already submitted remotely; its browser is no longer
+            # needed, so close it the same mode-aware way as APPLIED. Assisted
+            # keeps the browser open so the user can still review/submit even
+            # though the local record failed.
+            if c.mode != ApplyMode.ASSISTED.value:
+                await _close_browser(c)
 
         return {
             State.RESERVED: Transition(
@@ -437,33 +456,40 @@ class ApplicationEngine:
         letter_pdf: Optional[Path] = ctx.extras["letter_pdf"]
 
         if mode == ApplyMode.AUTO:
-            result = await self._auto.apply(
-                job_id=ctx.job_match_id,
-                apply_url=ctx.apply_url,
-                full_name=applicant.full_name,
-                email=applicant.email,
-                phone=applicant.phone,
-                location=applicant.location,
-                additional_answers=applicant.additional_answers_json,
-                cv_pdf=cv_pdf,
-                letter_pdf=letter_pdf,
-                confirm_event=ctx.confirm_event,
-                cancel_event=ctx.cancel_event,
-            )
-            ctx.browser = getattr(self._auto, "_active_browser", None)
+            # Copy the live browser onto ctx in a finally so the FSM/cleanup
+            # net can close it even when apply() raises or is cancelled before
+            # returning (otherwise the handle would leak).
+            try:
+                result = await self._auto.apply(
+                    job_id=ctx.job_match_id,
+                    apply_url=ctx.apply_url,
+                    full_name=applicant.full_name,
+                    email=applicant.email,
+                    phone=applicant.phone,
+                    location=applicant.location,
+                    additional_answers=applicant.additional_answers_json,
+                    cv_pdf=cv_pdf,
+                    letter_pdf=letter_pdf,
+                    confirm_event=ctx.confirm_event,
+                    cancel_event=ctx.cancel_event,
+                )
+            finally:
+                ctx.browser = getattr(self._auto, "_active_browser", None)
             return result
         if mode == ApplyMode.ASSISTED:
-            result = await self._assisted.apply(
-                apply_url=ctx.apply_url,
-                full_name=applicant.full_name,
-                email=applicant.email,
-                phone=applicant.phone,
-                location=applicant.location,
-                additional_answers=applicant.additional_answers_json,
-                cv_pdf=cv_pdf,
-                letter_pdf=letter_pdf,
-            )
-            ctx.browser = getattr(self._assisted, "_active_browser", None)
+            try:
+                result = await self._assisted.apply(
+                    apply_url=ctx.apply_url,
+                    full_name=applicant.full_name,
+                    email=applicant.email,
+                    phone=applicant.phone,
+                    location=applicant.location,
+                    additional_answers=applicant.additional_answers_json,
+                    cv_pdf=cv_pdf,
+                    letter_pdf=letter_pdf,
+                )
+            finally:
+                ctx.browser = getattr(self._assisted, "_active_browser", None)
             return result
         # MANUAL — no browser.
         return await self._manual.apply(

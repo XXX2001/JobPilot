@@ -603,6 +603,79 @@ async def test_auto_success_closes_browser():
     assert ctx.browser.stopped is True
 
 
+class _FakeDb:
+    """Minimal async-session stub for the rslf event-write path."""
+
+    def add(self, *_args, **_kwargs) -> None:
+        pass
+
+    async def commit(self) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_rslf_terminal_closes_browser_for_auto():
+    from backend.applier.engine import ApplicationEngine
+    from backend.applier.state import State
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    ctx = _build_ctx(engine, "auto")
+    ctx.db = _FakeDb()  # type: ignore[assignment]
+    ctx.browser = _FakeBrowser()
+    transitions = engine._build_transitions(ctx)
+    await transitions[State.REMOTE_SUBMITTED_LOCAL_FAILED].on_enter(ctx)
+    assert ctx.browser.stopped is True
+
+
+@pytest.mark.asyncio
+async def test_rslf_terminal_leaves_browser_open_for_assisted():
+    from backend.applier.engine import ApplicationEngine
+    from backend.applier.state import State
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    ctx = _build_ctx(engine, "assisted")
+    ctx.db = _FakeDb()  # type: ignore[assignment]
+    ctx.browser = _FakeBrowser()
+    transitions = engine._build_transitions(ctx)
+    await transitions[State.REMOTE_SUBMITTED_LOCAL_FAILED].on_enter(ctx)
+    assert ctx.browser.stopped is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_midflight_closes_browser():
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from backend.applier.engine import ApplicationEngine, ApplyMode
+
+    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    fake_browser = _FakeBrowser()
+
+    async def fake_apply(**_kwargs):
+        # Strategy created its live browser, then got cancelled before
+        # returning — exactly the mid-flight leak we are guarding against.
+        engine._auto._active_browser = fake_browser
+        raise asyncio.CancelledError()
+
+    engine._auto.apply = fake_apply  # type: ignore[method-assign]
+
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=0)
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    db.add = MagicMock()
+
+    with pytest.raises(asyncio.CancelledError):
+        await engine.apply(
+            job_match_id=123,
+            mode=ApplyMode.AUTO,
+            db=db,
+            apply_url="https://jobs.example.com/123",
+        )
+
+    assert fake_browser.stopped is True
+
+
 @pytest.mark.asyncio
 async def test_full_pipeline_fails_partway_through_middle_state():
     """If a middle-state next() raises, driver should land in FAILED.

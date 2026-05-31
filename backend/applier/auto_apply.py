@@ -8,9 +8,13 @@ import logging
 import re
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import urlparse
 
-from backend.applier.captcha_handler import site_profile_key
+from backend.applier._strategy_common import (
+    PHONE_NUMBER_NOTE,
+    build_browser,
+    is_multi_step_site,
+    site_profile_key,
+)
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import settings
 from backend.security.sanitizer import sanitize_url
@@ -28,22 +32,16 @@ except ImportError:
     Browser = None  # type: ignore
     ChatGoogle = None  # type: ignore
 
-# Sites that require clicking "Apply" / "Easy Apply" before the form appears
-_MULTI_STEP_DOMAINS = {"linkedin.com", "www.linkedin.com"}
-
-
 # T4a: ``_site_key`` removed in favour of the canonical
-# :func:`backend.applier.captcha_handler.site_profile_key` (imported at the
-# top of the file). The old helper returned just the first label
-# ("linkedin") while ``captcha_handler`` saved sessions under the full
-# underscore form ("linkedin_com"), so Tier 2 looked in the wrong
-# directory and never picked up the saved login.
-
-
-def _is_multi_step_site(url: str) -> bool:
-    """Check if the URL belongs to a site with multi-step application flows."""
-    hostname = urlparse(url).hostname or ""
-    return hostname.lstrip("www.") in {h.lstrip("www.") for h in _MULTI_STEP_DOMAINS}
+# :func:`backend.applier.captcha_handler.site_profile_key` (re-exported via
+# ``_strategy_common`` and imported at the top of the file). The old helper
+# returned just the first label ("linkedin") while ``captcha_handler`` saved
+# sessions under the full underscore form ("linkedin_com"), so Tier 2 looked
+# in the wrong directory and never picked up the saved login.
+#
+# M1-T6: ``_is_multi_step_site`` and the ``_MULTI_STEP_DOMAINS`` set were
+# moved to ``_strategy_common.is_multi_step_site`` (identical copy shared
+# with ``assisted_apply``).
 
 
 class AutoApplyStrategy:
@@ -113,7 +111,7 @@ class AutoApplyStrategy:
         use_tier1 = (
             settings.APPLY_TIER1_ENABLED
             and self._form_filler is not None
-            and not _is_multi_step_site(apply_url)
+            and not is_multi_step_site(apply_url)
         )
 
         if use_tier1:
@@ -216,10 +214,7 @@ class AutoApplyStrategy:
             f"  Email: {email}\n"
             f"  Phone: {phone}\n"
             f"  Location: {location}\n"
-            "\n  NOTE on phone number: Some websites auto-fill the country code prefix "
-            "(e.g. +33 for France). If you see the country code is already pre-filled "
-            "in the phone field, enter ONLY the local part without the country code "
-            "to avoid duplication like '+33+33612345678'.\n"
+            + PHONE_NUMBER_NOTE
         )
 
         if cv_pdf and cv_pdf.exists():
@@ -311,13 +306,11 @@ class AutoApplyStrategy:
             disable_security=True,
         )
         if state_path.exists():
-            browser_kwargs["storage_state"] = state_path.resolve().as_posix()
-            browser_kwargs["user_data_dir"] = None
             logger.info("[Tier 2] Loading saved session from %s", state_path)
         else:
             logger.warning("[Tier 2] No saved session at %s — browser will not be logged in", state_path)
 
-        browser = Browser(**browser_kwargs)
+        browser = build_browser(browser_kwargs, state_path)
         self._active_browser = browser
         try:
             llm = ChatGoogle(

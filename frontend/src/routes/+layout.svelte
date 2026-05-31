@@ -15,6 +15,7 @@
 		LayoutDashboard,
 		KanbanSquare,
 		FileText,
+		Mail,
 		Settings,
 		BarChart2,
 		Inbox,
@@ -42,6 +43,7 @@
 		{ href: '/tracker', label: 'Tracker', icon: KanbanSquare },
 		{ href: '/inbox', label: 'Inbox', icon: Inbox },
 		{ href: '/cv', label: 'CV Manager', icon: FileText },
+		{ href: '/letters', label: 'Letters', icon: Mail },
 		{ href: '/settings', label: 'Settings', icon: Settings },
 		{ href: '/analytics', label: 'Analytics', icon: BarChart2 }
 	];

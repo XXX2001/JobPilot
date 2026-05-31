@@ -18,6 +18,7 @@ import { getProfileStatus } from '$lib/utils/easterEggs';
 		driver_license?: string;
 		mobility?: string;
 		base_cv_path?: string;
+		base_letter_path?: string;
 		additional_info?: Record<string, unknown>;
 	}
 

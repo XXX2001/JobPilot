@@ -22,6 +22,9 @@
 	let activeTab = $state<TabId>('profile');
 	let error = $state('');
 	let successMsg = $state('');
+	// Bumped to ask the (always-mounted) Sites tab to reload after a credential
+	// session is cleared, mirroring the original page's clearSession -> loadSites().
+	let sitesRefreshKey = $state(0);
 </script>
 
 <style>
@@ -71,20 +74,18 @@
 	{/if}
 </div>
 
+<!--
+	All tab components stay mounted; only the active one is visible. The `hidden`
+	attribute keeps inactive tabs out of the a11y tree and tab order, while
+	preserving each tab's $state (incl. unsaved edits) and running its loaders
+	exactly once at page load — matching the original single-page behavior.
+-->
 <div class="max-w-3xl pb-16">
-	{#if activeTab === 'profile'}
-		<ProfileTab bind:error bind:successMsg />
-	{:else if activeTab === 'search'}
-		<SearchTab bind:error bind:successMsg />
-	{:else if activeTab === 'sites'}
-		<SitesTab bind:error />
-	{:else if activeTab === 'credentials'}
-		<CredentialsTab bind:error bind:successMsg />
-	{:else if activeTab === 'sources'}
-		<SourcesTab bind:error />
-	{:else if activeTab === 'integrations'}
-		<IntegrationsTab />
-	{:else if activeTab === 'system'}
-		<SystemTab />
-	{/if}
+	<div hidden={activeTab !== 'profile'}><ProfileTab bind:error bind:successMsg /></div>
+	<div hidden={activeTab !== 'search'}><SearchTab bind:error bind:successMsg /></div>
+	<div hidden={activeTab !== 'sites'}><SitesTab bind:error refreshKey={sitesRefreshKey} /></div>
+	<div hidden={activeTab !== 'credentials'}><CredentialsTab bind:error bind:successMsg onSessionCleared={() => sitesRefreshKey++} /></div>
+	<div hidden={activeTab !== 'sources'}><SourcesTab bind:error /></div>
+	<div hidden={activeTab !== 'integrations'}><IntegrationsTab /></div>
+	<div hidden={activeTab !== 'system'}><SystemTab /></div>
 </div>

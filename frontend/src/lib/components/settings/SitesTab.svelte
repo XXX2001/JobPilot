@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { apiFetch } from '$lib/api';
 	import { Globe, CheckCircle2 } from 'lucide-svelte';
 
@@ -13,7 +12,9 @@
 		has_session: boolean;
 	}
 
-	let { error = $bindable('') }: { error: string } = $props();
+	// `refreshKey` is bumped by the shell after a credential session is cleared,
+	// so the session badges here stay in sync even while this tab is mounted-but-hidden.
+	let { error = $bindable(''), refreshKey = 0 }: { error: string; refreshKey?: number } = $props();
 
 	let sitesList = $state<SiteItem[]>([]);
 	let sitesLoading = $state(true);
@@ -45,7 +46,9 @@
 		}
 	}
 
-	onMount(() => {
+	// Runs once on mount and again whenever `refreshKey` changes.
+	$effect(() => {
+		void refreshKey;
 		loadSites();
 	});
 </script>

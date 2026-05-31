@@ -10,8 +10,13 @@
 		has_session: boolean;
 	}
 
-	let { error = $bindable(''), successMsg = $bindable('') }: { error: string; successMsg: string } =
-		$props();
+	// `onSessionCleared` lets the shell refresh the (always-mounted) Sites tab
+	// so its session badges update after a credential session is cleared here.
+	let {
+		error = $bindable(''),
+		successMsg = $bindable(''),
+		onSessionCleared
+	}: { error: string; successMsg: string; onSessionCleared?: () => void } = $props();
 
 	let credentialsList = $state<CredentialItem[]>([]);
 	let credentialsLoading = $state(true);
@@ -56,6 +61,7 @@
 			await apiFetch(`/api/settings/credentials/${siteName}/session`, { method: 'DELETE' });
 			successMsg = `Session cleared for ${siteName}.`;
 			await loadCredentials();
+			onSessionCleared?.();
 		} catch (e: any) {
 			error = e.message ?? 'Clear failed';
 		} finally {

@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
@@ -60,6 +60,21 @@ class BatchStatusOut(BaseModel):
 class RefreshResponse(BaseModel):
     status: Literal["started"]
     message: str
+
+
+class PreviewMatchOut(BaseModel):
+    """One previewed match — mirrors the dry-run preview dict from BatchRunner."""
+
+    title: str
+    company: str
+    score: float
+    location: str = ""
+
+
+class PreviewResponse(BaseModel):
+    status: Literal["preview"]
+    matches: list[PreviewMatchOut]
+    total: int
 
 
 class MatchStatusUpdateOut(BaseModel):
@@ -150,11 +165,20 @@ async def get_source_health(request: Request):
     return {"sources": tracker.snapshot()}
 
 
-@router.post("/refresh", response_model=RefreshResponse)
-async def refresh_queue(request: Request, db: DBSession) -> RefreshResponse:  # noqa: ARG001
+@router.post("/refresh", response_model=RefreshResponse | PreviewResponse)
+async def refresh_queue(
+    request: Request,
+    db: DBSession,  # noqa: ARG001
+    dry_run: bool = Query(False),
+) -> RefreshResponse | PreviewResponse:
     """Trigger a new batch run immediately (manual re-run).
 
-    Runs the batch in a background task so the endpoint returns promptly.
+    Default: runs the batch in a background task so the endpoint returns
+    promptly with ``{"status": "started"}``.
+
+    ``dry_run=true``: runs the scrape + match/rank steps INLINE (no background
+    task) and returns ``{"status": "preview", "matches": [...], "total": N}``.
+    A dry-run writes NOTHING to the DB and makes no Gemini calls.
     """
     import asyncio
 
@@ -164,6 +188,11 @@ async def refresh_queue(request: Request, db: DBSession) -> RefreshResponse:  # 
 
     if runner.running:
         raise HTTPException(status_code=409, detail="A search is already in progress")
+
+    if dry_run:
+        preview = await runner.run_batch(dry_run=True)
+        matches = [PreviewMatchOut(**m) for m in (preview or [])]
+        return PreviewResponse(status="preview", matches=matches, total=len(matches))
 
     async def _run():
         try:

@@ -128,20 +128,30 @@ class BatchRunner:
         self.last_status = Status(message=message, progress=progress)
         await broadcast_status(message, progress=progress)
 
-    async def run_batch(self) -> None:
-        """Full 5-step batch pipeline."""
+    async def run_batch(self, dry_run: bool = False) -> list[dict[str, Any]] | None:
+        """Run the batch pipeline.
+
+        ``dry_run=False`` (default) runs the full 5-step pipeline and returns
+        ``None`` — exactly as before.
+
+        ``dry_run=True`` runs ONLY Step 1 (scrape) and Step 2 (match/rank), then
+        returns a lightweight preview ``list[dict]`` of what *would* be matched.
+        It performs NO DB writes and makes NO Gemini calls — used to preview
+        today's batch without burning quota or committing rows.
+        """
         if self.running:
             logger.warning("Batch already running — ignoring duplicate trigger")
-            return
+            return None
         self.running = True
         self.last_status = None
-        logger.info("Batch started")
+        logger.info("Batch started%s", " (dry-run)" if dry_run else "")
         db: AsyncSession = self._db_factory()
         try:
-            await self._run_batch_inner(db)
+            return await self._run_batch_inner(db, dry_run=dry_run)
         except Exception as exc:
             logger.error("Batch failed: %s", exc, exc_info=True)
             await self._broadcast_and_track(f"Batch failed: {exc}", progress=-1.0)
+            return None
         finally:
             self.running = False
             await db.close()
@@ -150,7 +160,9 @@ class BatchRunner:
     #  Internal pipeline steps                                            #
     # ------------------------------------------------------------------ #
 
-    async def _run_batch_inner(self, db: AsyncSession) -> None:
+    async def _run_batch_inner(
+        self, db: AsyncSession, dry_run: bool = False
+    ) -> list[dict[str, Any]] | None:
         # ── Load settings ────────────────────────────────────────────────
         settings_row = await self._load_settings(db)
         profile_row = await self._load_profile(db)
@@ -175,17 +187,20 @@ class BatchRunner:
         )
 
         # ── Follow-up scan (lazy trigger) ────────────────────────────────
-        try:
-            from backend.applier.follow_up import scan_overdue  # noqa: PLC0415
+        # Skipped in dry-run: scan_overdue() persists application events, and a
+        # preview must write NOTHING.
+        if not dry_run:
+            try:
+                from backend.applier.follow_up import scan_overdue  # noqa: PLC0415
 
-            _fu_count = await scan_overdue()
-            logger.info("Batch follow-up scan: %d event(s) created", _fu_count)
-        except Exception as _fu_exc:
-            logger.warning(
-                "follow_up.scan_overdue failed at batch start (non-fatal): %s",
-                _fu_exc,
-                exc_info=True,
-            )
+                _fu_count = await scan_overdue()
+                logger.info("Batch follow-up scan: %d event(s) created", _fu_count)
+            except Exception as _fu_exc:
+                logger.warning(
+                    "follow_up.scan_overdue failed at batch start (non-fatal): %s",
+                    _fu_exc,
+                    exc_info=True,
+                )
 
         # ── Step 1: Scrape ───────────────────────────────────────────────
         await self._broadcast_and_track("Searching for jobs…", progress=0.05)
@@ -211,6 +226,25 @@ class BatchRunner:
         ranked = [(jd, s) for jd, s in ranked if s >= filters.min_score]
         ranked.sort(key=lambda x: x[1], reverse=True)
         logger.info("Ranked %d jobs above threshold %.1f", len(ranked), filters.min_score)
+
+        # ── Dry-run cut point ────────────────────────────────────────────
+        # Everything below this line writes to the DB and/or calls Gemini.
+        # For a preview we stop here and return what WOULD be matched.
+        if dry_run:
+            preview = [
+                {
+                    "title": jd.title,
+                    "company": jd.company,
+                    "score": round(score),
+                    "location": jd.location or "",
+                }
+                for jd, score in ranked
+            ]
+            await self._broadcast_and_track(
+                f"Preview ready — {len(preview)} match(es) (nothing saved)", progress=1.0
+            )
+            logger.info("Dry-run preview built: %d match(es), no DB writes", len(preview))
+            return preview
 
         # ── Step 3: Store new matches ────────────────────────────────────
         await self._broadcast_and_track("Storing new matches…", progress=0.55)

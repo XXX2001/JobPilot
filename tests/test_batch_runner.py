@@ -275,6 +275,142 @@ async def test_batch_stops_cv_generation_at_daily_limit():
     assert mock_doc.call_count <= 3
 
 
+# ── Dry-run preview: scrape + rank only, NO DB writes, NO Gemini ────────────
+
+
+@pytest.mark.asyncio
+async def test_dry_run_returns_preview_and_writes_nothing(sqlite_factory):
+    """Dry-run scrapes + ranks but writes NOTHING and never calls Gemini.
+
+    This is the M2-T6 guarantee: previewing today's matches must not burn
+    Gemini quota or commit any rows. We assert (a) a preview list comes back,
+    (b) the ``job_matches`` and ``tailored_documents`` tables stay empty, and
+    (c) the embedder (Gemini) and CV pipeline are never touched.
+    """
+    from backend.models.document import TailoredDocument
+
+    jobs = [_raw_job(title=f"SWE {i}", url=f"https://example.com/{i}") for i in range(3)]
+    scraper = MockScraper(jobs=jobs)
+    matcher = MockMatcher(score=80.0)
+    cv_pipeline = MockCVPipeline()
+
+    # Wire an embedder spy to prove the fit-assessment / Gemini path is skipped.
+    embedder = MagicMock()
+    embedder.embed_cv_profile = AsyncMock(side_effect=lambda p: p)
+    embedder.embed_job_profile = AsyncMock(side_effect=lambda p: p)
+
+    runner = BatchRunner(
+        scraper=scraper,
+        matcher=matcher,
+        cv_pipeline=cv_pipeline,
+        db_factory=sqlite_factory,
+        embedder=embedder,
+    )
+
+    with patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock):
+        preview = await runner.run_batch(dry_run=True)
+
+    # Preview shape: list of {title, company, score, location}
+    assert isinstance(preview, list)
+    assert len(preview) == 3
+    for item in preview:
+        assert set(item.keys()) == {"title", "company", "score", "location"}
+        assert item["company"] == "ACME"
+        assert isinstance(item["score"], (int, float))
+
+    # No Gemini / CV-generation calls
+    assert cv_pipeline.calls == []
+    embedder.embed_cv_profile.assert_not_awaited()
+    embedder.embed_job_profile.assert_not_awaited()
+
+    # No DB writes: both tables empty
+    async with sqlite_factory() as db:
+        match_count = len((await db.execute(select(JobMatch))).scalars().all())
+        doc_count = len((await db.execute(select(TailoredDocument))).scalars().all())
+    assert match_count == 0
+    assert doc_count == 0
+
+
+@pytest.mark.asyncio
+async def test_dry_run_does_not_store_matches_or_docs():
+    """Dry-run must NOT invoke _store_matches / _store_tailored_doc (DB writers)."""
+    runner, _db, cv_pipe = _make_runner(
+        jobs=[_raw_job(url=f"https://example.com/{i}") for i in range(3)]
+    )
+
+    with (
+        patch.object(runner, "_load_settings", new_callable=AsyncMock) as mock_settings,
+        patch.object(runner, "_load_profile", new_callable=AsyncMock) as mock_profile,
+        patch.object(runner, "_load_sources", new_callable=AsyncMock) as mock_sources,
+        patch.object(runner, "_store_matches", new_callable=AsyncMock) as mock_store,
+        patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock) as mock_doc,
+        patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
+    ):
+        settings_obj = MagicMock()
+        settings_obj.keywords = ["python"]
+        settings_obj.locations = []
+        settings_obj.salary_min = None
+        settings_obj.remote_only = False
+        settings_obj.excluded_keywords = []
+        settings_obj.excluded_companies = []
+        settings_obj.min_match_score = 30.0
+        settings_obj.daily_limit = 10
+        mock_settings.return_value = settings_obj
+
+        profile_obj = MagicMock()
+        profile_obj.base_cv_path = None
+        mock_profile.return_value = profile_obj
+        mock_sources.return_value = []
+
+        preview = await runner.run_batch(dry_run=True)
+
+    assert isinstance(preview, list)
+    assert len(preview) == 3
+    mock_store.assert_not_called()
+    mock_doc.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_normal_run_returns_none(tmp_path):
+    """Back-compat: the normal (dry_run=False) path still returns None."""
+    runner, _db, _cv_pipe = _make_runner()
+
+    with (
+        patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
+        patch.object(runner, "_load_settings", new_callable=AsyncMock) as mock_settings,
+        patch.object(runner, "_load_profile", new_callable=AsyncMock) as mock_profile,
+        patch.object(runner, "_load_sources", new_callable=AsyncMock) as mock_sources,
+        patch.object(runner, "_store_matches", new_callable=AsyncMock, return_value=[1]),
+        patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
+        patch("backend.scheduler.batch_runner.settings") as mock_cfg,
+    ):
+        mock_cfg.jobpilot_data_dir = str(tmp_path)
+        settings_obj = MagicMock()
+        settings_obj.keywords = ["python"]
+        settings_obj.locations = []
+        settings_obj.salary_min = None
+        settings_obj.remote_only = False
+        settings_obj.excluded_keywords = []
+        settings_obj.excluded_companies = []
+        settings_obj.min_match_score = 30.0
+        settings_obj.daily_limit = 10
+        mock_settings.return_value = settings_obj
+
+        profile_obj = MagicMock()
+        profile_obj.base_cv_path = None
+        mock_profile.return_value = profile_obj
+        mock_sources.return_value = []
+
+        guard_instance = AsyncMock()
+        guard_instance.remaining_today = AsyncMock(return_value=10)
+        MockGuard.return_value = guard_instance
+
+        result = await runner.run_batch()
+
+    assert result is None
+
+
 # ── Concurrency regression: Step 3.5 fit-assessment loop ────────────────────
 
 

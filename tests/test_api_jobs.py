@@ -67,6 +67,43 @@ def test_queue_refresh(test_app: TestClient):
     assert "status" in resp.json()
 
 
+def test_queue_refresh_dry_run_returns_preview(test_app: TestClient):
+    """POST /api/queue/refresh?dry_run=true runs inline and returns a preview.
+
+    The runner is swapped for a stub so the endpoint stays hermetic (no real
+    scraping / Gemini). We assert the {status:'preview', matches, total} shape.
+    """
+    from unittest.mock import AsyncMock
+
+    app = test_app.app
+    runner = app.state.batch_runner
+    original_run = runner.run_batch
+    original_running = runner.running
+    runner.running = False
+    stub_run = AsyncMock(
+        return_value=[
+            {"title": "Backend Engineer", "company": "ACME", "score": 88, "location": "Paris"},
+            {"title": "Platform Engineer", "company": "Globex", "score": 72, "location": "Remote"},
+        ]
+    )
+    runner.run_batch = stub_run
+    try:
+        resp = test_app.post("/api/queue/refresh?dry_run=true")
+    finally:
+        runner.run_batch = original_run
+        runner.running = original_running
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "preview"
+    assert data["total"] == 2
+    assert len(data["matches"]) == 2
+    assert data["matches"][0]["title"] == "Backend Engineer"
+    assert data["matches"][0]["company"] == "ACME"
+    # The runner was invoked in dry-run mode (no background task).
+    stub_run.assert_awaited_once_with(dry_run=True)
+
+
 def test_queue_skip_not_found(test_app: TestClient):
     """PATCH /api/queue/999999/skip returns 404 for non-existent match."""
     resp = test_app.patch("/api/queue/999999/skip")

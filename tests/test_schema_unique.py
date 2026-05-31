@@ -179,6 +179,17 @@ def test_migration_collapses_duplicate_natural_keys():
                 "INSERT INTO job_matches (id, job_id, score, status, batch_date, matched_at) "
                 "VALUES (11, 1, 0.9, 'new', '2026-05-31', datetime('now'))"
             )
+            # Children of the LOSER match (id=10): FK enforcement is OFF during
+            # migration, so these must be explicitly repointed to the survivor
+            # (id=11), NOT left dangling at the deleted id=10.
+            conn.execute(
+                "INSERT INTO tailored_documents (id, job_match_id, doc_type, created_at) "
+                "VALUES (1, 10, 'cv', datetime('now'))"
+            )
+            conn.execute(
+                "INSERT INTO applications (id, method, status, job_match_id, created_at) "
+                "VALUES (1, 'manual', 'pending', 10, datetime('now'))"
+            )
             conn.commit()
         finally:
             conn.close()
@@ -201,10 +212,20 @@ def test_migration_collapses_duplicate_natural_keys():
                 "SELECT id FROM job_matches "
                 "WHERE job_id = 1 AND batch_date = '2026-05-31' ORDER BY id"
             ).fetchall()
+            # Children of the deleted loser (id=10) were repointed to the
+            # survivor (id=11), not left dangling and not deleted.
+            doc_parent = conn.execute(
+                "SELECT job_match_id FROM tailored_documents WHERE id = 1"
+            ).fetchone()
+            app_parent = conn.execute(
+                "SELECT job_match_id FROM applications WHERE id = 1"
+            ).fetchone()
 
             assert source_rows == [(1,)], f"job_sources not collapsed: {source_rows}"
             assert repointed == (1,), f"jobs.source_id not repointed: {repointed}"
             assert match_rows == [(11,)], f"job_matches not deduped: {match_rows}"
+            assert doc_parent == (11,), f"tailored_documents not repointed: {doc_parent}"
+            assert app_parent == (11,), f"applications not repointed: {app_parent}"
 
             # A subsequent duplicate insert must now fail at the DB level.
             with pytest.raises(sqlite3.IntegrityError):

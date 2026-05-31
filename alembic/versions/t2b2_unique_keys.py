@@ -84,18 +84,49 @@ def upgrade() -> None:
     # ── 2. Collapse duplicate (job_matches.job_id, batch_date) ───────────────
     #    Survivor = MAX(id) per (job_id, batch_date) group (the most recent
     #    match). Only non-NULL batch dates are deduped — NULLs are DISTINCT.
-    #    Deleting a loser cascades to its tailored_documents (FK CASCADE) and
-    #    nulls applications.job_match_id (FK SET NULL) — acceptable, and keeping
-    #    the most recent row preserves the freshest match metadata.
-    _run(
-        "duplicate (job_id, batch_date) job_matches deleted",
-        "DELETE FROM job_matches "
-        "WHERE batch_date IS NOT NULL "
+    #    FK enforcement is OFF during ``alembic upgrade`` (env.py's engine has
+    #    no ``PRAGMA foreign_keys=ON`` listener), so deleting a loser does NOT
+    #    cascade. We therefore explicitly repoint the loser rows' children to
+    #    the surviving match BEFORE deleting them — mirroring the job_sources
+    #    cleanup above — so no dangling references are left behind.
+    #
+    #    A "loser" is a job_matches row with a non-NULL batch_date that is not
+    #    the MAX(id) of its group; its survivor is the MAX(id) of the same
+    #    (job_id, batch_date) group (correlated subquery).
+    _loser_predicate = (
+        "batch_date IS NOT NULL "
         "AND id NOT IN ("
         "    SELECT MAX(id) FROM job_matches"
         "    WHERE batch_date IS NOT NULL"
         "    GROUP BY job_id, batch_date"
-        ")",
+        ")"
+    )
+    _survivor_for_loser = (
+        "SELECT MAX(m2.id) FROM job_matches m2 "
+        "WHERE m2.job_id = ("
+        "    SELECT m1.job_id FROM job_matches m1 WHERE m1.id = {child}.job_match_id"
+        ") "
+        "AND m2.batch_date = ("
+        "    SELECT m1.batch_date FROM job_matches m1 WHERE m1.id = {child}.job_match_id"
+        ")"
+    )
+    _run(
+        "tailored_documents repointed to surviving job_match",
+        f"UPDATE tailored_documents SET job_match_id = ("
+        f"    {_survivor_for_loser.format(child='tailored_documents')}"
+        f") "
+        f"WHERE job_match_id IN (SELECT id FROM job_matches WHERE {_loser_predicate})",
+    )
+    _run(
+        "applications repointed to surviving job_match",
+        f"UPDATE applications SET job_match_id = ("
+        f"    {_survivor_for_loser.format(child='applications')}"
+        f") "
+        f"WHERE job_match_id IN (SELECT id FROM job_matches WHERE {_loser_predicate})",
+    )
+    _run(
+        "duplicate (job_id, batch_date) job_matches deleted",
+        f"DELETE FROM job_matches WHERE {_loser_predicate}",
     )
 
     # ── 3. Swap the redundant non-unique indexes for the unique constraints ──

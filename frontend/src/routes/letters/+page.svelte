@@ -31,14 +31,15 @@
 
 	async function loadDocs() {
 		docsLoading = true;
+		error = '';
 		try {
 			const docs = await apiFetch<Document[]>('/api/documents');
 			documents = docs.filter((d) => d.doc_type === 'letter');
 			if (selectedMatchId === null && documents.length > 0) {
 				selectedMatchId = documents[0].job_match_id ?? null;
 			}
-		} catch {
-			//
+		} catch (e: any) {
+			error = e.message ?? 'Failed to load cover letters';
 		} finally {
 			docsLoading = false;
 		}

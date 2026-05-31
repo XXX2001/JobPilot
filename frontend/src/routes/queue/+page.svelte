@@ -158,10 +158,11 @@
 				await apiFetch(`/api/queue/${matchId}/skip`, { method: 'PATCH' });
 				// Remove from local list
 				matches = matches.filter((mt) => mt.id !== matchId);
-			} catch {
-				// revert on failure
+			} catch (e: any) {
+				// revert on failure and surface the reason
 				m.set(matchId, prev ?? 'manual');
 				modes = new Map(m);
+				error = e.message ?? 'Failed to skip this match';
 			}
 		} else if (prev === 'skip' && mode !== 'skip') {
 			// Un-skip: restore to new

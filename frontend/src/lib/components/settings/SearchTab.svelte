@@ -306,6 +306,7 @@
 					type="button"
 					role="switch"
 					aria-checked={cvTailoringEnabled}
+					aria-label="Toggle AI CV tailoring"
 					onclick={() => cvTailoringEnabled = !cvTailoringEnabled}
 					class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/20 {cvTailoringEnabled ? 'bg-primary' : 'bg-muted-foreground/30'}"
 				>

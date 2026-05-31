@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { helpOpen, activeBindings } from '$lib/utils/hotkeys';
+	import { focusTrap } from '$lib/utils/focusTrap';
 
 	// Group bindings by their group label.
 	const grouped = $derived(
@@ -22,27 +23,6 @@
 	function onBackdropKeydown(event: KeyboardEvent) {
 		if (event.key === 'Escape') close();
 	}
-
-	/** Svelte action: focus the node on mount and trap focus within it. */
-	function trapFocus(node: HTMLElement) {
-		// Focus the dialog so keyboard events are captured immediately.
-		node.focus();
-
-		function onFocusOut(event: FocusEvent) {
-			const relatedTarget = event.relatedTarget as Node | null;
-			// If focus moved outside the dialog, pull it back.
-			if (relatedTarget && !node.contains(relatedTarget)) {
-				node.focus();
-			}
-		}
-
-		node.addEventListener('focusout', onFocusOut);
-		return {
-			destroy() {
-				node.removeEventListener('focusout', onFocusOut);
-			}
-		};
-	}
 </script>
 
 {#if $helpOpen}
@@ -55,7 +35,7 @@
 		tabindex="-1"
 		class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
 		onkeydown={onBackdropKeydown}
-		use:trapFocus
+		use:focusTrap
 	>
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->

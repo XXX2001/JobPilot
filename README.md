@@ -1,5 +1,8 @@
 # JobPilot
 
+<!-- Repo slug detected from the git remote (github.com/XXX2001/JobPilot). Update OWNER/REPO if the repository moves. -->
+[![CI](https://github.com/XXX2001/JobPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/XXX2001/JobPilot/actions/workflows/ci.yml)
+
 **A single-user, self-hosted AI assistant for the full job-application cycle.**
 
 JobPilot is a local web app that discovers job listings from the sources you enable, scores how well each one fits your profile, tailors your LaTeX CV and cover letter for every match with Google Gemini, and walks you through applying — manually, semi-automatically, or fully automatically. It runs as one process on your own machine: a FastAPI backend serves both the REST API and the compiled SvelteKit frontend, backed by a single SQLite database and the Tectonic LaTeX compiler. No authentication layer, no cloud services beyond the Gemini and job-search APIs you configure yourself.

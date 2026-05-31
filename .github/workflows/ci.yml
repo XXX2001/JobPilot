@@ -1,0 +1,101 @@
+name: CI
+
+# Enforces the JobPilot quality gates on every push and pull request.
+# Backend and frontend run as two independent parallel jobs.
+#
+# NOTE: We deliberately do NOT build the Docker image here — it is too heavy
+# for routine CI. Building/publishing the image is a future enhancement
+# (e.g. a separate release workflow gated on tags).
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  backend:
+    name: Backend (pytest + pyright)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run backend tests
+        run: uv run pytest -q
+
+      - name: Type-check (pyright threshold gate)
+        run: |
+          # Agreed pyright baseline ceiling: pre-existing type debt is tolerated
+          # so the build stays green, but any NEW error/warning above these
+          # counts fails CI. Measured baseline at the time of writing: 27/8.
+          # Keep these in sync with CONTRIBUTING.md.
+          CEILING_ERRORS=27
+          CEILING_WARNINGS=8
+
+          # Capture pyright output (don't let a non-zero exit abort the step;
+          # we make the pass/fail decision from the parsed counts).
+          set +e
+          PYRIGHT_OUTPUT="$(uv run pyright backend/ 2>&1)"
+          set -e
+          echo "$PYRIGHT_OUTPUT"
+
+          # Grep the "N errors, M warnings, K informations" summary line and
+          # extract the integer counts robustly.
+          SUMMARY_LINE="$(echo "$PYRIGHT_OUTPUT" | grep -E '[0-9]+ errors?, [0-9]+ warnings?' | tail -n 1)"
+          if [ -z "$SUMMARY_LINE" ]; then
+            echo "::error::Could not find pyright summary line in output."
+            exit 1
+          fi
+
+          ERRORS="$(echo "$SUMMARY_LINE" | grep -oE '[0-9]+ errors?' | grep -oE '[0-9]+')"
+          WARNINGS="$(echo "$SUMMARY_LINE" | grep -oE '[0-9]+ warnings?' | grep -oE '[0-9]+')"
+
+          echo "pyright summary: ${ERRORS} errors, ${WARNINGS} warnings"
+          echo "ceiling:         ${CEILING_ERRORS} errors, ${CEILING_WARNINGS} warnings"
+
+          if [ "$ERRORS" -gt "$CEILING_ERRORS" ] || [ "$WARNINGS" -gt "$CEILING_WARNINGS" ]; then
+            echo "::error::pyright regressed above the agreed baseline ceiling (${CEILING_ERRORS} errors / ${CEILING_WARNINGS} warnings). Fix the new type issues before merging."
+            exit 1
+          fi
+          echo "pyright is at or below the agreed baseline ceiling."
+
+  frontend:
+    name: Frontend (svelte-check + vitest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # svelte-check exits non-zero on errors but NOT on warnings by default.
+      # The frontend bar is 0 errors / 0 warnings, so we add --fail-on-warnings
+      # (supported by svelte-check >= 4) to also fail on any warning.
+      - name: Type-check (svelte-check, 0 errors / 0 warnings)
+        run: npm run check -- --fail-on-warnings
+
+      - name: Run frontend tests
+        run: npm run test

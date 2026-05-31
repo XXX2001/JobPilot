@@ -76,9 +76,12 @@ def test_limit_status_at_cap(test_app: TestClient) -> None:
     needed = max(0, limit - baseline_used)
     today_iso = _today_utc_naive().isoformat()
     for _ in range(needed):
+        # ``method='manual'`` so each row satisfies the N2-T3 conditional CHECK
+        # without a match (the daily-limit counter keys off ``status``, not
+        # ``method``, so this still fills the cap as intended).
         resp = test_app.post(
             "/api/applications",
-            json={"method": "auto", "status": "pending"},
+            json={"method": "manual", "status": "pending"},
         )
         assert resp.status_code == 201
         app_id = resp.json()["id"]

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import JSON, DateTime, Integer, String
+from sqlalchemy import JSON, CheckConstraint, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
@@ -31,6 +31,13 @@ class UserProfile(Base):
 
 class SearchSettings(Base):
     __tablename__ = "search_settings"
+    __table_args__ = (
+        CheckConstraint(
+            "cv_modification_sensitivity IN "
+            "('conservative', 'balanced', 'aggressive')",
+            name="ck_search_settings_cv_sensitivity",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     keywords: Mapped[dict] = mapped_column(JSON, nullable=False)

@@ -34,10 +34,14 @@ def test_create_application(test_app: TestClient):
 
 def test_get_application(test_app: TestClient):
     """GET /api/applications/{id} returns the created application."""
-    # First create one
+    # First create one. ``method='manual'`` keeps this a valid no-match
+    # application under the N2-T3 conditional CHECK
+    # (``ck_applications_job_match_required``): only manual applies may omit
+    # a ``job_match_id``. This test exercises the GET round-trip, not the
+    # apply method, so the manual path is sufficient.
     create_resp = test_app.post(
         "/api/applications",
-        json={"method": "auto", "status": "applied"},
+        json={"method": "manual", "status": "applied"},
     )
     assert create_resp.status_code == 201
     app_id = create_resp.json()["id"]
@@ -47,7 +51,7 @@ def test_get_application(test_app: TestClient):
     assert get_resp.status_code == 200
     data = get_resp.json()
     assert data["id"] == app_id
-    assert data["method"] == "auto"
+    assert data["method"] == "manual"
 
 
 def test_get_application_not_found(test_app: TestClient):

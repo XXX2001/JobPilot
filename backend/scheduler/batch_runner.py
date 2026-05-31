@@ -36,11 +36,11 @@ try:
     from backend.api.ws import broadcast_job_assessment, broadcast_status  # type: ignore
 except Exception:
 
-    async def broadcast_status(_message: str, _progress: float = 0.0) -> None:  # type: ignore[misc]
+    async def broadcast_status(message: str, progress: float = 0.0) -> None:  # type: ignore[misc]
         pass
 
-    async def broadcast_job_assessment(_match_id: int, _ats_score: float, _gap_severity: float,
-                                        _decision: str, _covered: list, _gaps: list) -> None:  # type: ignore[misc]
+    async def broadcast_job_assessment(match_id: int, ats_score: float, gap_severity: float,
+                                        decision: str, covered: list[str], gaps: list[dict]) -> None:  # type: ignore[misc]
         pass
 
 

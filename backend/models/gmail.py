@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -49,6 +50,11 @@ class GmailMessage(Base):
     __table_args__ = (
         Index("ix_gmail_messages_account_received",
               "account_email", "received_at"),
+        CheckConstraint(
+            "category IS NULL OR category IN ('noise', 'rejection', 'offer', "
+            "'interview_invite', 'ats_ack', 'unknown')",
+            name="ck_gmail_messages_category",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -86,6 +92,10 @@ class ApplicationCorrespondence(Base):
     __table_args__ = (
         Index("ix_application_correspondence_app_created",
               "application_id", "created_at"),
+        CheckConstraint(
+            "direction IN ('inbound', 'outbound')",
+            name="ck_application_correspondence_direction",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -3,7 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.models.base import Base
@@ -12,6 +20,27 @@ from backend.utils.time import naive_utc_now
 
 class Application(Base):
     __tablename__ = "applications"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'applied', 'cancelled', 'failed', "
+            "'interview', 'offer', 'rejected')",
+            name="ck_applications_status",
+        ),
+        CheckConstraint(
+            "method IN ('auto', 'assisted', 'manual')",
+            name="ck_applications_method",
+        ),
+        # A non-manual application is always created from a concrete match
+        # (the auto/assisted apply pipelines). Only the manual-apply path
+        # legitimately records an application without a ``job_match_id``.
+        CheckConstraint(
+            "method = 'manual' OR job_match_id IS NOT NULL",
+            name="ck_applications_job_match_required",
+        ),
+        # Tracker listing filters by ``status`` and orders by ``created_at``
+        # (``backend/api/applications.py``); this covering index serves it.
+        Index("ix_applications_status_created", "status", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_match_id: Mapped[Optional[int]] = mapped_column(
@@ -41,7 +70,7 @@ class ApplicationEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     application_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("applications.id", ondelete="CASCADE"),
+        Integer, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     details: Mapped[Optional[str]] = mapped_column(String, nullable=True)

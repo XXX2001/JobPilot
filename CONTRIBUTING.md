@@ -43,7 +43,7 @@ The backend also has linting available via `uv run ruff check backend/ tests/`.
 
 ### Baselines to respect
 
-- **`pyright backend/`** carries pre-existing type debt. The documented ceiling is **27 errors / 8 warnings** (this is also the threshold enforced by CI — keep the two in sync). Pre-existing debt does not block you, but do **not** push the counts above this ceiling — new type errors must be fixed before merge. If you reduce the count, that's welcome; lowering the ceiling is its own change.
+- **`pyright backend/`** carries pre-existing type debt. The documented ceiling is **19 errors / 8 warnings** (this is also the threshold enforced by CI — keep the two in sync). Pre-existing debt does not block you, but do **not** push the counts above this ceiling — new type errors must be fixed before merge. If you reduce the count, that's welcome; lowering the ceiling is its own change.
 - **`svelte-check` (`npm run check`)** is held at **0 errors / 0 warnings**. The frontend has no slack here: any new error or warning fails the gate.
 
 ---

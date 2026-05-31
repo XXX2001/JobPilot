@@ -11,6 +11,13 @@
 	import type { BindingHandle } from '$lib/utils/hotkeys';
 	import type { Job, QueueMatch } from '$lib/types/api';
 	import { focusTrap } from '$lib/utils/focusTrap';
+	import {
+		addPendingReviewId,
+		loadPendingReviewIds,
+		removePendingReviewId,
+		reviewStateToModal,
+		savePendingReviewIds
+	} from '$lib/utils/pendingReview';
 
 	type ApplyMode = 'auto' | 'manual' | 'skip';
 	type Phase = 'select' | 'review';
@@ -52,6 +59,8 @@
 				fields: lastMsg.filled_fields,
 				screenshot: lastMsg.screenshot_base64
 			};
+			// Mirror the awaiting job id so the review survives a WS reconnect/reload.
+			savePendingReviewIds(addPendingReviewId(loadPendingReviewIds(), lastMsg.job_id));
 		}
 		if (lastMsg.type === 'status' && (lastMsg.progress >= 1.0 || lastMsg.progress < 0)) {
 			refreshing = false;
@@ -196,18 +205,53 @@
 
 	function confirmApply() {
 		if (confirmModal) {
+			const jobId = confirmModal.jobId;
 			if (confirmModal.fields) {
-				send({ type: 'patch_fields', job_id: confirmModal.jobId, fields: confirmModal.fields });
+				send({ type: 'patch_fields', job_id: jobId, fields: confirmModal.fields });
 			}
-			send({ type: 'confirm_submit', job_id: confirmModal.jobId });
+			send({ type: 'confirm_submit', job_id: jobId });
 			confirmModal = null;
+			savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), jobId));
 		}
 	}
 
 	function cancelApply() {
 		if (confirmModal) {
-			send({ type: 'cancel_apply', job_id: confirmModal.jobId });
+			const jobId = confirmModal.jobId;
+			send({ type: 'cancel_apply', job_id: jobId });
 			confirmModal = null;
+			savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), jobId));
+		}
+	}
+
+	/**
+	 * Recover an in-flight apply-review after a WS reconnect or page reload.
+	 *
+	 * The single-modal UI shows at most one review at a time, so bail early if a
+	 * modal is already open. For each persisted job id we re-fetch the engine
+	 * snapshot; a 404/error means the review is gone, so we drop that id.
+	 */
+	async function recoverPendingReviews() {
+		if (confirmModal) return;
+		for (const id of loadPendingReviewIds()) {
+			try {
+				const payload = await apiFetch(`/api/applications/${id}/review-state`);
+				const modal = reviewStateToModal(payload);
+				// Re-check after the await: a live `apply_review` for another job may
+				// have opened a modal while we were fetching — don't clobber it.
+				if (modal && !confirmModal) {
+					confirmModal = modal;
+					return;
+				}
+			} catch (e: any) {
+				// apiFetch throws `API error <status>: ...` for non-2xx and on network
+				// errors. Only a confirmed 404 means the review is truly gone; drop
+				// that id. Any other (possibly transient) error keeps the id so a
+				// later reconnect retries.
+				if (typeof e?.message === 'string' && e.message.includes('404')) {
+					savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), id));
+				}
+			}
 		}
 	}
 
@@ -236,12 +280,17 @@
 	}
 
 	let unsubWsConnect: (() => void) | null = null;
+	let unsubWsRecover: (() => void) | null = null;
 
 	onMount(() => {
 		loadQueue();
 		syncBatchStatus();
+		// Recover a paused review if the page was reloaded while the WS is open.
+		recoverPendingReviews();
 		// On WS reconnect (e.g. after page refresh), re-sync batch status
 		unsubWsConnect = onWsConnect(syncBatchStatus);
+		// ...and recover any in-flight apply-review that was awaiting confirmation.
+		unsubWsRecover = onWsConnect(recoverPendingReviews);
 
 		// NOTE: Queue page + CVReviewPanel both register at route '/'.
 		// Each binding's action MUST self-guard on phase/panelPhase to avoid cross-firing.
@@ -262,6 +311,7 @@
 
 	onDestroy(() => {
 		unsubWsConnect?.();
+		unsubWsRecover?.();
 		if (refreshTimeout) clearTimeout(refreshTimeout);
 		if (hotkeyHandle) deregister(hotkeyHandle);
 	});

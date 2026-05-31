@@ -104,15 +104,21 @@ class ApplicationEngine:
         if job_id in self._confirm_events:
             self._confirm_events[job_id].set()
         self._pending_reviews.pop(job_id, None)
-        self._pending_patches.pop(job_id, None)
+        # NOTE: do NOT purge ``_pending_patches`` here. ``event.set()`` only
+        # *schedules* the waiter wakeup; the form-filler coroutine resumes
+        # later and only then reads the patches via ``get_pending_patches``.
+        # Popping synchronously here would clear the edits before they are
+        # re-filled, making the feature a no-op. The patches are purged by
+        # ``signal_cancel`` and by the ``apply()`` ``finally`` block, so no
+        # stale entry leaks into a later apply for the same job_id.
 
     def signal_patch_fields(self, job_id: int, fields: dict[str, str]) -> None:
         """Store user-edited review fields (``patch_fields`` WS message).
 
         The values are re-filled by the form filler right before submit. The
-        client sends this *before* ``confirm_submit``, so storing here and
-        purging on confirm/cancel keeps the lifecycle in lockstep with the
-        pending-review cache.
+        client sends this *before* ``confirm_submit``; the patches must
+        survive the confirm signal so the form filler can read them after its
+        wait resumes. Purge happens on cancel and in ``apply()``'s ``finally``.
         """
         self._pending_patches[job_id] = dict(fields)
 

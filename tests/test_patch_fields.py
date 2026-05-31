@@ -67,13 +67,21 @@ def test_get_pending_patches_returns_empty_when_absent():
     assert engine.get_pending_patches(999) == {}
 
 
-def test_pending_patches_cleared_on_confirm():
+def test_pending_patches_survive_confirm():
+    """Regression guard: ``signal_confirm`` must NOT purge patches.
+
+    ``event.set()`` only schedules the waiter wakeup; the form-filler
+    coroutine resumes *after* ``signal_confirm`` returns and only then reads
+    the patches. Purging here (as the original M2-T2 commit did) cleared the
+    user's edits before they were re-filled, making the feature a no-op.
+    """
     engine = _make_engine()
     engine.signal_patch_fields(12, {"#x": "y"})
     assert engine.get_pending_patches(12) == {"#x": "y"}
 
     engine.signal_confirm(12)
-    assert engine.get_pending_patches(12) == {}
+    # Patches must still be readable so the form filler can re-fill them.
+    assert engine.get_pending_patches(12) == {"#x": "y"}
 
 
 def test_pending_patches_cleared_on_cancel():
@@ -83,6 +91,37 @@ def test_pending_patches_cleared_on_cancel():
 
     engine.signal_cancel(13)
     assert engine.get_pending_patches(13) == {}
+
+
+@pytest.mark.asyncio
+async def test_pending_patches_cleared_after_apply_finally():
+    """The ``apply()`` ``finally`` block purges any leftover patches so a
+    later apply for the same job_id never re-fills stale edits."""
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from unittest.mock import patch
+
+    from backend.applier.engine import ApplyMode
+
+    engine = _make_engine()
+    engine.signal_patch_fields(14, {"#x": "y"})
+    assert engine.get_pending_patches(14) == {"#x": "y"}
+
+    db = AsyncMock(spec=AsyncSession)
+    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
+    db.rollback = AsyncMock()
+    db.add = MagicMock()
+
+    with patch("backend.applier.manual_apply.webbrowser.open"):
+        await engine.apply(
+            job_match_id=14,
+            mode=ApplyMode.MANUAL,
+            db=db,
+            apply_url="https://jobs.example.com/14",
+        )
+
+    assert engine.get_pending_patches(14) == {}
 
 
 def test_engine_injects_on_get_patches_into_form_filler():

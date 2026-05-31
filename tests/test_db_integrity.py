@@ -36,10 +36,13 @@ async def test_cascade_delete_removes_child_events():
         # ``created_at`` / ``event_date`` are NOT NULL with Python-side
         # defaults only (no DB server_default), so a raw INSERT must supply
         # them explicitly.
+        # ``method='manual'`` so the row satisfies the N2-T3 conditional CHECK
+        # ``ck_applications_job_match_required`` without needing a match (this
+        # test only exercises FK cascade to application_events).
         await session.execute(
             text(
                 "INSERT INTO applications (id, method, status, created_at) "
-                "VALUES (1, 'auto', 'applied', datetime('now'))"
+                "VALUES (1, 'manual', 'applied', datetime('now'))"
             )
         )
         await session.execute(

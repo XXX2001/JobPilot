@@ -57,6 +57,7 @@ async def _seed_match_with_letter_template(*, job_id_hint: str = "letter") -> in
             description="Build delightful Python.",
             url=f"https://jobs.example.com/{job_id_hint}",
             apply_url=f"https://jobs.example.com/{job_id_hint}/apply",
+            dedup_hash=f"letter-{job_id_hint}",
         )
         db.add(job)
         await db.flush()

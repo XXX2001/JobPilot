@@ -70,7 +70,7 @@ class Job(Base):
     apply_method: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     scraped_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now, index=True)
-    dedup_hash: Mapped[Optional[str]] = mapped_column(String, nullable=True, unique=True)
+    dedup_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
 
@@ -96,11 +96,11 @@ class JobMatch(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("jobs.id", ondelete="CASCADE"),
+        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False,
     )
     score: Mapped[float] = mapped_column(Float, nullable=False)
     keyword_hits: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String, default="new", index=True)
+    status: Mapped[str] = mapped_column(String, default="new", nullable=False, index=True)
     batch_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     matched_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
     gap_severity: Mapped[Optional[float]] = mapped_column(Float, nullable=True)

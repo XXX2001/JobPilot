@@ -67,6 +67,7 @@ async def _seed_job_match(*, job_id_hint: str = "test-job") -> int:
             location="Paris",
             url=f"https://jobs.example.com/{job_id_hint}",
             apply_url=f"https://jobs.example.com/{job_id_hint}/apply",
+            dedup_hash=f"apply-{job_id_hint}",
         )
         db.add(job)
         await db.flush()  # populate job.id

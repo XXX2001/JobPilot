@@ -55,8 +55,8 @@ async def _seed_job() -> None:
     async with AsyncSessionLocal() as session:
         await session.execute(
             text(
-                "INSERT INTO jobs (id, title, company, url, scraped_at) "
-                "VALUES (1, 'T', 'C', 'https://example.com/1', datetime('now'))"
+                "INSERT INTO jobs (id, title, company, url, scraped_at, dedup_hash) "
+                "VALUES (1, 'T', 'C', 'https://example.com/1', datetime('now'), 'h1')"
             )
         )
         await session.commit()

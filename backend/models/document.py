@@ -28,9 +28,9 @@ class TailoredDocument(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    job_match_id: Mapped[Optional[int]] = mapped_column(
+    job_match_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("job_matches.id", ondelete="CASCADE"),
-        nullable=True, index=True,
+        nullable=False, index=True,
     )
     doc_type: Mapped[str] = mapped_column(String, nullable=False)
     tex_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)

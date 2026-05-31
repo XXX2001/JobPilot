@@ -52,8 +52,8 @@ async def _seed_job() -> None:
     async with AsyncSessionLocal() as session:
         await session.execute(
             text(
-                "INSERT INTO jobs (id, title, company, url, scraped_at) "
-                "VALUES (1, 'T', 'C', 'https://example.com/1', datetime('now'))"
+                "INSERT INTO jobs (id, title, company, url, scraped_at, dedup_hash) "
+                "VALUES (1, 'T', 'C', 'https://example.com/1', datetime('now'), 'h1')"
             )
         )
         await session.commit()
@@ -128,9 +128,13 @@ async def test_applications_method_rejects_out_of_vocab():
 
 @pytest.mark.asyncio
 async def test_applications_method_accepts_valid():
+    # ``method='auto'`` now requires a non-NULL ``job_match_id`` (the N2-T3
+    # conditional CHECK ``ck_applications_job_match_required``), so seed a match
+    # and reference it — this test exercises the *method* vocabulary CHECK.
+    await _seed_job_match()
     await _expect_accepted(
-        "INSERT INTO applications (method, status, created_at) "
-        "VALUES ('auto', 'pending', datetime('now'))"
+        "INSERT INTO applications (method, status, job_match_id, created_at) "
+        "VALUES ('auto', 'pending', 1, datetime('now'))"
     )
 
 

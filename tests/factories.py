@@ -85,7 +85,12 @@ def make_job(
     unique: bool = False,
     **overrides: Any,
 ) -> Job:
-    """Build a ``Job`` row with the bare-minimum NOT NULL columns set."""
+    """Build a ``Job`` row with the bare-minimum NOT NULL columns set.
+
+    ``dedup_hash`` is NOT NULL + UNIQUE, so every factory-built job gets a
+    distinct counter-derived hash by default. Tests that exercise the dedup
+    logic itself can still pass an explicit ``dedup_hash=...`` override.
+    """
     if unique:
         n = _next("job")
         url = f"{url}?n={n}"
@@ -97,6 +102,7 @@ def make_job(
             url=url,
             description=description,
             apply_method="manual",
+            dedup_hash=f"dedup-{_next('job_dedup_hash')}",
         ),
         overrides,
     )

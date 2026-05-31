@@ -30,6 +30,13 @@ class Application(Base):
             "method IN ('auto', 'assisted', 'manual')",
             name="ck_applications_method",
         ),
+        # A non-manual application is always created from a concrete match
+        # (the auto/assisted apply pipelines). Only the manual-apply path
+        # legitimately records an application without a ``job_match_id``.
+        CheckConstraint(
+            "method = 'manual' OR job_match_id IS NOT NULL",
+            name="ck_applications_job_match_required",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -60,7 +67,7 @@ class ApplicationEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     application_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("applications.id", ondelete="CASCADE"),
+        Integer, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False,
     )
     event_type: Mapped[str] = mapped_column(String, nullable=False)
     details: Mapped[Optional[str]] = mapped_column(String, nullable=True)

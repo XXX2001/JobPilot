@@ -161,6 +161,9 @@
 
 	function confirmApply() {
 		if (confirmModal) {
+			if (confirmModal.fields) {
+				send({ type: 'patch_fields', job_id: confirmModal.jobId, fields: confirmModal.fields });
+			}
 			send({ type: 'confirm_submit', job_id: confirmModal.jobId });
 			confirmModal = null;
 		}
@@ -371,10 +374,16 @@
 			{#if confirmModal.fields && Object.keys(confirmModal.fields).length > 0}
 				<div class="px-5 pb-2 pt-4">
 					<dl class="space-y-1">
-						{#each Object.entries(confirmModal.fields) as [k, v]}
-							<div class="flex gap-2 text-xs">
+						{#each Object.keys(confirmModal.fields) as k}
+							<div class="flex items-center gap-2 text-xs">
 								<dt class="text-muted-foreground w-28 flex-shrink-0">{k}</dt>
-								<dd class="truncate">{v}</dd>
+								<dd class="flex-1">
+									<input
+										bind:value={confirmModal.fields[k]}
+										class="border-border bg-background focus:ring-ring w-full rounded border px-2 py-1 text-xs focus:outline-none focus:ring-1"
+										aria-label={k}
+									/>
+								</dd>
 							</div>
 						{/each}
 					</dl>

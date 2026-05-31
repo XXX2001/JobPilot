@@ -154,6 +154,13 @@ export interface CancelApplyMsg {
 	job_id: number;
 }
 
+/** User edits to mis-filled review fields (selector→new value) before submit. */
+export interface PatchFieldsMsg {
+	type: 'patch_fields';
+	job_id: number;
+	fields: Record<string, string>;
+}
+
 export interface LoginDoneMsg {
 	type: 'login_done';
 	site: string;
@@ -164,7 +171,12 @@ export interface LoginCancelMsg {
 	site: string;
 }
 
-export type ClientMessage = ConfirmSubmitMsg | CancelApplyMsg | LoginDoneMsg | LoginCancelMsg;
+export type ClientMessage =
+	| ConfirmSubmitMsg
+	| CancelApplyMsg
+	| PatchFieldsMsg
+	| LoginDoneMsg
+	| LoginCancelMsg;
 
 // ─── Narrow helper ───────────────────────────────────────────────────────────
 

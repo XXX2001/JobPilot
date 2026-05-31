@@ -60,18 +60,24 @@ class AutoApplyStrategy:
         api_key: str,
         model: str | None = None,
         on_review: Optional[Callable[..., None]] = None,
+        on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
         self._api_key = api_key
         self._model = model or settings.GOOGLE_MODEL
         # Engine callback invoked at apply_review broadcast time so the
         # pending-review snapshot is cached for HTTP re-fetch.
         self._on_review = on_review
+        # Engine accessor returning the user's field edits to re-fill before
+        # submit (selector→value), threaded down to the Tier-1 form filler.
+        self._on_get_patches = on_get_patches
 
         try:
             from backend.llm.gemini_client import GeminiClient
             from backend.applier.form_filler import PlaywrightFormFiller
             self._form_filler = PlaywrightFormFiller(
-                gemini_client=GeminiClient(), on_review=on_review
+                gemini_client=GeminiClient(),
+                on_review=on_review,
+                on_get_patches=on_get_patches,
             )
         except Exception as exc:
             logger.warning("Could not initialise PlaywrightFormFiller: %s — Tier 1 disabled", exc)

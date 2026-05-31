@@ -4,6 +4,37 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## fix-sprint (finish) 2026-05-30
+
+Closes the three fix-sprint tracks that were started but never landed on `main` (see [`docs/reports/2026-05-30-dev-consolidation.md`](docs/reports/2026-05-30-dev-consolidation.md) "Still NOT done"). Designed in [`docs/superpowers/specs/2026-05-30-finish-inflight-sprint-design.md`](docs/superpowers/specs/2026-05-30-finish-inflight-sprint-design.md) and executed lot-by-lot with two-stage review. The follow-on tracks (T1b, T4b, T7b, T2b) remain deferred.
+
+### T2a — Schema enforcement + Alembic unification
+
+- **Foreign keys are now real.** `PRAGMA foreign_keys=ON` is set on every connection (`backend/database.py`), and `ForeignKey` constraints are declared on the previously-bare relational columns (`applications.job_match_id`, `application_events.application_id`, `jobs.source_id`, `job_matches.job_id`, `tailored_documents.job_match_id`) with documented `ondelete` semantics.
+- **Alembic is the single source of truth.** A catch-up migration (`e5a65a3427cf`) brings the chain in sync with the models (Gmail tables, drifted columns, FK constraints) and drops the dead `search_settings.batch_time`. `init_db()` now runs `alembic upgrade head` — stamping pre-Alembic DBs to `e3a1f2b8c9d7` first so existing installs upgrade cleanly — and the ad-hoc `_migrate_add_columns()` runtime migrator is gone. The migration is idempotent (existence-guarded) and nulls dangling `SET NULL` references before adding constraints.
+- **Centralized UTC helper.** New `backend/utils/time.py` exposes `utc_now()` (aware) and `naive_utc_now()` (naive), replacing ~11 duplicated `_now()`/`_utc_now()` definitions. The two flavours are intentionally distinct (models store naive UTC).
+- Tests: `tests/test_db_integrity.py` (FK rejection + cascade + dead-column gone), `tests/test_migrations.py` (`upgrade head` clean + `compare_metadata == []`), `tests/test_time_helper.py`.
+
+### T3 — Silent-failure elimination
+
+Ten swallowed/hidden failures turned observable, proven by `tests/test_silent_failures.py` (16→0 failing):
+
+- `LaTeXCompiler` honours `TECTONIC_TIMEOUT_SECONDS` (kills + reaps the hung process, raises `LaTeXCompileTimeout`).
+- `GeminiClient` installs a per-request `HttpOptions(timeout=GEMINI_TIMEOUT_SECONDS)`; non-429 failures raise the new `GeminiCallFailed` instead of masquerading as a rate-limit.
+- `PlaywrightFormFiller` logs fill/upload failures at `WARNING` with the selector (no more silent `debug`).
+- `GmailSync._is_gmail_dedup_violation` narrows the swallowed `IntegrityError` to the dedup UNIQUE only — FK violations (now enforced) re-raise.
+- WS logs unknown message types at `WARNING`; the Gmail OAuth callback redirects to `/settings?gmail_error=invalid_state` instead of a bare 400; `ScraplingFetcher._clean_html` warns + counts content-selector misses; `LaTeXInjector` escapes `{company_name}` against LaTeX injection.
+- `ApplicationEngine` gains a pending-review cache (`record_pending_review`/`get_pending_review`, purged on confirm/cancel) plus `GET /api/applications/{id}/review-state` (wiring the broadcast site to populate it is deferred).
+- Bonus: `alembic/env.py` no longer sets `disable_existing_loggers=True`, which had been silently muting every app logger on each migration.
+
+### T4a items 4 & 5 — Applier FSM browser lifecycle
+
+- `ApplyContext.browser` is now actually populated: the Tier-2 strategies expose `self._active_browser` (reset per call) and `ApplicationEngine._dispatch` copies it onto the context (even on mid-flight exception/cancel).
+- Browser cleanup is centralized in the FSM terminals via `_close_browser`: `FAILED`/`CANCELLED` always close; `APPLIED` and `REMOTE_SUBMITTED_LOCAL_FAILED` close mode-aware (auto closes, **assisted-success leaves the browser open** for manual submission); a `BaseException` safety net in `apply()` covers `CancelledError`. The redundant `browser.stop()` calls scattered across `auto_apply.py` (4) and `assisted_apply.py` (1) are removed; `form_filler.py`/`captcha_handler.py` Playwright teardown is untouched.
+- Tests: `tests/test_apply_state.py` extended with browser-lifecycle coverage for every terminal.
+
+Suite after the sprint: 484 passed, 5 skipped; `pyright backend/` at baseline.
+
 ## fix-sprint 2026-05-24
 
 Sprint kicked off the day after the 2026-05-23 deep-dive (see [`docs/reports/2026-05-23-codebase-deep-dive/INDEX.md`](docs/reports/2026-05-23-codebase-deep-dive/INDEX.md)) flagged that three items in [`docs/reports/2026-05-23-improvements/INDEX.md`](docs/reports/2026-05-23-improvements/INDEX.md) were "claimed shipped" but only the foundation had landed. Each item below was verified against current code, regression-tested, then fixed.

@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-from pydantic import Field, SecretStr, ValidationError  # type: ignore
+from pydantic import SecretStr, ValidationError  # type: ignore
 from pydantic_settings import (
     BaseSettings,  # type: ignore
     SettingsConfigDict,  # type: ignore
@@ -22,26 +22,28 @@ class Settings(BaseSettings):
     SERPAPI_KEY: SecretStr = SecretStr("")
     CREDENTIAL_KEY: SecretStr = SecretStr("")  # Fernet key for encrypting stored credentials
 
-    # App settings with sensible defaults
-    jobpilot_host: str = Field("127.0.0.1", env="JOBPILOT_HOST")
-    jobpilot_port: int = Field(8000, env="JOBPILOT_PORT")
-    jobpilot_log_level: str = Field("info", env="JOBPILOT_LOG_LEVEL")
-    jobpilot_scraper_headless: bool = Field(True, env="JOBPILOT_SCRAPER_HEADLESS")
-    jobpilot_data_dir: str = Field("./data", env="JOBPILOT_DATA_DIR")
+    # App settings with sensible defaults.
+    # With ``case_sensitive=False`` (see model_config) pydantic-settings resolves
+    # each field from the uppercased env var automatically — e.g. ``jobpilot_host``
+    # reads ``JOBPILOT_HOST`` — so the deprecated ``env=`` kwarg is unnecessary.
+    jobpilot_host: str = "127.0.0.1"
+    jobpilot_port: int = 8000
+    jobpilot_log_level: str = "info"
+    jobpilot_scraper_headless: bool = True
+    jobpilot_data_dir: str = "./data"
     # Comma-separated list of allowed CORS origins. Default = local dev hosts.
-    jobpilot_allowed_origins: str = Field(
-        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000",
-        env="JOBPILOT_ALLOWED_ORIGINS",
+    jobpilot_allowed_origins: str = (
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000"
     )
     # Google / Gemini model settings
     # Primary model name (Gemini 3 Flash Preview — newest, most intelligent flash)
-    GOOGLE_MODEL: str = Field("gemini-3-flash-preview", env="GOOGLE_MODEL")
+    GOOGLE_MODEL: str = "gemini-3-flash-preview"
     # Comma-separated fallback model names (empty => no fallbacks)
-    GOOGLE_MODEL_FALLBACKS: str = Field("", env="GOOGLE_MODEL_FALLBACKS")
+    GOOGLE_MODEL_FALLBACKS: str = ""
     # Feature flag: enable Tier 1 Scrapling fetcher (HTTP + single LLM call)
-    SCRAPLING_ENABLED: bool = Field(True, env="SCRAPLING_ENABLED")
+    SCRAPLING_ENABLED: bool = True
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
-    APPLY_TIER1_ENABLED: bool = Field(True, env="APPLY_TIER1_ENABLED")
+    APPLY_TIER1_ENABLED: bool = True
 
     # Timeouts (seconds) — fail loudly instead of hanging forever.
     # (Field name already maps to the env var; no need for a deprecated env=.)
@@ -49,14 +51,11 @@ class Settings(BaseSettings):
     GEMINI_TIMEOUT_SECONDS: float = 45.0
 
     # ── Gmail integration (Phase 1) ──────────────────────────────────────
-    GMAIL_CLIENT_ID: str = Field("", env="GMAIL_CLIENT_ID")
+    GMAIL_CLIENT_ID: str = ""
     GMAIL_CLIENT_SECRET: SecretStr = SecretStr("")
-    GMAIL_REDIRECT_URI: str = Field(
-        "http://localhost:8000/api/gmail/oauth/callback",
-        env="GMAIL_REDIRECT_URI",
-    )
-    GMAIL_BACKFILL_DAYS: int = Field(30, env="GMAIL_BACKFILL_DAYS")
-    GMAIL_POLL_INTERVAL_MINUTES: int = Field(5, env="GMAIL_POLL_INTERVAL_MINUTES")
+    GMAIL_REDIRECT_URI: str = "http://localhost:8000/api/gmail/oauth/callback"
+    GMAIL_BACKFILL_DAYS: int = 30
+    GMAIL_POLL_INTERVAL_MINUTES: int = 5
 
     def is_configured(self, field_name: str) -> bool:
         """Return True if *field_name* holds a real, non-placeholder value.

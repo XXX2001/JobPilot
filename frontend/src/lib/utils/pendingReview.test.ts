@@ -131,4 +131,17 @@ describe('reviewStateToModal', () => {
 	it('returns null when job_id is missing', () => {
 		expect(reviewStateToModal({ filled_fields: {}, screenshot_b64: null })).toBeNull();
 	});
+
+	it('returns null when job_id has the wrong type', () => {
+		expect(reviewStateToModal({ job_id: '42', filled_fields: {}, screenshot_b64: null })).toBeNull();
+	});
+});
+
+describe('SSR / no-storage path', () => {
+	it('returns [] and is a no-op when sessionStorage is unavailable', () => {
+		delete (globalThis as any).sessionStorage;
+		delete (globalThis as any).window;
+		expect(loadPendingReviewIds()).toEqual([]);
+		expect(() => savePendingReviewIds([1, 2, 3])).not.toThrow();
+	});
 });

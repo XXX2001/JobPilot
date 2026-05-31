@@ -237,12 +237,20 @@
 			try {
 				const payload = await apiFetch(`/api/applications/${id}/review-state`);
 				const modal = reviewStateToModal(payload);
-				if (modal) {
+				// Re-check after the await: a live `apply_review` for another job may
+				// have opened a modal while we were fetching — don't clobber it.
+				if (modal && !confirmModal) {
 					confirmModal = modal;
 					return;
 				}
-			} catch {
-				savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), id));
+			} catch (e: any) {
+				// apiFetch throws `API error <status>: ...` for non-2xx and on network
+				// errors. Only a confirmed 404 means the review is truly gone; drop
+				// that id. Any other (possibly transient) error keeps the id so a
+				// later reconnect retries.
+				if (typeof e?.message === 'string' && e.message.includes('404')) {
+					savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), id));
+				}
 			}
 		}
 	}

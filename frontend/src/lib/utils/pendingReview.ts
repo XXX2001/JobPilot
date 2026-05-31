@@ -95,10 +95,14 @@ export function reviewStateToModal(payload: unknown): ReviewModal | null {
 		screenshot_b64?: unknown;
 	};
 	if (typeof snapshot.job_id !== 'number') return null;
+	const fields =
+		typeof snapshot.filled_fields === 'object' && snapshot.filled_fields !== null
+			? (snapshot.filled_fields as Record<string, string>)
+			: {};
 	return {
 		jobId: snapshot.job_id,
 		method: 'auto',
-		fields: (snapshot.filled_fields as Record<string, string>) ?? {},
+		fields,
 		screenshot: (snapshot.screenshot_b64 as string | null) ?? undefined
 	};
 }

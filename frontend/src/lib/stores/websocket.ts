@@ -1,6 +1,7 @@
 import { writable, type Readable } from 'svelte/store';
 import { asWSMessage, type ClientMessage } from '$lib/types/ws';
 import { pushToast } from '$lib/stores/toast';
+import { nextBackoffDelay } from '$lib/utils/backoff';
 // NOTE: the messages store is intentionally typed as `any[]` for now.
 // Tightening to `WSMessage[]` surfaces real pre-existing vocabulary drift
 // (FE-01 in docs/reports/2026-05-22-audit/04-frontend-audit.md) — see e.g.
@@ -19,6 +20,9 @@ export const loginPrompt = writable<{ site: string; text: string } | null>(null)
 
 let ws: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+// Number of reconnect attempts since the last successful connection. Drives
+// the exponential backoff delay; reset to 0 in `ws.onopen`.
+let reconnectAttempt = 0;
 
 // Callbacks invoked after a successful (re)connection
 const _onConnectCallbacks: Array<() => void> = [];
@@ -55,6 +59,7 @@ export function connectWs() {
 
     ws.onopen = () => {
       wsStatus.set('connected');
+      reconnectAttempt = 0;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
@@ -120,10 +125,14 @@ export function connectWs() {
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
+  // Exponential backoff with full jitter, capped at 30s, so an outage doesn't
+  // turn every client into a synchronized reconnection storm.
+  const delay = nextBackoffDelay(reconnectAttempt);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connectWs();
-  }, 3000);
+  }, delay);
+  reconnectAttempt += 1;
 }
 
 export function send(data: ClientMessage): void {

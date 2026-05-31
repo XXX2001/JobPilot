@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Link2, Search, X } from 'lucide-svelte';
 	import { apiFetch } from '$lib/api';
+	import { focusTrap } from '$lib/utils/focusTrap';
 	import type { Application } from '$lib/types/api';
 
 	// Subset of Application — we only render id / titles / status here.
@@ -92,6 +93,7 @@
 			tabindex="-1"
 			aria-modal="true"
 			aria-labelledby="link-app-title"
+			use:focusTrap
 		>
 			<header class="flex items-center justify-between gap-3 px-5 py-4 border-b border-border/50">
 				<div class="flex items-center gap-3">

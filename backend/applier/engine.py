@@ -62,8 +62,18 @@ class ApplicationEngine:
         self._model = model or settings.GOOGLE_MODEL
         self._daily_limit = daily_limit
 
-        self._auto = AutoApplyStrategy(api_key=api_key, model=self._model)
-        self._assisted = AssistedApplyStrategy(api_key=api_key, model=self._model)
+        self._auto = AutoApplyStrategy(
+            api_key=api_key,
+            model=self._model,
+            on_review=self.record_pending_review,
+            on_get_patches=self.get_pending_patches,
+        )
+        self._assisted = AssistedApplyStrategy(
+            api_key=api_key,
+            model=self._model,
+            on_review=self.record_pending_review,
+            on_get_patches=self.get_pending_patches,
+        )
         self._manual = ManualApplyStrategy()
         self._recorder = ApplicationRecorder()
 
@@ -73,6 +83,9 @@ class ApplicationEngine:
         # Cached review snapshots so a reconnecting client can re-fetch the
         # pending apply_review payload over HTTP (engine survives no WS client).
         self._pending_reviews: dict[int, dict] = {}
+        # Per-job user edits to mis-filled review fields (selector→new value),
+        # applied by the form filler right before submit.
+        self._pending_patches: dict[int, dict[str, str]] = {}
         # T4a: guard the re-entrancy check (read-then-write of the events
         # dicts) so two concurrent apply() calls for the same job_match_id
         # cannot both pass the membership check before either one inserts.
@@ -91,11 +104,28 @@ class ApplicationEngine:
         if job_id in self._confirm_events:
             self._confirm_events[job_id].set()
         self._pending_reviews.pop(job_id, None)
+        # NOTE: do NOT purge ``_pending_patches`` here. ``event.set()`` only
+        # *schedules* the waiter wakeup; the form-filler coroutine resumes
+        # later and only then reads the patches via ``get_pending_patches``.
+        # Popping synchronously here would clear the edits before they are
+        # re-filled, making the feature a no-op. The patches are purged by
+        # ``signal_cancel`` and by the ``apply()`` ``finally`` block, so no
+        # stale entry leaks into a later apply for the same job_id.
 
-    # NOTE: the assisted/auto review-pause path does not call this yet — the
-    # cache + GET review-state endpoint shipped per plan Task 11, but wiring the
-    # broadcast site to populate the snapshot is deferred (needs design out of
-    # this lot's scope) and tracked for a follow-on.
+    def signal_patch_fields(self, job_id: int, fields: dict[str, str]) -> None:
+        """Store user-edited review fields (``patch_fields`` WS message).
+
+        The values are re-filled by the form filler right before submit. The
+        client sends this *before* ``confirm_submit``; the patches must
+        survive the confirm signal so the form filler can read them after its
+        wait resumes. Purge happens on cancel and in ``apply()``'s ``finally``.
+        """
+        self._pending_patches[job_id] = dict(fields)
+
+    def get_pending_patches(self, job_id: int) -> dict[str, str]:
+        """Return the pending patches for *job_id*, or ``{}`` if none."""
+        return self._pending_patches.get(job_id, {})
+
     def record_pending_review(
         self, job_id: int, *, filled_fields: dict, screenshot_b64: Optional[str]
     ) -> None:
@@ -115,6 +145,7 @@ class ApplicationEngine:
         if job_id in self._cancel_events:
             self._cancel_events[job_id].set()
         self._pending_reviews.pop(job_id, None)
+        self._pending_patches.pop(job_id, None)
 
     # ------------------------------------------------------------------ #
     #  Main entry point                                                    #
@@ -220,6 +251,7 @@ class ApplicationEngine:
             self._confirm_events.pop(job_match_id, None)
             self._cancel_events.pop(job_match_id, None)
             self._pending_reviews.pop(job_match_id, None)
+            self._pending_patches.pop(job_match_id, None)
 
         return ApplicationResult(status=status, method=method, message=message or "")
 

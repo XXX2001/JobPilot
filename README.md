@@ -1,158 +1,115 @@
 # JobPilot
 
-**Your personal job-hunting assistant that runs on your own computer.**
+<!-- Repo slug detected from the git remote (github.com/XXX2001/JobPilot). Update OWNER/REPO if the repository moves. -->
+[![CI](https://github.com/XXX2001/JobPilot/actions/workflows/ci.yml/badge.svg)](https://github.com/XXX2001/JobPilot/actions/workflows/ci.yml)
 
-JobPilot finds job listings that match your profile, scores how well you fit each one, customises your CV for every application, and helps you apply -- all from a simple web interface in your browser.
+**A single-user, self-hosted AI assistant for the full job-application cycle.**
 
-Everything stays on your machine. No data is sent to third-party servers except the AI and job-search APIs you configure yourself.
+JobPilot is a local web app that discovers job listings from the sources you enable, scores how well each one fits your profile, tailors your LaTeX CV and cover letter for every match with Google Gemini, and walks you through applying — manually, semi-automatically, or fully automatically. It runs as one process on your own machine: a FastAPI backend serves both the REST API and the compiled SvelteKit frontend, backed by a single SQLite database and the Tectonic LaTeX compiler. No authentication layer, no cloud services beyond the Gemini and job-search APIs you configure yourself.
+
+## Features
+
+- **First-run onboarding wizard** (`/onboarding`) — guides you through API keys, CV upload, keywords, and your first batch.
+- **Job discovery** from API sources (Adzuna) and browser-scraped boards (LinkedIn, Indeed, Glassdoor, Welcome to the Jungle, Google Jobs) plus custom "lab" URLs.
+- **Relevance scoring** with a weighted keyword + recency model, and a **"Why this score"** breakdown on each job's detail page.
+- **AI CV tailoring** — surgical, safety-gated LaTeX replacements compiled to PDF via Tectonic.
+- **AI cover letters** — marker-delimited paragraph editing, viewable and regenerable.
+- **On-demand batch runs** with a **dry-run preview** (scrape + match only, nothing written to the database).
+- **Queue review** with three apply modes — **auto**, **assisted**, **manual** — and pre-submit editing of mis-filled form fields.
+- **CV editor** (`/cv`) and **Letters view** (`/letters`) with one-click regeneration, plus a **template compile-test** button in Settings → Profile.
+- **Application tracker** (`/tracker`) for following each application's status.
+- **Gmail integration** (optional) — connect a mailbox to surface application-related correspondence.
+
+Everything stays on your machine. The only data leaving your computer goes to the AI and job-search APIs you configure.
 
 ---
 
-## What can JobPilot do?
+## Quickstart
 
-- **Search for jobs** on LinkedIn, Indeed, Glassdoor, Welcome to the Jungle, and more
-- **Score each listing** against your skills and experience so you focus on the best matches
-- **Tailor your CV** automatically for every job, highlighting the most relevant skills
-- **Generate polished PDF CVs** from your template
-- **Help you apply** with manual, guided, or fully automated workflows
-- **Run on demand** -- trigger a fresh job-discovery batch any time from the dashboard
+You need API keys before either path will work — see [Getting the API keys](#getting-the-api-keys) below. Once running, open **http://localhost:8000** and complete the in-app onboarding wizard.
 
----
+### Path A — Docker Compose (recommended for self-hosting)
 
-## Getting started
+```bash
+cp .env.example .env
+# Edit .env and fill in GOOGLE_API_KEY, ADZUNA_APP_ID, ADZUNA_APP_KEY
+docker compose up -d --build
+```
 
-### Before you begin
+Then open **http://localhost:8000**. Your data persists in `./data` across container restarts.
 
-You only need two things to get started:
+### Path B — Local dev (uv)
 
-| What to install | Where to get it | Why it is needed |
+**Prerequisites:** Python 3.12, Node.js 20.
+
+```bash
+uv sync                                         # install Python dependencies
+uv run python scripts/download_tectonic.py      # download the Tectonic LaTeX compiler
+cd frontend && npm ci && npm run build && cd ..  # build the web interface
+cp .env.example .env                            # then fill in your API keys
+uv run python start.py                          # launch (opens http://localhost:8000)
+```
+
+`start.py` checks that the data directory, frontend build, and Tectonic binary are present, frees the port if needed, then starts the backend on `JOBPILOT_HOST:JOBPILOT_PORT` (default `127.0.0.1:8000`) and opens your browser.
+
+### Getting the API keys
+
+JobPilot needs three required keys, all available on free tiers:
+
+| Key | Where to get it | What it powers |
 | --- | --- | --- |
-| **Git** | [git-scm.com/downloads](https://git-scm.com/downloads/) | Downloads the project |
-| **Node.js 18 or newer** | [nodejs.org](https://nodejs.org/) (pick the LTS version) | Builds the web interface |
+| `GOOGLE_API_KEY` | [Google AI Studio](https://aistudio.google.com/) → **Get API key** | All Gemini features (scoring extraction, CV/letter tailoring, scraping, form-fill) |
+| `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | [Adzuna developer portal](https://developer.adzuna.com/) → create a free account | The Adzuna job-search API source |
 
-> **You do NOT need to install Python yourself.** The installer automatically sets up `uv` (a fast Python manager) which downloads and manages the correct Python version for you.
+Optional integrations (SerpAPI fallback, Gmail) have their own keys — see `.env.example` for the full list and inline notes.
 
-### Step 1 -- Download the project
+---
 
-Open a terminal (or PowerShell on Windows) and run:
+## Documentation
 
-```bash
-git clone <your-repository-url>
-cd Web-automation
-```
+- **[User guide](docs/user-guide.md)** — an end-to-end walkthrough of every feature, from onboarding to Gmail.
+- **[Architecture](docs/architecture.md)** — system overview, component diagram, request lifecycles, database schema, and the [credentials & encryption](docs/architecture.md#credentials--encryption) reference.
+- **[Custom CV templates](docs/custom-templates.md)** — how to bring your own LaTeX CV template.
+- **[Contributing](CONTRIBUTING.md)** — dev setup, quality gates, and the spec/plan workflow.
 
-### Step 2 -- Run the installer
+---
 
-The installer takes care of everything automatically. It is safe to run more than once.
+## Alternative install (guided installer scripts)
+
+The repository also ships convenience installer scripts that bundle the local-dev steps above (install `uv` + Python, build the frontend, download Tectonic, create `.env`, and add a desktop shortcut). They are optional; the [Quickstart](#quickstart) paths above are the canonical setup.
 
 <details>
-<summary><strong>Linux</strong></summary>
+<summary><strong>Linux / macOS</strong></summary>
 
 ```bash
 bash scripts/install.sh
 ```
 
-</details>
-
-<details>
-<summary><strong>macOS</strong></summary>
-
-```bash
-bash scripts/install.sh
-```
-
-If macOS shows a security warning about Tectonic after the install, run this once to allow it:
-
-```bash
-xattr -d com.apple.quarantine ./bin/tectonic
-```
+On macOS, if a security warning about Tectonic appears, run once: `xattr -d com.apple.quarantine ./bin/tectonic`.
 
 </details>
 
 <details>
 <summary><strong>Windows</strong></summary>
 
-Open **PowerShell** in the project folder and run:
-
 ```powershell
 .\scripts\install.ps1
 ```
 
-If PowerShell says "scripts are disabled on this system", run this first:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install.ps1
-```
+If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope Process Bypass` first.
 
 </details>
-
-The installer will:
-1. Install `uv` and Python 3.12 automatically (no manual Python setup needed)
-2. Check that Node.js is available for the web interface
-3. Download all the libraries JobPilot needs
-4. Set up a web browser for job-site scraping
-5. Download the PDF engine for CV generation
-6. Build the web interface
-7. Create a `.env` settings file for your API keys
-8. Place a **shortcut on your Desktop** so you can start JobPilot with one click
-
-### Step 3 -- Get your free API keys
-
-JobPilot uses two free services. You only need to do this once.
-
-#### Gemini (Google AI) -- powers the smart features
-
-1. Go to [aistudio.google.com](https://aistudio.google.com/)
-2. Sign in with your Google account
-3. Click **"Get API key"** and copy the key
-
-#### Adzuna -- powers the job search
-
-1. Go to [developer.adzuna.com](https://developer.adzuna.com/)
-2. Create a free account
-3. Copy your **App ID** and **App Key** from the dashboard
-
-### Step 4 -- Enter your API keys
-
-Open the file called `.env` in the project folder (any text editor works) and paste your keys:
-
-```
-GOOGLE_API_KEY=paste_your_gemini_key_here
-ADZUNA_APP_ID=paste_your_adzuna_app_id_here
-ADZUNA_APP_KEY=paste_your_adzuna_key_here
-```
-
-Save the file.
-
-### Step 5 -- Start JobPilot
-
-**Option A -- Use the Desktop shortcut** (created by the installer)
-
-- Linux: double-click `JobPilot` on your desktop
-- macOS: double-click `JobPilot.command` on your desktop
-- Windows: double-click `Start JobPilot.bat` on your desktop
-
-**Option B -- Start from the terminal**
-
-```bash
-# Linux / macOS
-./start-jobpilot.sh
-
-# Windows (PowerShell)
-.\start-jobpilot.ps1
-```
-
-Once started, open your browser and go to: **http://localhost:8000**
 
 ---
 
 ## First-time setup (inside the app)
 
-1. The setup wizard will guide you through the basics
+1. The onboarding wizard (`/onboarding`) will guide you through the basics
 2. Upload your CV template (a `.tex` file)
 3. Set your job search preferences (location, keywords, etc.)
 4. Click **Refresh queue** to run your first job-discovery batch
+
+For a full walkthrough of every feature, see the [user guide](docs/user-guide.md).
 
 ---
 

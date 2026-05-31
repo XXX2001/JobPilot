@@ -125,3 +125,16 @@ export interface Document {
 	diff_json?: unknown;
 	created_at: string;
 }
+
+/**
+ * Response from `POST /api/documents/:matchId/letter/regenerate`.
+ * Mirrors the backend `LetterRegenerateResponse` shape.
+ */
+export interface LetterRegenerateResponse {
+	match_id: number;
+	doc_id: number;
+	doc_type: 'letter';
+	tex_path: string;
+	pdf_path: string;
+	status: 'regenerated';
+}

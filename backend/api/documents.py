@@ -6,14 +6,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from backend.api.deps import DBSession
+from backend.config import settings
 from backend.models.document import TailoredDocument
-from backend.models.job import JobMatch
+from backend.models.job import Job, JobMatch
+from backend.models.schemas import JobDetails
+from backend.models.user import UserProfile
+from backend.utils.time import naive_utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +51,15 @@ class ValidateTemplateResponse(BaseModel):
     warnings: list[str]
 
 
+class CompileTestResponse(BaseModel):
+    ok: bool
+    error_log: Optional[str] = None
+
+
+# Cap the captured compile log so a huge Tectonic dump can't bloat the response.
+_MAX_ERROR_LOG_CHARS = 8000
+
+
 class CVDiffResponse(BaseModel):
     match_id: int
     diff: Any
@@ -57,6 +70,61 @@ class RegenerateResponse(BaseModel):
     match_id: int
     status: Literal["queued"]
     message: str
+
+
+class LetterRegenerateResponse(BaseModel):
+    match_id: int
+    doc_id: int
+    doc_type: Literal["letter"]
+    tex_path: Optional[str]
+    pdf_path: Optional[str]
+    status: Literal["regenerated"]
+
+
+def _resolve_letter_path(profile: Optional[UserProfile], data_dir: Path) -> Optional[Path]:
+    """Return the base cover-letter template to tailor, or ``None``.
+
+    Mirrors ``backend.scheduler.batch_runner._resolve_cv_path``: prefer the
+    profile's ``base_letter_path`` (absolute or relative to the data dir) when
+    the file exists, otherwise auto-detect a ``*letter*.tex`` template under
+    ``<data_dir>/templates/``.
+    """
+    if profile and profile.base_letter_path:
+        raw = Path(profile.base_letter_path)
+        candidate = raw if raw.is_absolute() else data_dir / raw
+        if candidate.exists():
+            return candidate
+
+    templates_dir = data_dir / "templates"
+    candidates = sorted(templates_dir.glob("*letter*.tex")) if templates_dir.is_dir() else []
+    if candidates:
+        logger.warning("No base_letter_path in profile — using auto-detected letter: %s", candidates[0])
+        return candidates[0]
+
+    return None
+
+
+def _resolve_cv_path(profile: Optional[UserProfile], data_dir: Path) -> Optional[Path]:
+    """Return the base CV template to compile, or ``None``.
+
+    Mirrors ``backend.scheduler.batch_runner._resolve_cv_path``: prefer the
+    profile's ``base_cv_path`` (absolute or relative to the data dir) when the
+    file exists, otherwise auto-detect the alphabetically first ``*.tex``
+    template under ``<data_dir>/templates/``.
+    """
+    if profile and profile.base_cv_path:
+        raw = Path(profile.base_cv_path)
+        candidate = raw if raw.is_absolute() else data_dir / raw
+        if candidate.exists():
+            return candidate
+
+    templates_dir = data_dir / "templates"
+    candidates = sorted(templates_dir.glob("*.tex")) if templates_dir.is_dir() else []
+    if candidates:
+        logger.warning("No base_cv_path in profile — using auto-detected CV: %s", candidates[0])
+        return candidates[0]
+
+    return None
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -80,6 +148,48 @@ async def validate_template(body: ValidateTemplateRequest) -> ValidateTemplateRe
     sections = parser.extract_sections(body.tex_content)
     warnings = parser.validate_markers(body.tex_content)
     return ValidateTemplateResponse(has_markers=sections.has_markers, warnings=warnings)
+
+
+@router.post("/compile-test", response_model=CompileTestResponse)
+async def compile_test(db: DBSession) -> CompileTestResponse:
+    """Compile the configured base CV template to surface Tectonic errors early.
+
+    Resolves the stored base CV (same resolution as CV generation) and runs a
+    real Tectonic compile on it. The JOBPILOT markers are LaTeX comments, so a
+    bare, un-substituted template still compiles — no placeholder substitution
+    is needed.
+
+    A failed compile is a *successful test*: it returns ``{ok: false,
+    error_log: ...}`` rather than a 5xx. Only a missing template (a
+    configuration problem) raises 400.
+    """
+    import tempfile
+
+    from backend.latex.compiler import (
+        LaTeXCompilationError,
+        LaTeXCompiler,
+    )
+
+    profile = (await db.execute(select(UserProfile).limit(1))).scalar_one_or_none()
+    data_dir = Path(settings.jobpilot_data_dir)
+    cv_path = _resolve_cv_path(profile, data_dir)
+    if cv_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No base CV template configured",
+        )
+
+    compiler = LaTeXCompiler()
+    # Compile into a throwaway directory so the test never pollutes the
+    # templates folder with a stray PDF. ``LaTeXCompileTimeout`` is a subclass
+    # of ``LaTeXCompilationError``, so the single ``except`` covers both.
+    with tempfile.TemporaryDirectory(prefix="jobpilot-compile-test-") as tmp:
+        try:
+            await compiler.compile(cv_path, output_dir=Path(tmp))
+        except LaTeXCompilationError as exc:
+            return CompileTestResponse(ok=False, error_log=str(exc)[:_MAX_ERROR_LOG_CHARS])
+
+    return CompileTestResponse(ok=True, error_log=None)
 
 
 @router.get("/{match_id}/cv/pdf", response_class=FileResponse)
@@ -211,4 +321,103 @@ async def regenerate_documents(
         match_id=match_id,
         status="queued",
         message="Document regeneration has been queued",
+    )
+
+
+@router.post("/{match_id}/letter/regenerate", response_model=LetterRegenerateResponse)
+async def regenerate_letter(
+    match_id: int,
+    request: Request,
+    db: DBSession,
+) -> LetterRegenerateResponse:
+    """Regenerate ONLY the tailored cover letter for a job match.
+
+    Reuses the ``LetterPipeline`` singleton on ``app.state`` (the same pipeline
+    the batch runner is wired to), then upserts the
+    ``TailoredDocument(doc_type="letter")`` row so the result is immediately
+    streamable via ``GET /api/documents/{match_id}/letter/pdf``.
+    """
+    # Resolve the job match (and its job) — 404 for an unknown/match-less id,
+    # consistent with the letter/pdf handler.
+    stmt = (
+        select(JobMatch, Job)
+        .join(Job, Job.id == JobMatch.job_id)
+        .where(JobMatch.id == match_id)
+    )
+    row = (await db.execute(stmt)).one_or_none()
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"JobMatch {match_id} not found",
+        )
+    _match, job = row
+
+    pipeline = getattr(request.app.state, "letter_pipeline", None)
+    if pipeline is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Letter generation pipeline is not available",
+        )
+
+    profile = (await db.execute(select(UserProfile).limit(1))).scalar_one_or_none()
+    data_dir = Path(settings.jobpilot_data_dir)
+    base_letter_path = _resolve_letter_path(profile, data_dir)
+    if base_letter_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No base cover-letter template configured",
+        )
+
+    job_details = JobDetails(
+        id=job.id,
+        title=job.title,
+        company=job.company,
+        location=job.location or "",
+        description=job.description or "",
+        salary_min=job.salary_min,
+        salary_max=job.salary_max,
+        url=job.url,
+        apply_url=job.apply_url or "",
+        apply_method=job.apply_method or "",
+        country=job.country or "",
+        posted_at=job.posted_at,
+    )
+
+    import re
+
+    slug = re.sub(r"[^\w]+", "_", (job.title or "job").lower()).strip("_")[:50]
+    output_dir = data_dir / "letters" / f"{match_id}_{slug}"
+
+    tailored = await pipeline.generate_tailored_letter(
+        base_letter_path=base_letter_path,
+        job=job_details,
+        output_dir=output_dir,
+    )
+
+    # Upsert the letter row so letter/pdf (scalar_one_or_none) stays unambiguous.
+    existing_stmt = select(TailoredDocument).where(
+        TailoredDocument.job_match_id == match_id,
+        TailoredDocument.doc_type == "letter",
+    )
+    doc = (await db.execute(existing_stmt)).scalar_one_or_none()
+    if doc is None:
+        doc = TailoredDocument(job_match_id=match_id, doc_type="letter")
+        db.add(doc)
+
+    doc.tex_path = str(tailored.tex_path) if getattr(tailored, "tex_path", None) else None
+    doc.pdf_path = str(tailored.pdf_path) if getattr(tailored, "pdf_path", None) else None
+    doc.created_at = naive_utc_now()
+
+    await db.commit()
+    await db.refresh(doc)
+
+    logger.info("Cover letter regenerated for match_id=%d (doc_id=%d)", match_id, doc.id)
+
+    return LetterRegenerateResponse(
+        match_id=match_id,
+        doc_id=doc.id,
+        doc_type="letter",
+        tex_path=doc.tex_path,
+        pdf_path=doc.pdf_path,
+        status="regenerated",
     )

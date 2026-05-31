@@ -64,6 +64,19 @@ class JobMatcher:
         filtered = [(j, s) for j, s in scored if s >= min_score]
         return sorted(filtered, key=lambda x: x[1], reverse=True)
 
+    def matched_keywords(self, job: JobDetails, filters: JobFilters) -> list[str]:
+        """Return the include-keywords found in the job description.
+
+        Read-only mirror of the overlap logic in :meth:`_keyword_match`: a
+        case-insensitive substring check against the description. The original
+        casing of each configured keyword is preserved in the result, and an
+        empty list is returned when no keywords are configured.
+        """
+        if not filters.keywords:
+            return []
+        text = job.description.lower()
+        return [kw for kw in filters.keywords if kw.lower() in text]
+
     # --- Private helpers ---
 
     def _keyword_match(self, description: str, keywords: list[str]) -> float:

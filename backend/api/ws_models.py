@@ -183,6 +183,18 @@ class CancelApply(BaseModel):
     job_id: int
 
 
+class PatchFields(BaseModel):
+    """Client edits to mis-filled review fields, keyed by CSS selector.
+
+    Sent right before ``confirm_submit`` so the backend can re-fill the
+    patched selectors with the user-corrected values before clicking submit.
+    """
+
+    type: Literal["patch_fields"]
+    job_id: int
+    fields: dict[str, str]
+
+
 class LoginDone(BaseModel):
     type: Literal["login_done"]
     site: str
@@ -194,7 +206,8 @@ class LoginCancel(BaseModel):
 
 
 ClientMessage = Annotated[
-    Union[ConfirmSubmit, CancelApply, LoginDone, LoginCancel], Field(discriminator="type")
+    Union[ConfirmSubmit, CancelApply, PatchFields, LoginDone, LoginCancel],
+    Field(discriminator="type"),
 ]
 
 
@@ -219,6 +232,7 @@ __all__ = [
     "ClientMessage",
     "ConfirmSubmit",
     "CancelApply",
+    "PatchFields",
     "LoginDone",
     "LoginCancel",
 ]

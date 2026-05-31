@@ -19,7 +19,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 from backend.config import settings
 
@@ -42,8 +42,19 @@ class PlaywrightFormFiller:
     Raises on any unrecoverable error so the caller can fall back to Tier 2.
     """
 
-    def __init__(self, gemini_client: "GeminiClient") -> None:
+    def __init__(
+        self,
+        gemini_client: "GeminiClient",
+        on_review: Optional[Callable[..., None]] = None,
+        on_get_patches: Optional[Callable[[int], dict]] = None,
+    ) -> None:
         self._gemini = gemini_client
+        # Engine callback invoked at apply_review broadcast time so the
+        # pending-review snapshot is cached for HTTP re-fetch.
+        self._on_review = on_review
+        # Engine accessor returning the user's field edits to re-fill before
+        # submit (selector→value). Injected the same way as ``on_review``.
+        self._on_get_patches = on_get_patches
 
     # ------------------------------------------------------------------
     # Public API
@@ -205,6 +216,15 @@ class PlaywrightFormFiller:
             except Exception as exc:
                 logger.warning("Could not broadcast apply_review: %s", exc)
 
+            # Cache the same snapshot the WS broadcast just sent so a
+            # reconnecting client can re-fetch it over HTTP.
+            if self._on_review is not None:
+                self._on_review(
+                    job_id,
+                    filled_fields=filled_fields,
+                    screenshot_b64=screenshot_b64,
+                )
+
             # Phase 7: wait for confirm or cancel
             if confirm_event is None:
                 confirm_event = asyncio.Event()
@@ -225,7 +245,10 @@ class PlaywrightFormFiller:
             if not confirm_event.is_set():
                 return {"status": "cancelled", "filled_fields": filled_fields, "screenshot_b64": screenshot_b64}
 
-            # Phase 8: submit
+            # Phase 8: apply user edits (patch_fields) then submit. Patches are
+            # best-effort — a single failing re-fill must not abort the submit.
+            await self._apply_patches(page, job_id)
+
             submit_sel = mapping.get("submit_selector", "button[type=submit]")
             await page.click(submit_sel, timeout=5_000)
             logger.info("[Tier 1] Submitted application for job_id=%d", job_id)
@@ -242,6 +265,23 @@ class PlaywrightFormFiller:
                 await pw.stop()
             except Exception:
                 pass
+
+    async def _apply_patches(self, page, job_id: int) -> None:
+        """Re-fill any user-edited review fields for *job_id* before submit.
+
+        Best-effort: a single failing ``page.fill`` is logged as a WARNING
+        (mirroring the Phase-3 fill failures) and never aborts the submit.
+        """
+        if self._on_get_patches is None:
+            return
+        patches = self._on_get_patches(job_id) or {}
+        for sel, val in patches.items():
+            if not sel:
+                continue
+            try:
+                await page.fill(sel, val, timeout=3_000)
+            except Exception as exc:
+                logger.warning("Patch fill failed: selector=%r: %s", sel, exc)
 
     async def fill_only(
         self,

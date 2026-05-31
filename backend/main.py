@@ -218,10 +218,17 @@ async def lifespan(app: FastAPI):
             if engine:
                 engine.signal_cancel(job_id)
 
+        def _handle_patch_fields(msg: dict) -> None:
+            job_id = msg.get("job_id", -1)
+            engine = getattr(app.state, "apply_engine", None)
+            if engine:
+                engine.signal_patch_fields(job_id, msg.get("fields", {}))
+
         ws_module.manager.register_handler("login_done", _handle_login_done)
         ws_module.manager.register_handler("login_cancel", _handle_login_cancel)
         ws_module.manager.register_handler("confirm_submit", _handle_confirm_submit)
         ws_module.manager.register_handler("cancel_apply", _handle_cancel_apply)
+        ws_module.manager.register_handler("patch_fields", _handle_patch_fields)
 
     except Exception as exc:
         logger.warning("WS handler registration failed (non-fatal): %s", exc)

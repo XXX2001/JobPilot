@@ -2,7 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { apiFetch } from '$lib/api';
 	import { messages, send, onWsConnect } from '$lib/stores/websocket';
-	import { RefreshCw, AlertCircle, Zap, MousePointer, X } from 'lucide-svelte';
+	import { RefreshCw, AlertCircle, Zap, MousePointer, X, Eye } from 'lucide-svelte';
 	import CVReviewPanel from '$lib/components/CVReviewPanel.svelte';
 	import FloatingEmoji from '$lib/components/FloatingEmoji.svelte';
 	import BatchPipelineTracker from '$lib/components/BatchPipelineTracker.svelte';
@@ -22,6 +22,11 @@
 	let error = $state('');
 	let refreshing = $state(false);
 	let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
+
+	type PreviewMatch = { title: string; company: string; score: number; location: string };
+	let previewing = $state(false);
+	let preview = $state<PreviewMatch[] | null>(null);
+	let previewError = $state('');
 	let confirmModal = $state<{
 		jobId: number;
 		method: string;
@@ -112,6 +117,35 @@
 		}
 	}
 
+	/** Dry-run: preview what today's batch WOULD match without committing rows. */
+	async function previewMatches() {
+		if (previewing || refreshing) return;
+		previewing = true;
+		previewError = '';
+		try {
+			const data = await apiFetch<{
+				status: string;
+				matches: PreviewMatch[];
+				total: number;
+			}>('/api/queue/refresh?dry_run=true', { method: 'POST' });
+			preview = data.matches ?? [];
+		} catch (e: any) {
+			// 409 = a batch is already running — can't preview right now.
+			if (e.message?.includes('409')) {
+				previewError = 'A search is already running — try the preview again once it finishes.';
+			} else {
+				previewError = e.message ?? 'Preview failed';
+			}
+		} finally {
+			previewing = false;
+		}
+	}
+
+	function dismissPreview() {
+		preview = null;
+		previewError = '';
+	}
+
 	async function setMode(matchId: number, mode: ApplyMode) {
 		const prev = modes.get(matchId);
 		const m = new Map(modes);
@@ -124,10 +158,11 @@
 				await apiFetch(`/api/queue/${matchId}/skip`, { method: 'PATCH' });
 				// Remove from local list
 				matches = matches.filter((mt) => mt.id !== matchId);
-			} catch {
-				// revert on failure
+			} catch (e: any) {
+				// revert on failure and surface the reason
 				m.set(matchId, prev ?? 'manual');
 				modes = new Map(m);
+				error = e.message ?? 'Failed to skip this match';
 			}
 		} else if (prev === 'skip' && mode !== 'skip') {
 			// Un-skip: restore to new
@@ -161,6 +196,9 @@
 
 	function confirmApply() {
 		if (confirmModal) {
+			if (confirmModal.fields) {
+				send({ type: 'patch_fields', job_id: confirmModal.jobId, fields: confirmModal.fields });
+			}
 			send({ type: 'confirm_submit', job_id: confirmModal.jobId });
 			confirmModal = null;
 		}
@@ -237,14 +275,25 @@
 			{matches.length} pending · Scan to discover new opportunities
 		</p>
 	</div>
-	<button
-		onclick={refreshQueue}
-		disabled={refreshing}
-		class="border-border hover:bg-accent flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
-	>
-		<RefreshCw size={13} class={refreshing ? 'animate-spin' : ''} />
-		{refreshing ? 'Scanning…' : 'Scan for Jobs'}
-	</button>
+	<div class="flex items-center gap-2">
+		<button
+			onclick={previewMatches}
+			disabled={previewing || refreshing}
+			class="border-border hover:bg-accent flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+			title="Preview today's matches without saving anything"
+		>
+			<Eye size={13} class={previewing ? 'animate-pulse' : ''} />
+			{previewing ? 'Previewing…' : "Preview today's matches"}
+		</button>
+		<button
+			onclick={refreshQueue}
+			disabled={refreshing}
+			class="border-border hover:bg-accent flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+		>
+			<RefreshCw size={13} class={refreshing ? 'animate-spin' : ''} />
+			{refreshing ? 'Scanning…' : 'Scan for Jobs'}
+		</button>
+	</div>
 </div>
 
 {#if error}
@@ -253,6 +302,61 @@
 	>
 		<AlertCircle size={13} />{error}
 		<button onclick={() => (error = '')} class="ml-auto hover:text-red-300">✕</button>
+	</div>
+{/if}
+
+{#if previewError}
+	<div
+		class="mb-4 flex items-center gap-2 rounded-md border border-yellow-500/20 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-400"
+	>
+		<AlertCircle size={13} />{previewError}
+		<button onclick={() => (previewError = '')} class="ml-auto hover:text-yellow-300">✕</button>
+	</div>
+{/if}
+
+{#if preview !== null}
+	<div class="border-border bg-card mb-4 rounded-lg border">
+		<div class="border-border flex items-center justify-between border-b px-4 py-2.5">
+			<div class="flex items-center gap-2">
+				<Eye size={14} class="text-muted-foreground" />
+				<span class="text-sm font-medium">Preview · {preview.length} match{preview.length === 1 ? '' : 'es'}</span>
+				<span class="text-muted-foreground text-xs">— nothing saved</span>
+			</div>
+			<button
+				onclick={dismissPreview}
+				class="text-muted-foreground hover:text-foreground rounded p-1 transition-colors"
+				aria-label="Dismiss preview"
+			>
+				<X size={14} />
+			</button>
+		</div>
+		{#if preview.length === 0}
+			<p class="text-muted-foreground px-4 py-6 text-center text-xs">
+				No jobs would match today's settings.
+			</p>
+		{:else}
+			<ul class="divide-border divide-y">
+				{#each preview as item, idx (idx)}
+					<li class="flex items-center gap-3 px-4 py-2.5">
+						<span
+							class="w-10 flex-shrink-0 text-center text-sm font-bold {item.score >= 80
+								? 'text-green-400'
+								: item.score >= 60
+									? 'text-yellow-400'
+									: 'text-red-400'}"
+						>
+							{Math.round(item.score)}%
+						</span>
+						<div class="min-w-0 flex-1">
+							<p class="truncate text-sm font-medium">{item.title}</p>
+							<p class="text-muted-foreground truncate text-xs">
+								{item.company}{item.location ? ` · ${item.location}` : ''}
+							</p>
+						</div>
+					</li>
+				{/each}
+			</ul>
+		{/if}
 	</div>
 {/if}
 
@@ -371,10 +475,16 @@
 			{#if confirmModal.fields && Object.keys(confirmModal.fields).length > 0}
 				<div class="px-5 pb-2 pt-4">
 					<dl class="space-y-1">
-						{#each Object.entries(confirmModal.fields) as [k, v]}
-							<div class="flex gap-2 text-xs">
+						{#each Object.keys(confirmModal.fields) as k}
+							<div class="flex items-center gap-2 text-xs">
 								<dt class="text-muted-foreground w-28 flex-shrink-0">{k}</dt>
-								<dd class="truncate">{v}</dd>
+								<dd class="flex-1">
+									<input
+										bind:value={confirmModal.fields[k]}
+										class="border-border bg-background focus:ring-ring w-full rounded border px-2 py-1 text-xs focus:outline-none focus:ring-1"
+										aria-label={k}
+									/>
+								</dd>
 							</div>
 						{/each}
 					</dl>

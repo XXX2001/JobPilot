@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from urllib.parse import urlparse
+from typing import Callable, Optional
 
 from backend.applier import RESULT_ASSISTED, RESULT_FAILED
-from backend.applier.captcha_handler import site_profile_key
+from backend.applier._strategy_common import (
+    PHONE_NUMBER_NOTE,
+    build_browser,
+    is_multi_step_site,
+    site_profile_key,
+)
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import settings
 from backend.security.sanitizer import sanitize_url
@@ -26,21 +31,16 @@ except ImportError:
     Browser = None  # type: ignore
     ChatGoogle = None  # type: ignore
 
-# Sites that require clicking "Apply" / "Easy Apply" before the form appears
-_MULTI_STEP_DOMAINS = {"linkedin.com", "www.linkedin.com"}
-
-
-def _is_multi_step_site(url: str) -> bool:
-    hostname = urlparse(url).hostname or ""
-    return hostname.lstrip("www.") in {h.lstrip("www.") for h in _MULTI_STEP_DOMAINS}
-
-
 # T4a: ``_site_key`` removed in favour of the canonical
-# :func:`backend.applier.captcha_handler.site_profile_key`. See the
-# matching comment in ``auto_apply.py`` and the ``site_profile_key``
-# docstring for why this matters (preflight wrote sessions under the
-# underscore form; the old ``_site_key`` looked in a sibling directory
-# that never existed and silently logged in as a guest every time).
+# :func:`backend.applier.captcha_handler.site_profile_key` (re-exported via
+# ``_strategy_common``). See the matching comment in ``auto_apply.py`` and the
+# ``site_profile_key`` docstring for why this matters (preflight wrote sessions
+# under the underscore form; the old ``_site_key`` looked in a sibling
+# directory that never existed and silently logged in as a guest every time).
+#
+# M1-T6: ``_is_multi_step_site`` and ``_MULTI_STEP_DOMAINS`` moved to
+# ``_strategy_common.is_multi_step_site`` (identical copy shared with
+# ``auto_apply``).
 
 
 class AssistedApplyStrategy:
@@ -50,14 +50,30 @@ class AssistedApplyStrategy:
     skips to Tier 2 (browser-use + Gemini) for multi-step sites like LinkedIn.
     """
 
-    def __init__(self, api_key: str, model: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        on_review: Optional[Callable[..., None]] = None,
+        on_get_patches: Optional[Callable[[int], dict]] = None,
+    ) -> None:
         self._api_key = api_key
         self._model = model or settings.GOOGLE_MODEL
+        # Engine callback invoked at apply_review broadcast time so the
+        # pending-review snapshot is cached for HTTP re-fetch.
+        self._on_review = on_review
+        # Engine accessor returning the user's field edits to re-fill before
+        # submit (selector→value), threaded down to the Tier-1 form filler.
+        self._on_get_patches = on_get_patches
 
         try:
             from backend.llm.gemini_client import GeminiClient
             from backend.applier.form_filler import PlaywrightFormFiller
-            self._form_filler = PlaywrightFormFiller(gemini_client=GeminiClient())
+            self._form_filler = PlaywrightFormFiller(
+                gemini_client=GeminiClient(),
+                on_review=on_review,
+                on_get_patches=on_get_patches,
+            )
         except Exception as exc:
             logger.warning("Could not initialise PlaywrightFormFiller: %s — Tier 1 disabled", exc)
             self._form_filler = None  # type: ignore[assignment]
@@ -89,7 +105,7 @@ class AssistedApplyStrategy:
         use_tier1 = (
             settings.APPLY_TIER1_ENABLED
             and self._form_filler is not None
-            and not _is_multi_step_site(apply_url)
+            and not is_multi_step_site(apply_url)
         )
 
         if use_tier1:
@@ -160,13 +176,11 @@ class AssistedApplyStrategy:
             disable_security=True,
         )
         if state_path.exists():
-            browser_kwargs["storage_state"] = state_path.resolve().as_posix()
-            browser_kwargs["user_data_dir"] = None
             logger.info("[Tier 2 assisted] Loading saved session from %s", state_path)
         else:
             logger.warning("[Tier 2 assisted] No saved session — browser will not be logged in")
 
-        browser = Browser(**browser_kwargs)
+        browser = build_browser(browser_kwargs, state_path)
         self._active_browser = browser
         try:
             llm = ChatGoogle(
@@ -261,10 +275,7 @@ class AssistedApplyStrategy:
             f"  Email: {email}\n"
             f"  Phone: {phone}\n"
             f"  Location: {location}\n"
-            "\n  NOTE on phone number: Some websites auto-fill the country code prefix "
-            "(e.g. +33 for France). If you see the country code is already pre-filled "
-            "in the phone field, enter ONLY the local part without the country code "
-            "to avoid duplication like '+33+33612345678'.\n"
+            + PHONE_NUMBER_NOTE
         )
 
         if cv_pdf and cv_pdf.exists():

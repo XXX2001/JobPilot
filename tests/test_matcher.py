@@ -63,6 +63,30 @@ def test_blacklisted_company_returns_zero():
     assert score == 0.0
 
 
+def test_matched_keywords_returns_subset_found_in_description():
+    """matched_keywords returns only the include-keywords present in the description."""
+    matcher = JobMatcher()
+    filters = JobFilters(keywords=["python", "django", "kubernetes"])
+    job = _make_job(description="senior python developer working with django")
+    assert matcher.matched_keywords(job, filters) == ["python", "django"]
+
+
+def test_matched_keywords_is_case_insensitive_and_preserves_casing():
+    """Matching ignores case but the returned keywords keep their original casing."""
+    matcher = JobMatcher()
+    filters = JobFilters(keywords=["Python", "FastAPI"])
+    job = _make_job(description="we use python and fastapi in production")
+    assert matcher.matched_keywords(job, filters) == ["Python", "FastAPI"]
+
+
+def test_matched_keywords_empty_when_no_keywords_configured():
+    """No configured keywords → empty list (not a full match)."""
+    matcher = JobMatcher()
+    filters = JobFilters(keywords=[])
+    job = _make_job(description="python machine learning")
+    assert matcher.matched_keywords(job, filters) == []
+
+
 def test_rank_and_filter_sorted_descending():
     """rank_and_filter returns jobs sorted by score descending, below threshold excluded."""
     matcher = JobMatcher()

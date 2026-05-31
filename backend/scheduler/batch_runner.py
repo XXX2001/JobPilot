@@ -214,7 +214,7 @@ class BatchRunner:
 
         # ── Step 3: Store new matches ────────────────────────────────────
         await self._broadcast_and_track("Storing new matches…", progress=0.55)
-        new_match_ids = await self._store_matches(db, ranked)
+        new_match_ids = await self._store_matches(db, ranked, filters)
         logger.info("Stored %d new job matches", len(new_match_ids))
 
         # ── Step 3.5: Fit Assessment ─────────────────────────────────────
@@ -443,6 +443,7 @@ class BatchRunner:
         self,
         db: AsyncSession,
         ranked: list[tuple[JobDetails, float]],
+        filters: JobFilters,
     ) -> list[int]:
         """Persist new job matches and return their DB IDs.
 
@@ -523,9 +524,15 @@ class BatchRunner:
                     existing_match.score = score
                 match_ids.append(existing_match.id)
             else:
+                # Persist the matched include-keywords so the "Why this score"
+                # panel can render the keyword breakdown. Stored as a dict of
+                # keyword -> True: the column is ``Mapped[Optional[dict]]`` and
+                # the frontend treats a dict of truthy values as the hit set.
+                matched = self._matcher.matched_keywords(jd, filters)
                 match_row = JobMatch(
                     job_id=job_row.id,
                     score=score,
+                    keyword_hits={kw: True for kw in matched},
                     batch_date=today,
                     status="new",
                 )

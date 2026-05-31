@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
 from backend.scheduler.batch_runner import BatchRunner
+from backend.matching.matcher import JobMatcher
+from backend.models import Base
+from backend.models.job import JobMatch
 from backend.models.schemas import RawJob, JobDetails
 from backend.matching.filters import JobFilters
 
@@ -66,6 +73,61 @@ def _make_runner(jobs=None, score=80.0, cv_fail=False):
         db_factory=lambda: db,
     )
     return runner, db, cv_pipeline
+
+
+# ── _store_matches: keyword_hits population ─────────────────────────────────
+
+
+@pytest.fixture
+async def sqlite_factory():
+    """Yield an async_sessionmaker backed by a fresh on-disk SQLite."""
+    tmpdir = tempfile.mkdtemp(prefix="jobpilot-store-matches-test-")
+    db_path = Path(tmpdir) / "test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        yield Session
+    finally:
+        await engine.dispose()
+        try:
+            db_path.unlink()
+        except OSError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_store_matches_populates_keyword_hits(sqlite_factory):
+    """A stored JobMatch carries keyword_hits reflecting the description overlap."""
+    runner = BatchRunner(
+        scraper=MockScraper(),
+        matcher=JobMatcher(),
+        cv_pipeline=MockCVPipeline(),
+        db_factory=sqlite_factory,
+    )
+    filters = JobFilters(keywords=["python", "django", "kubernetes"])
+    job = JobDetails(
+        title="Backend Engineer",
+        company="ACME",
+        location="Paris",
+        description="python and django backend role",
+        url="https://example.com/1",
+    )
+
+    async with sqlite_factory() as db:
+        match_ids = await runner._store_matches(db, [(job, 87.5)], filters)
+
+    assert len(match_ids) == 1
+    async with sqlite_factory() as db:
+        row = (
+            await db.execute(select(JobMatch).where(JobMatch.id == match_ids[0]))
+        ).scalar_one()
+
+    assert row.keyword_hits is not None
+    hits = row.keyword_hits
+    matched = hits if isinstance(hits, list) else [k for k, v in hits.items() if v]
+    assert set(matched) == {"python", "django"}
 
 
 # ── run_batch ─────────────────────────────────────────────────────────────────

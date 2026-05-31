@@ -6,15 +6,22 @@ import logging
 import shutil
 import webbrowser
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+#: Canonical strategy-outcome vocabulary, mirrored as ``RESULT_*`` string
+#: constants in ``backend.applier.__init__``. Defined here as the single
+#: source of truth for the *typed* surface so call sites can be checked.
+ResultStatus = Literal["applied", "assisted", "manual", "cancelled", "failed"]
+ResultMethod = Literal["auto", "assisted", "manual"]
+
 
 class ApplicationResult(BaseModel):
-    status: str  # "applied" | "assisted" | "manual" | "cancelled"
-    method: str
+    status: ResultStatus
+    method: ResultMethod
     message: str = ""
 
 

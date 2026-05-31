@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from browser_use import Browser
 
 from backend.applier import RESULT_FAILED
+from backend.applier.manual_apply import ResultMethod, ResultStatus
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,8 @@ class ApplyContext:
     strategy_result: Optional[object] = None  # ApplicationResult from strategy
 
     # Written by terminal on_enter handlers
-    outcome_status: str = RESULT_FAILED
-    outcome_method: str = "auto"
+    outcome_status: ResultStatus = RESULT_FAILED
+    outcome_method: ResultMethod = "auto"
     outcome_message: Optional[str] = None
 
     # Extra: live Tier-2 browser (set by the engine from the strategy after
@@ -166,7 +167,7 @@ class Statechart:
     def state(self) -> State:
         return self._state
 
-    async def run(self, ctx: ApplyContext) -> tuple[str, str, Optional[str]]:
+    async def run(self, ctx: ApplyContext) -> tuple[ResultStatus, ResultMethod, Optional[str]]:
         """Run the state machine.
 
         Returns ``(status, method, message)`` — the three fields of

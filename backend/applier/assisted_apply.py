@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from backend.applier import RESULT_ASSISTED, RESULT_FAILED
@@ -50,14 +51,24 @@ class AssistedApplyStrategy:
     skips to Tier 2 (browser-use + Gemini) for multi-step sites like LinkedIn.
     """
 
-    def __init__(self, api_key: str, model: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        on_review: Optional[Callable[..., None]] = None,
+    ) -> None:
         self._api_key = api_key
         self._model = model or settings.GOOGLE_MODEL
+        # Engine callback invoked at apply_review broadcast time so the
+        # pending-review snapshot is cached for HTTP re-fetch.
+        self._on_review = on_review
 
         try:
             from backend.llm.gemini_client import GeminiClient
             from backend.applier.form_filler import PlaywrightFormFiller
-            self._form_filler = PlaywrightFormFiller(gemini_client=GeminiClient())
+            self._form_filler = PlaywrightFormFiller(
+                gemini_client=GeminiClient(), on_review=on_review
+            )
         except Exception as exc:
             logger.warning("Could not initialise PlaywrightFormFiller: %s — Tier 1 disabled", exc)
             self._form_filler = None  # type: ignore[assignment]

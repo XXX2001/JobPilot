@@ -62,8 +62,12 @@ class ApplicationEngine:
         self._model = model or settings.GOOGLE_MODEL
         self._daily_limit = daily_limit
 
-        self._auto = AutoApplyStrategy(api_key=api_key, model=self._model)
-        self._assisted = AssistedApplyStrategy(api_key=api_key, model=self._model)
+        self._auto = AutoApplyStrategy(
+            api_key=api_key, model=self._model, on_review=self.record_pending_review
+        )
+        self._assisted = AssistedApplyStrategy(
+            api_key=api_key, model=self._model, on_review=self.record_pending_review
+        )
         self._manual = ManualApplyStrategy()
         self._recorder = ApplicationRecorder()
 
@@ -92,10 +96,6 @@ class ApplicationEngine:
             self._confirm_events[job_id].set()
         self._pending_reviews.pop(job_id, None)
 
-    # NOTE: the assisted/auto review-pause path does not call this yet — the
-    # cache + GET review-state endpoint shipped per plan Task 11, but wiring the
-    # broadcast site to populate the snapshot is deferred (needs design out of
-    # this lot's scope) and tracked for a follow-on.
     def record_pending_review(
         self, job_id: int, *, filled_fields: dict, screenshot_b64: Optional[str]
     ) -> None:

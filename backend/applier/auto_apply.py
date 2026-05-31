@@ -7,6 +7,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from backend.applier.captcha_handler import site_profile_key
@@ -56,14 +57,24 @@ class AutoApplyStrategy:
     ``cancel_apply``.
     """
 
-    def __init__(self, api_key: str, model: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        on_review: Optional[Callable[..., None]] = None,
+    ) -> None:
         self._api_key = api_key
         self._model = model or settings.GOOGLE_MODEL
+        # Engine callback invoked at apply_review broadcast time so the
+        # pending-review snapshot is cached for HTTP re-fetch.
+        self._on_review = on_review
 
         try:
             from backend.llm.gemini_client import GeminiClient
             from backend.applier.form_filler import PlaywrightFormFiller
-            self._form_filler = PlaywrightFormFiller(gemini_client=GeminiClient())
+            self._form_filler = PlaywrightFormFiller(
+                gemini_client=GeminiClient(), on_review=on_review
+            )
         except Exception as exc:
             logger.warning("Could not initialise PlaywrightFormFiller: %s — Tier 1 disabled", exc)
             self._form_filler = None  # type: ignore[assignment]
@@ -374,6 +385,15 @@ class AutoApplyStrategy:
             logger.info("[Tier 2] Broadcast apply_review for job_id=%d — waiting for confirmation", job_id)
         except Exception as exc:
             logger.warning("Could not broadcast apply_review: %s", exc)
+
+        # Cache the same snapshot the WS broadcast just sent so a
+        # reconnecting client can re-fetch it over HTTP.
+        if self._on_review is not None:
+            self._on_review(
+                job_id,
+                filled_fields=filled_fields,
+                screenshot_b64=screenshot_b64,
+            )
 
         # Wait for user
         if confirm_event is None:

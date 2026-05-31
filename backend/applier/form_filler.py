@@ -19,7 +19,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable, Optional
 
 from backend.config import settings
 
@@ -42,8 +42,15 @@ class PlaywrightFormFiller:
     Raises on any unrecoverable error so the caller can fall back to Tier 2.
     """
 
-    def __init__(self, gemini_client: "GeminiClient") -> None:
+    def __init__(
+        self,
+        gemini_client: "GeminiClient",
+        on_review: Optional[Callable[..., None]] = None,
+    ) -> None:
         self._gemini = gemini_client
+        # Engine callback invoked at apply_review broadcast time so the
+        # pending-review snapshot is cached for HTTP re-fetch.
+        self._on_review = on_review
 
     # ------------------------------------------------------------------
     # Public API
@@ -204,6 +211,15 @@ class PlaywrightFormFiller:
                 )
             except Exception as exc:
                 logger.warning("Could not broadcast apply_review: %s", exc)
+
+            # Cache the same snapshot the WS broadcast just sent so a
+            # reconnecting client can re-fetch it over HTTP.
+            if self._on_review is not None:
+                self._on_review(
+                    job_id,
+                    filled_fields=filled_fields,
+                    screenshot_b64=screenshot_b64,
+                )
 
             # Phase 7: wait for confirm or cancel
             if confirm_event is None:

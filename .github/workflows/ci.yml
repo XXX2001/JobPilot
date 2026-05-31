@@ -39,9 +39,9 @@ jobs:
         run: |
           # Agreed pyright baseline ceiling: pre-existing type debt is tolerated
           # so the build stays green, but any NEW error/warning above these
-          # counts fails CI. Measured baseline at the time of writing: 27/8.
+          # counts fails CI. Measured baseline after N1-T2 stub cleanup: 19/8.
           # Keep these in sync with CONTRIBUTING.md.
-          CEILING_ERRORS=27
+          CEILING_ERRORS=19
           CEILING_WARNINGS=8
 
           # Capture pyright output (don't let a non-zero exit abort the step;

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { apiFetch } from '$lib/api';
 	import { RefreshCw, AlertCircle } from 'lucide-svelte';
 	import NewMatchesFeed from '$lib/components/NewMatchesFeed.svelte';
@@ -7,14 +8,51 @@
 	import WeekStats from '$lib/components/WeekStats.svelte';
 	import SourceHealthPills from '$lib/components/SourceHealthPills.svelte';
 	import type { TodayResponse } from '$lib/types/today';
+	import type { SetupStatus } from '$lib/types/api';
+	import { ONBOARDING_DISMISSED_KEY, shouldAutoRedirect } from '$lib/utils/onboarding';
 
 	let data = $state<TodayResponse | null>(null);
 	let loading = $state(true);
 	let error = $state('');
 	let refreshing = $state(false);
 
+	/**
+	 * First-run gate: if setup is incomplete, send the user to `/onboarding`.
+	 *
+	 * To avoid a redirect loop (the onboarding page never redirects back) and to
+	 * respect "do this later", we only auto-redirect once per session — guarded by
+	 * a `sessionStorage` flag set the moment we redirect. Returns true when a
+	 * redirect was triggered so the caller can skip loading the dashboard.
+	 */
+	async function maybeRedirectToOnboarding(): Promise<boolean> {
+		let dismissed = false;
+		try {
+			dismissed = sessionStorage.getItem(ONBOARDING_DISMISSED_KEY) === 'true';
+		} catch {
+			// sessionStorage unavailable (private mode) — treat as not dismissed.
+		}
+		if (dismissed) return false;
+
+		try {
+			const status = await apiFetch<SetupStatus>('/api/settings/status');
+			if (shouldAutoRedirect(status, dismissed)) {
+				try {
+					sessionStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true');
+				} catch {
+					// best-effort; the onboarding page itself does not redirect, so no loop.
+				}
+				await goto('/onboarding');
+				return true;
+			}
+		} catch {
+			// Status check is best-effort: never block the dashboard on it.
+		}
+		return false;
+	}
+
 	async function load() {
 		try {
+			if (await maybeRedirectToOnboarding()) return;
 			data = await apiFetch<TodayResponse>('/api/today');
 		} catch (e: unknown) {
 			error = e instanceof Error ? e.message : 'Failed to load today dashboard';

@@ -130,6 +130,44 @@ the M1 plan file (or commit body) listing each surface and its disposition.
 **Files.** `backend/main.py`, possibly `backend/api/*`, tests.
 **Commit.** `refactor(M1): T1b honest-endpoint audit (wire/remove dead surface)`.
 
+### M1-T5 findings
+
+Audited every collaborator constructed in `backend/main.py` lifespan and every
+`app.state.*` assignment. **Outcome: nothing is genuinely dead — every audited surface is
+reached on a live request/scheduler/WS path. No production change.** The three previously
+flagged candidates are all honest:
+
+| Surface | Disposition | Evidence (live consumer) |
+| --- | --- | --- |
+| `Embedder` | kept-and-reached | `batch_runner.py:229,410` `self._embedder.embed_cv_profile/embed_job_profile` inside `run_batch`→`_assess_one`; live path `POST /api/queue/refresh`→`runner.run_batch()` (`queue.py:170`). Tests: `test_batch_runner.py::test_fit_assessments_run_concurrently`, `test_embedder.py`. |
+| `FitEngine` | kept-and-reached | `batch_runner.py:411` `self._fit_engine.assess(...)` inside `_assess_one` (same live path). Tests: `test_fit_engine.py`, `test_fit_integration.py`. |
+| `LetterPipeline` | kept-and-reached | `app.state.letter_pipeline` read at `documents.py:281`, consumed by `POST /api/documents/{match_id}/letter/regenerate` (M1-T4). Test: `test_documents_letter_regenerate.py`. |
+
+Full `app.state.*` enumeration:
+
+| `app.state.*` | Disposition | Evidence |
+| --- | --- | --- |
+| `gemini` | kept-and-reached | `queue.py:263` |
+| `cv_pipeline` | kept-and-reached | object injected into `BatchRunner` (`main.py:153`), reached via `run_batch`. The `app.state.cv_pipeline` *attribute* has no external reader, but the collaborator is live; kept as documented DI surface (`docs/modules/config-database.md:120`). |
+| `letter_pipeline` | kept-and-reached | `documents.py:281` |
+| `adzuna` | kept-and-reached | object injected into `ScrapingOrchestrator` (`main.py:133`); attribute has no external reader but collaborator is live; kept (documented surface). |
+| `adaptive_scraper` | kept-and-reached | object injected into `ScrapingOrchestrator` (`main.py:135`); attribute has no external reader but collaborator is live; kept (documented surface). |
+| `session_manager` | kept-and-reached | WS handlers `main.py:199,205` (`confirm_login`/`cancel_login`); also injected into orchestrator. |
+| `scraping_orchestrator` | kept-and-reached | `queue.py:144` |
+| `matcher` | kept-and-reached | object injected into `BatchRunner` (`main.py:152`); attribute has no external reader but collaborator is live; kept (documented surface). |
+| `apply_engine` | kept-and-reached | `applications.py:469,494`; WS handlers `main.py:213,219`. |
+| `batch_runner` | kept-and-reached | `queue.py:123,161`, `ws.py:115`. |
+| `gmail_token_manager` | kept-and-reached | `gmail.py:56`; `main.py:_run_gmail_poll`. |
+| `scheduler` | kept-and-reached | lifespan shutdown `main.py:254`. |
+
+Note on the four "attribute-only-redundant" surfaces (`cv_pipeline`, `adzuna`,
+`adaptive_scraper`, `matcher`): their `app.state.X` attribute currently has zero external
+readers, but the underlying collaborators ARE reached on live paths via constructor injection
+into `BatchRunner`/`ScrapingOrchestrator`. Per the conservative guardrail (and because these
+are a documented `app.state` DI surface that a future `Depends`-based router may re-adopt — see
+`deps.py:14-19`), they are kept + documented rather than removed. No symbol is unreachable; no
+module is dead.
+
 ---
 
 ## M1-T6 — Pragmatic strategy de-duplication

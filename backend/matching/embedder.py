@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 class Embedder:
-    """Wraps GeminiClient.embed() with profile-level batch operations."""
+    """Wraps an EmbeddingClient.embed() with profile-level batch operations."""
 
-    def __init__(self, gemini_client) -> None:
+    def __init__(self, gemini_client) -> None:  # accepts any EmbeddingClient
         self._client = gemini_client
 
     async def embed_cv_profile(self, profile: CVProfile) -> CVProfile:

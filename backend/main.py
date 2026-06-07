@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI):
         from backend.scraping.scrapling_fetcher import ScraplingFetcher
         from backend.scraping.session_manager import BrowserSessionManager
 
-        from backend.llm.factory import make_llm_client
+        from backend.llm.factory import make_embedding_client, make_llm_client
         gen_client = make_llm_client()
         cv_editor = CVEditor(client=gen_client)
         cv_pipeline = CVPipeline(
@@ -153,7 +153,7 @@ async def lifespan(app: FastAPI):
             cv_pipeline=cv_pipeline,
             db_factory=AsyncSessionLocal,
             fit_engine=FitEngine(),
-            embedder=Embedder(gemini_client=gen_client),
+            embedder=Embedder(gemini_client=make_embedding_client()),
         )
 
         # Store on app.state for dependency injection

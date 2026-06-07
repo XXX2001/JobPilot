@@ -40,6 +40,25 @@ class Settings(BaseSettings):
     GOOGLE_MODEL: str = "gemini-3-flash-preview"
     # Comma-separated fallback model names (empty => no fallbacks)
     GOOGLE_MODEL_FALLBACKS: str = ""
+    # ── Multi-provider LLM selection (applied on restart) ────────────────
+    # Generation
+    LLM_PROVIDER: str = "gemini"        # gemini | openai | anthropic
+    LLM_MODEL: str = ""                 # provider default if empty
+    LLM_BASE_URL: str = ""              # openai-compatible/local, e.g. http://localhost:11434/v1
+    LLM_API_KEY: SecretStr = SecretStr("")
+    # Embeddings (anthropic unsupported — has no embeddings API)
+    EMBEDDING_PROVIDER: str = "gemini"  # gemini | openai
+    EMBEDDING_MODEL: str = "text-embedding-004"
+    EMBEDDING_BASE_URL: str = ""
+    EMBEDDING_API_KEY: SecretStr = SecretStr("")
+    # Browser agent (anthropic only via openai-compatible base_url)
+    BROWSER_LLM_PROVIDER: str = "gemini"  # gemini | openai
+    BROWSER_LLM_MODEL: str = ""
+    BROWSER_LLM_BASE_URL: str = ""
+    BROWSER_LLM_API_KEY: SecretStr = SecretStr("")
+    # Per-provider keys (used when the generic *_API_KEY is empty)
+    OPENAI_API_KEY: SecretStr = SecretStr("")
+    ANTHROPIC_API_KEY: SecretStr = SecretStr("")
     # Feature flag: enable Tier 1 Scrapling fetcher (HTTP + single LLM call)
     SCRAPLING_ENABLED: bool = True
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)

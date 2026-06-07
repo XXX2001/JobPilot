@@ -13,7 +13,10 @@ from google.genai import types as genai_types
 from pydantic import BaseModel
 
 from backend.config import settings
-from backend.defaults import GEMINI_FALLBACK_MODEL
+from backend.defaults import GEMINI_FALLBACK_MODEL, EMBEDDING_MODEL
+from backend.llm.base import (
+    LLMCallFailed, LLMJSONError, LLMRateLimitError, parse_json_response,
+)
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -63,16 +66,10 @@ def _extract_retry_seconds(exc: Exception) -> float | None:
     return None
 
 
-class GeminiRateLimitError(Exception):
-    pass
-
-
-class GeminiCallFailed(Exception):
-    """A non-rate-limit Gemini failure (bad key, network, backend 5xx)."""
-
-
-class GeminiJSONError(Exception):
-    pass
+# Backward-compatible aliases — consumers still import the Gemini* names.
+GeminiRateLimitError = LLMRateLimitError
+GeminiCallFailed = LLMCallFailed
+GeminiJSONError = LLMJSONError
 
 
 class GeminiClient:
@@ -99,6 +96,14 @@ class GeminiClient:
         self._lock = asyncio.Lock()
         self._embed_call_times: deque[float] = deque(maxlen=self.RPM_LIMIT)
         self._embed_lock = asyncio.Lock()
+
+    @property
+    def model_id(self) -> str:
+        return f"gemini:{EMBEDDING_MODEL}"
+
+    @property
+    def dimension(self) -> int:
+        return 768  # text-embedding-004
 
     async def _wait_for_rate_limit(self) -> None:
         # Hold the lock only long enough to read state and reserve a slot;
@@ -220,11 +225,7 @@ class GeminiClient:
         )
 
         def _parse(raw: str) -> T:
-            raw = raw.strip()
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1]
-                raw = raw.rsplit("```", 1)[0]
-            data = json.loads(raw.strip())
+            data = parse_json_response(raw)
             return schema.model_validate(data)
 
         try:

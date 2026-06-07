@@ -22,14 +22,12 @@ logger = logging.getLogger(__name__)
 
 try:
     from browser_use import Agent, Browser  # type: ignore
-    from browser_use.llm.google import ChatGoogle  # type: ignore
 
     _BROWSER_USE_AVAILABLE = True
 except ImportError:
     _BROWSER_USE_AVAILABLE = False
     Agent = None  # type: ignore
     Browser = None  # type: ignore
-    ChatGoogle = None  # type: ignore
 
 # T4a: ``_site_key`` removed in favour of the canonical
 # :func:`backend.applier.captcha_handler.site_profile_key` (re-exported via
@@ -183,10 +181,8 @@ class AssistedApplyStrategy:
         browser = build_browser(browser_kwargs, state_path)
         self._active_browser = browser
         try:
-            llm = ChatGoogle(
-                model=self._model,
-                api_key=self._api_key,
-            )
+            from backend.llm.factory import make_browser_llm
+            llm = make_browser_llm()
             file_paths = []
             if cv_pdf and cv_pdf.exists():
                 file_paths.append(str(cv_pdf.resolve()))

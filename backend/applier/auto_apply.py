@@ -23,14 +23,12 @@ logger = logging.getLogger(__name__)
 
 try:
     from browser_use import Agent, Browser  # type: ignore
-    from browser_use.llm.google import ChatGoogle  # type: ignore
 
     _BROWSER_USE_AVAILABLE = True
 except ImportError:
     _BROWSER_USE_AVAILABLE = False
     Agent = None  # type: ignore
     Browser = None  # type: ignore
-    ChatGoogle = None  # type: ignore
 
 # T4a: ``_site_key`` removed in favour of the canonical
 # :func:`backend.applier.captcha_handler.site_profile_key` (re-exported via
@@ -319,10 +317,8 @@ class AutoApplyStrategy:
         browser = build_browser(browser_kwargs, state_path)
         self._active_browser = browser
         try:
-            llm = ChatGoogle(
-                model=self._model,
-                api_key=self._api_key,
-            )
+            from backend.llm.factory import make_browser_llm
+            llm = make_browser_llm()
             # Collect file paths the agent is allowed to upload
             file_paths = []
             if cv_pdf and cv_pdf.exists():
@@ -431,10 +427,8 @@ class AutoApplyStrategy:
                 "to complete the application. If there is a 'Review' step, click through "
                 "it and then click the final submit button."
             )
-            llm2 = ChatGoogle(
-                model=self._model,
-                api_key=self._api_key,
-            )
+            from backend.llm.factory import make_browser_llm
+            llm2 = make_browser_llm()
             submit_agent = Agent(task=submit_task, llm=llm2, browser=browser)
             await submit_agent.run()
             logger.info("Auto-apply submitted for job_id=%d", job_id)

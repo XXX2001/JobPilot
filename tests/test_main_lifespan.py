@@ -69,30 +69,23 @@ def test_zz_singleton_init_failure_aborts_startup(monkeypatch: pytest.MonkeyPatc
     it, and the operator sees the original traceback.
 
     Named with a ``zz_`` prefix so pytest's default name-ordered collection
-    runs this AFTER the happy-path test in the same module. Python's import
-    cache means modules that already did
-    ``from backend.llm.gemini_client import GeminiClient`` keep their bound
-    reference even after ``monkeypatch`` reverts the source module — so
-    injecting the failure must come last.
+    runs this AFTER the happy-path test in the same module.
     """
-    # We need to make EVERY consumer of GeminiClient blow up, not just the
-    # symbol in `backend.llm.gemini_client`. Modules that did
-    # ``from backend.llm.gemini_client import GeminiClient`` at import time
-    # bound the original class locally; patching the source module after the
-    # fact doesn't reach them. The lifespan's first construction call goes
-    # through `JobAnalyzer`, so we patch *its* binding directly — that's the
-    # narrow seam that proves fail-fast works without needing to enumerate
-    # every consumer.
-    from backend.llm import job_analyzer as ja_module
+    # The lifespan builds every generation client through the provider factory
+    # (``backend.llm.factory.make_llm_client``); its very first construction
+    # call in the warmup is ``gen_client = make_llm_client()``. Because the
+    # warmup imports the factory function-locally, patching the factory module
+    # attribute is resolved at call time — that's the narrow seam that proves
+    # fail-fast works without enumerating every consumer.
+    from backend.llm import factory as factory_module
 
-    class _Boom:
-        def __init__(self, *args: object, **kwargs: object) -> None:
-            raise RuntimeError("simulated GeminiClient construction failure")
+    def _boom() -> object:
+        raise RuntimeError("simulated LLM client construction failure")
 
-    monkeypatch.setattr(ja_module, "GeminiClient", _Boom)
+    monkeypatch.setattr(factory_module, "make_llm_client", _boom)
 
     from backend.main import app
 
-    with pytest.raises(RuntimeError, match="simulated GeminiClient construction failure"):
+    with pytest.raises(RuntimeError, match="simulated LLM client construction failure"):
         with TestClient(app):
             pass  # pragma: no cover — we expect startup to fail before yield

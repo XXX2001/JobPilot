@@ -7,7 +7,7 @@ import re
 from typing import Optional
 
 from backend.latex.parser import LaTeXSections
-from backend.llm.gemini_client import GeminiClient, GeminiJSONError
+from backend.llm.base import LLMClient, LLMJSONError as GeminiJSONError  # noqa: F401
 from backend.llm.prompts import MOTIVATION_LETTER_PROMPT
 from backend.llm.validators import LetterEdit
 from backend.models.schemas import JobDetails
@@ -32,8 +32,9 @@ class CVEditor:
 
     MAX_DESCRIPTION_CHARS = 500
 
-    def __init__(self, client: GeminiClient | None = None) -> None:
-        self._client = client or GeminiClient()
+    def __init__(self, client: "LLMClient | None" = None) -> None:
+        from backend.llm.factory import make_llm_client
+        self._client = client or make_llm_client()
 
     def _excerpt(self, text: str) -> str:
         """Truncate job description to MAX_DESCRIPTION_CHARS."""

@@ -103,7 +103,6 @@ async def lifespan(app: FastAPI):
         from backend.latex.pipeline import CVPipeline, LetterPipeline
         from backend.llm.cv_editor import CVEditor
         from backend.llm.cv_modifier import CVModifier
-        from backend.llm.gemini_client import GeminiClient
         from backend.llm.job_analyzer import JobAnalyzer
         from backend.matching.embedder import Embedder
         from backend.matching.fit_engine import FitEngine
@@ -116,11 +115,12 @@ async def lifespan(app: FastAPI):
         from backend.scraping.scrapling_fetcher import ScraplingFetcher
         from backend.scraping.session_manager import BrowserSessionManager
 
-        gemini = GeminiClient()
-        cv_editor = CVEditor(client=gemini)
+        from backend.llm.factory import make_llm_client
+        gen_client = make_llm_client()
+        cv_editor = CVEditor(client=gen_client)
         cv_pipeline = CVPipeline(
-            job_analyzer=JobAnalyzer(),
-            cv_modifier=CVModifier(),
+            job_analyzer=JobAnalyzer(client=gen_client),
+            cv_modifier=CVModifier(client=gen_client),
             cv_applicator=CVApplicator(),
         )
         letter_pipeline = LetterPipeline(cv_editor=cv_editor)
@@ -128,7 +128,7 @@ async def lifespan(app: FastAPI):
         dedup = JobDeduplicator()
         adaptive = AdaptiveScraper(gemini_api_key=settings.GOOGLE_API_KEY.get_secret_value())
         session_mgr = BrowserSessionManager()
-        scrapling = ScraplingFetcher(gemini_client=gemini) if settings.SCRAPLING_ENABLED else None
+        scrapling = ScraplingFetcher(gemini_client=gen_client) if settings.SCRAPLING_ENABLED else None
         orchestrator = ScrapingOrchestrator(
             adzuna_client=adzuna,
             adaptive_scraper=adaptive,
@@ -153,11 +153,11 @@ async def lifespan(app: FastAPI):
             cv_pipeline=cv_pipeline,
             db_factory=AsyncSessionLocal,
             fit_engine=FitEngine(),
-            embedder=Embedder(gemini_client=gemini),
+            embedder=Embedder(gemini_client=gen_client),
         )
 
         # Store on app.state for dependency injection
-        app.state.gemini = gemini
+        app.state.gemini = gen_client
         app.state.cv_pipeline = cv_pipeline
         app.state.letter_pipeline = letter_pipeline
         app.state.adzuna = adzuna

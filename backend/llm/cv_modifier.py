@@ -5,8 +5,6 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from backend.llm.gemini_client import GeminiClient
-
 from backend.llm.job_context import JobContext
 
 if TYPE_CHECKING:
@@ -42,8 +40,9 @@ def _strip_preamble(cv_tex: str) -> str:
 class CVModifier:
     """Single LLM call: full CV text + JobContext → CVModifierOutput (≤3 replacements)."""
 
-    def __init__(self, client: GeminiClient | None = None) -> None:
-        self._client = client or GeminiClient()
+    def __init__(self, client=None) -> None:
+        from backend.llm.factory import make_llm_client
+        self._client = client or make_llm_client()
 
     async def modify(
         self,

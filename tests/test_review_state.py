@@ -93,7 +93,8 @@ async def test_auto_tier2_broadcast_records_pending_review(monkeypatch):
     from backend.applier.auto_apply import AutoApplyStrategy
 
     monkeypatch.setattr(mod, "_BROWSER_USE_AVAILABLE", True)
-    monkeypatch.setattr(mod, "ChatGoogle", MagicMock())
+    import backend.llm.factory as _factory
+    monkeypatch.setattr(_factory, "make_browser_llm", lambda: MagicMock())
     monkeypatch.setattr(mod, "Browser", MagicMock())
 
     def fake_agent(task, llm, browser, **_kwargs):

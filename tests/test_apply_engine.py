@@ -245,7 +245,8 @@ async def test_engine_cancel_apply_returns_cancelled(monkeypatch):
 
     monkeypatch.setattr(auto_mod, "_BROWSER_USE_AVAILABLE", True)
     monkeypatch.setattr(auto_mod, "Agent", MagicMock())
-    monkeypatch.setattr(auto_mod, "ChatGoogle", MagicMock())
+    import backend.llm.factory as _factory
+    monkeypatch.setattr(_factory, "make_browser_llm", lambda: MagicMock())
     monkeypatch.setattr(auto_mod, "Browser", MagicMock())
     monkeypatch.setattr(auto_mod, "BrowserConfig", MagicMock(), raising=False)
 
@@ -361,7 +362,8 @@ async def test_browser_use_apply_parses_additional_answers_json(monkeypatch):
     import json
 
     monkeypatch.setattr(mod, "_BROWSER_USE_AVAILABLE", True)
-    monkeypatch.setattr(mod, "ChatGoogle", MagicMock())
+    import backend.llm.factory as _factory
+    monkeypatch.setattr(_factory, "make_browser_llm", lambda: MagicMock())
     monkeypatch.setattr(mod, "Browser", MagicMock())
 
     captured_task: list[str] = []
@@ -424,10 +426,12 @@ async def test_assisted_apply_tier1_failure_falls_back():
 
     strategy = AssistedApplyStrategy(api_key="key")
 
+    import backend.llm.factory as _factory
+
     with patch.object(strategy._form_filler, "fill_only", new=AsyncMock(side_effect=RuntimeError("page crash"))), \
          patch.object(mod, "_BROWSER_USE_AVAILABLE", True), \
          patch.object(mod, "Agent", MagicMock(return_value=MagicMock(run=AsyncMock()))), \
-         patch.object(mod, "ChatGoogle", MagicMock()), \
+         patch.object(_factory, "make_browser_llm", MagicMock(return_value=MagicMock())), \
          patch.object(mod, "Browser", MagicMock()):
         result = await strategy.apply(apply_url="https://example.com/job")
 

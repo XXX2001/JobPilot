@@ -385,6 +385,8 @@ except ImportError:
     _LaTeXErr = None  # type: ignore[assignment,misc]
 
 try:
+    # These names are now aliases of the provider-neutral LLM* exceptions
+    # (see backend/llm/base.py), so the handlers cover every provider.
     from backend.llm.gemini_client import GeminiJSONError as _GeminiJSONErr
     from backend.llm.gemini_client import GeminiRateLimitError as _GeminiRateErr
 except ImportError:

@@ -12,7 +12,8 @@ Makes JobPilot easy to install and run for Docker and Windows users, and hardens
 - **Interactive setup.** `scripts/setup.sh` / `scripts/setup.ps1` pick a provider (local / Gemini / OpenAI / Anthropic), write a valid `.env`, and generate a persistent `CREDENTIAL_KEY`. The full `install.{sh,ps1}` installers now delegate their `.env` step to these.
 - **CREDENTIAL_KEY persistence fix.** Documented + warned: in a container the key can't be auto-persisted, so it must live in `.env` (the setup script ensures this) or saved credentials break on restart.
 - **Docker hardening.** `shm_size: 1gb` (fixes Chromium crashes), `host.docker.internal` mapping so a model on the host is reachable, json-file log rotation (`10m`×3), and a longer healthcheck `start_period` for first-boot migrations.
-- **Docs.** README is now Docker-first for all platforms (incl. Windows/macOS via Docker Desktop), provider-agnostic, with a provider table and troubleshooting for the local-model-from-Docker networking gotcha.
+- **Docs.** README is now Docker-first for all platforms (incl. Windows/macOS via Docker Desktop), provider-agnostic, with a provider table and troubleshooting for the local-model-from-Docker networking gotcha. Documents the **Docker Compose v2** requirement (the `docker compose` subcommand) with a one-line plugin install for Linux servers stuck on v1, plus the `docker-compose` (v1) fallback.
+- **Verified end-to-end.** `docker compose build` succeeds and the container boots **healthy** with a local-model config and zero cloud keys — migrations run, provider validation passes, `/api/health` returns `ok`.
 
 ---
 

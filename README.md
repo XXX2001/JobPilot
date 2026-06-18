@@ -30,7 +30,17 @@ Two steps for everyone: **pick an AI provider** (the setup script writes your `.
 
 ### Path A — Docker (recommended, incl. Windows & macOS via Docker Desktop)
 
-Install **Docker Desktop** (Windows/macOS) or Docker Engine (Linux), then:
+**Requirements:** Docker Engine 20.10+ **and the Docker Compose v2 plugin** (the `docker compose` subcommand, not the legacy `docker-compose` v1 binary). Docker Desktop bundles it. On a Linux server that only has v1, install the plugin once:
+
+```bash
+sudo apt-get install docker-compose-plugin        # Debian/Ubuntu, OR:
+mkdir -p ~/.docker/cli-plugins && curl -fsSL \
+  https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+  -o ~/.docker/cli-plugins/docker-compose && chmod +x ~/.docker/cli-plugins/docker-compose
+docker compose version    # verify
+```
+
+Then:
 
 ```bash
 # Linux / macOS
@@ -130,6 +140,10 @@ For a full walkthrough of every feature, see the [user guide](docs/user-guide.md
 ### "Invalid LLM provider configuration" on startup
 
 The app validates that your chosen provider has the credentials it needs and refuses to boot otherwise — the log lists exactly what's missing. Re-run `scripts/setup.sh` / `scripts/setup.ps1`, or fix the named keys in `.env` (see `.env.example`).
+
+### "docker: 'compose' is not a docker command"
+
+Your Docker has only the legacy v1 binary. Either install the Compose v2 plugin (see [Path A requirements](#path-a--docker-recommended-incl-windows--macos-via-docker-desktop)), or use the v1 syntax as a fallback — the compose file is compatible: `docker-compose up -d --build` (note the hyphen).
 
 ### Docker can't reach my local model (Ollama / llama.cpp / LM Studio)
 

@@ -26,17 +26,27 @@ Everything stays on your machine. The only data leaving your computer goes to th
 
 ## Quickstart
 
-You need API keys before either path will work — see [Getting the API keys](#getting-the-api-keys) below. Once running, open **http://localhost:8000** and complete the in-app onboarding wizard.
+Two steps for everyone: **pick an AI provider** (the setup script writes your `.env`), then **start the app**. A local/self-hosted model needs no cloud keys at all. Once running, open **http://localhost:8000** and complete the in-app onboarding wizard.
 
-### Path A — Docker Compose (recommended for self-hosting)
+### Path A — Docker (recommended, incl. Windows & macOS via Docker Desktop)
+
+Install **Docker Desktop** (Windows/macOS) or Docker Engine (Linux), then:
 
 ```bash
-cp .env.example .env
-# Edit .env and fill in GOOGLE_API_KEY, ADZUNA_APP_ID, ADZUNA_APP_KEY
+# Linux / macOS
+bash scripts/setup.sh
 docker compose up -d --build
 ```
 
-Then open **http://localhost:8000**. Your data persists in `./data` across container restarts.
+```powershell
+# Windows (PowerShell)
+.\scripts\setup.ps1
+docker compose up -d --build
+```
+
+`setup.{sh,ps1}` asks which provider you want, writes a valid `.env`, and generates a persistent credential-encryption key. Then open **http://localhost:8000**. Your data persists in `./data` across container restarts.
+
+> **Using a model on your own machine** (Ollama, llama.cpp, LM Studio…): from inside Docker it's reachable as `http://host.docker.internal:<port>/v1`, **not** `http://localhost`. The setup script defaults to this, and `docker-compose.yml` wires `host.docker.internal` so it resolves on Linux too.
 
 ### Path B — Local dev (uv)
 
@@ -46,22 +56,24 @@ Then open **http://localhost:8000**. Your data persists in `./data` across conta
 uv sync                                         # install Python dependencies
 uv run python scripts/download_tectonic.py      # download the Tectonic LaTeX compiler
 cd frontend && npm ci && npm run build && cd ..  # build the web interface
-cp .env.example .env                            # then fill in your API keys
+bash scripts/setup.sh                           # pick a provider, writes .env
 uv run python start.py                          # launch (opens http://localhost:8000)
 ```
 
 `start.py` checks that the data directory, frontend build, and Tectonic binary are present, frees the port if needed, then starts the backend on `JOBPILOT_HOST:JOBPILOT_PORT` (default `127.0.0.1:8000`) and opens your browser.
 
-### Getting the API keys
+### Choosing an AI provider
 
-JobPilot needs three required keys, all available on free tiers:
+JobPilot is provider-agnostic — generation, embeddings, and the browser agent each pick a provider in `.env` (the setup script does this for you). On startup the app validates that the chosen provider has the credentials it needs, and refuses to boot with a clear message if not.
 
-| Key | Where to get it | What it powers |
+| Provider | What you need | Notes |
 | --- | --- | --- |
-| `GOOGLE_API_KEY` | [Google AI Studio](https://aistudio.google.com/) → **Get API key** | All Gemini features (scoring extraction, CV/letter tailoring, scraping, form-fill) |
-| `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | [Adzuna developer portal](https://developer.adzuna.com/) → create a free account | The Adzuna job-search API source |
+| **Local / self-hosted** (Ollama, llama.cpp, LM Studio, vLLM) | just an `LLM_BASE_URL` | No cloud key. Many local builds don't serve embeddings — fit-scoring then needs a Gemini/OpenAI key, or degrades gracefully. |
+| **Google Gemini** | `GOOGLE_API_KEY` ([AI Studio](https://aistudio.google.com/) → Get API key) | Free tier. Powers generation, embeddings, and the browser agent. |
+| **OpenAI** | `OPENAI_API_KEY` | Covers all three roles. |
+| **Anthropic** | `ANTHROPIC_API_KEY` | Generation only — no embeddings API, and browser-use ships no Anthropic client, so those fall back to Gemini. |
 
-Optional integrations (SerpAPI fallback, Gmail) have their own keys — see `.env.example` for the full list and inline notes.
+The **Adzuna** job-search source is optional but recommended (`ADZUNA_APP_ID` / `ADZUNA_APP_KEY`, free at the [Adzuna developer portal](https://developer.adzuna.com/)). Without it, other sources and manual entry still work. Other optional integrations (SerpAPI fallback, Gmail) have their own keys — see `.env.example`.
 
 ---
 
@@ -114,6 +126,18 @@ For a full walkthrough of every feature, see the [user guide](docs/user-guide.md
 ---
 
 ## Troubleshooting
+
+### "Invalid LLM provider configuration" on startup
+
+The app validates that your chosen provider has the credentials it needs and refuses to boot otherwise — the log lists exactly what's missing. Re-run `scripts/setup.sh` / `scripts/setup.ps1`, or fix the named keys in `.env` (see `.env.example`).
+
+### Docker can't reach my local model (Ollama / llama.cpp / LM Studio)
+
+Inside a container, `localhost` is the container itself. Point `LLM_BASE_URL` (and `BROWSER_LLM_BASE_URL`) at `http://host.docker.internal:<port>/v1`. `docker-compose.yml` already maps `host.docker.internal`. If the model runs on another machine, use that machine's LAN IP, e.g. `http://192.168.1.50:8080/v1`.
+
+### Stored credentials stop working after a Docker restart
+
+`CREDENTIAL_KEY` must be set in `.env` (the setup script generates it). In a container the app can't persist a generated key, so without it each restart gets a new key and can't decrypt previously-saved credentials.
 
 ### "Node not found"
 

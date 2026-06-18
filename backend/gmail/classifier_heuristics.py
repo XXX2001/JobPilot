@@ -68,9 +68,12 @@ _MAX_HEURISTIC_CONFIDENCE = 0.85
 
 
 def _vendor_for(from_address: str) -> Optional[str]:
-    lower = from_address.lower()
+    # Match against the domain part only. A vendor fragment appearing in the
+    # local part (e.g. "workable.com@smartrecruiters.com") must not win over
+    # the actual sending domain.
+    domain = from_address.lower().rsplit("@", 1)[-1]
     for fragment, vendor in ATS_DOMAINS.items():
-        if fragment in lower:
+        if fragment in domain:
             return vendor
     return None
 

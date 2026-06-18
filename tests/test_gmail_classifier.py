@@ -34,6 +34,20 @@ def test_classify_known_patterns(from_address, subject, expected_category, expec
         assert vendor == expected_vendor
 
 
+def test_vendor_matches_domain_not_local_part():
+    """A vendor fragment in the local part must not beat the real sending domain.
+
+    Regression for `_vendor_for` scanning the whole address: the local part
+    `workable.com` previously won over the `smartrecruiters.com` domain.
+    """
+    _category, _confidence, vendor = classify(
+        from_address="workable.com@smartrecruiters.com",
+        subject="",
+        snippet=None,
+    )
+    assert vendor == "smartrecruiters"
+
+
 def test_confidence_capped_at_0_85():
     """Heuristic confidence never exceeds 0.85 so the Phase 2 LLM can override."""
     _, confidence, _ = classify(

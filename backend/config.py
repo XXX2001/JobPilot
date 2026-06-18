@@ -13,10 +13,14 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
-    # Required secrets (no defaults)
-    GOOGLE_API_KEY: SecretStr
-    ADZUNA_APP_ID: str  # public app id (shown masked in UI but not a secret)
-    ADZUNA_APP_KEY: SecretStr
+    # Credentials — all optional so the app can boot with, e.g., a local
+    # OpenAI-compatible model and no cloud keys at all. What each *configured*
+    # provider actually requires is enforced by ``validate_runtime_config()``
+    # at startup (see backend/main.py), and the in-app onboarding surfaces the
+    # job-source keys. This is what lets a local-model user skip GOOGLE_API_KEY.
+    GOOGLE_API_KEY: SecretStr = SecretStr("")
+    ADZUNA_APP_ID: str = ""  # public app id (shown masked in UI but not a secret)
+    ADZUNA_APP_KEY: SecretStr = SecretStr("")
 
     # Optional
     SERPAPI_KEY: SecretStr = SecretStr("")
@@ -97,6 +101,66 @@ class Settings(BaseSettings):
             # Unexpected non-string scalar — treat truthy as configured.
             return bool(raw)
         return raw not in ("", "placeholder")
+
+    def validate_runtime_config(self) -> list[str]:
+        """Return human-readable problems with the selected LLM providers.
+
+        Empty list == ready to run. Each of generation / embeddings / browser
+        picks a provider; this checks only the credentials *that* provider
+        needs, so a local-model user is never asked for a Google key. Called
+        at startup (fail-fast) by the app lifespan.
+        """
+        problems: list[str] = []
+        _VALID_GEN = ("gemini", "openai", "anthropic")
+        _VALID_EMBED_BROWSER = ("gemini", "openai")
+
+        def _openai_compatible_ok(base_url_attr: str, key_attr: str) -> bool:
+            # A base_url means a local/self-hosted server (key is usually
+            # ignored); otherwise a hosted-OpenAI key is required.
+            return (
+                self.is_configured(base_url_attr)
+                or self.is_configured(key_attr)
+                or self.is_configured("OPENAI_API_KEY")
+            )
+
+        gen = (self.LLM_PROVIDER or "gemini").lower()
+        if gen not in _VALID_GEN:
+            problems.append(f"LLM_PROVIDER={gen!r} must be one of gemini|openai|anthropic.")
+        elif gen == "gemini" and not self.is_configured("GOOGLE_API_KEY"):
+            problems.append("LLM_PROVIDER=gemini requires GOOGLE_API_KEY.")
+        elif gen == "openai" and not _openai_compatible_ok("LLM_BASE_URL", "LLM_API_KEY"):
+            problems.append(
+                "LLM_PROVIDER=openai requires LLM_BASE_URL (local/self-hosted) "
+                "or LLM_API_KEY/OPENAI_API_KEY (hosted OpenAI)."
+            )
+        elif gen == "anthropic" and not (
+            self.is_configured("LLM_API_KEY") or self.is_configured("ANTHROPIC_API_KEY")
+        ):
+            problems.append("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY (or LLM_API_KEY).")
+
+        emb = (self.EMBEDDING_PROVIDER or "gemini").lower()
+        if emb not in _VALID_EMBED_BROWSER:
+            problems.append(f"EMBEDDING_PROVIDER={emb!r} must be one of gemini|openai (anthropic has no embeddings API).")
+        elif emb == "gemini" and not self.is_configured("GOOGLE_API_KEY"):
+            problems.append("EMBEDDING_PROVIDER=gemini requires GOOGLE_API_KEY.")
+        elif emb == "openai" and not _openai_compatible_ok("EMBEDDING_BASE_URL", "EMBEDDING_API_KEY"):
+            problems.append(
+                "EMBEDDING_PROVIDER=openai requires EMBEDDING_BASE_URL or EMBEDDING_API_KEY/OPENAI_API_KEY."
+            )
+
+        br = (self.BROWSER_LLM_PROVIDER or "gemini").lower()
+        if br not in _VALID_EMBED_BROWSER:
+            problems.append(f"BROWSER_LLM_PROVIDER={br!r} must be one of gemini|openai.")
+        elif br == "gemini" and not self.is_configured("GOOGLE_API_KEY"):
+            problems.append("BROWSER_LLM_PROVIDER=gemini requires GOOGLE_API_KEY.")
+        elif br == "openai" and not (
+            self.is_configured("BROWSER_LLM_BASE_URL")
+            or self.is_configured("BROWSER_LLM_API_KEY")
+            or self.is_configured("OPENAI_API_KEY")
+        ):
+            problems.append("BROWSER_LLM_PROVIDER=openai requires BROWSER_LLM_BASE_URL or an OpenAI key.")
+
+        return problems
 
 
 def _load_settings() -> "Settings":

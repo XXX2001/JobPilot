@@ -218,17 +218,13 @@ if ((Test-Path $DefaultsTemplates) -and (-not (Get-ChildItem $DataTemplates -Err
 # ── Step 9: Environment file ──────────────────────────────────────────────────
 Write-Step "8/9  Setting up .env"
 $EnvFile    = Join-Path $RepoRoot ".env"
-$EnvExample = Join-Path $RepoRoot ".env.example"
 if (-not (Test-Path $EnvFile)) {
-    Copy-Item $EnvExample $EnvFile
-    Write-Ok ".env created from .env.example"
-    Write-Host ""
-    Write-Host "  ⚠  ACTION REQUIRED: Edit .env and fill in your API keys:" -ForegroundColor Yellow
-    Write-Host "     GOOGLE_API_KEY  — Gemini API key (free at aistudio.google.com)" -ForegroundColor Yellow
-    Write-Host "     ADZUNA_APP_ID   — Adzuna app ID  (free at developer.adzuna.com)" -ForegroundColor Yellow
-    Write-Host "     ADZUNA_APP_KEY  — Adzuna API key (free at developer.adzuna.com)" -ForegroundColor Yellow
+    # Delegate to the interactive provider picker (writes a valid, provider-aware
+    # .env + a persistent credential key).
+    & (Join-Path $PSScriptRoot "setup.ps1")
+    Write-Ok ".env configured"
 } else {
-    Write-Ok ".env already exists"
+    Write-Ok ".env already exists (run scripts\setup.ps1 to switch AI provider)"
 }
 
 Write-Step "9/9  Creating launcher shortcuts"

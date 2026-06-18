@@ -4,6 +4,18 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## production-readiness (Docker + Windows install) 2026-06-18
+
+Makes JobPilot easy to install and run for Docker and Windows users, and hardens the container for production.
+
+- **Provider-aware config, no forced Google key.** `GOOGLE_API_KEY`/`ADZUNA_*` are no longer unconditionally required — a local OpenAI-compatible model boots with zero cloud keys. `Settings.validate_runtime_config()` checks only the credentials the *chosen* providers need and the app fail-fasts at startup with a clear, actionable message (`tests/test_config_validation.py`).
+- **Interactive setup.** `scripts/setup.sh` / `scripts/setup.ps1` pick a provider (local / Gemini / OpenAI / Anthropic), write a valid `.env`, and generate a persistent `CREDENTIAL_KEY`. The full `install.{sh,ps1}` installers now delegate their `.env` step to these.
+- **CREDENTIAL_KEY persistence fix.** Documented + warned: in a container the key can't be auto-persisted, so it must live in `.env` (the setup script ensures this) or saved credentials break on restart.
+- **Docker hardening.** `shm_size: 1gb` (fixes Chromium crashes), `host.docker.internal` mapping so a model on the host is reachable, json-file log rotation (`10m`×3), and a longer healthcheck `start_period` for first-boot migrations.
+- **Docs.** README is now Docker-first for all platforms (incl. Windows/macOS via Docker Desktop), provider-agnostic, with a provider table and troubleshooting for the local-model-from-Docker networking gotcha.
+
+---
+
 ## multi-provider-llm (finish) 2026-06-18
 
 Completes the provider-agnostic LLM abstraction designed in [`docs/superpowers/specs/2026-06-01-multi-provider-llm-design.md`](docs/superpowers/specs/2026-06-01-multi-provider-llm-design.md) and planned in [`docs/superpowers/plans/2026-06-01-multi-provider-llm.md`](docs/superpowers/plans/2026-06-01-multi-provider-llm.md). Generation, embeddings, and the browser agent each select a provider (Gemini / OpenAI-compatible incl. DeepSeek + local Ollama/LM Studio / Anthropic) via `.env`, applied on restart.

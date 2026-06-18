@@ -155,15 +155,12 @@ success "Data directories ready"
 # ── Step 9: Environment file ──────────────────────────────────────────────────
 step "8/9  Setting up .env"
 if [ ! -f ".env" ]; then
-    cp .env.example .env
-    success ".env created from .env.example"
-    echo ""
-    echo -e "${YELLOW}  ⚠  ACTION REQUIRED: Edit .env and fill in your API keys:${NC}"
-    echo -e "     ${BOLD}GOOGLE_API_KEY${NC}  — Gemini API key (free at aistudio.google.com)"
-    echo -e "     ${BOLD}ADZUNA_APP_ID${NC}   — Adzuna app ID  (free at developer.adzuna.com)"
-    echo -e "     ${BOLD}ADZUNA_APP_KEY${NC}  — Adzuna API key (free at developer.adzuna.com)"
+    # Delegate to the interactive provider picker (writes a valid, provider-aware
+    # .env + a persistent credential key). Falls back to a plain copy if skipped.
+    bash "$REPO_ROOT/scripts/setup.sh" || cp .env.example .env
+    success ".env configured"
 else
-    success ".env already exists"
+    success ".env already exists (run scripts/setup.sh to switch AI provider)"
 fi
 
 step "9/9  Creating launcher shortcuts"

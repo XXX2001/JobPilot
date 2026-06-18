@@ -93,6 +93,31 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("DB init failed (may already be up)")
 
+    # ── Validate provider configuration (fail-fast, provider-aware) ───────
+    # Only the credentials the *chosen* providers need are required, so a
+    # local-model setup never demands a Google key. See Settings.validate_runtime_config.
+    _config_problems = settings.validate_runtime_config()
+    if _config_problems:
+        logger.error("LLM provider configuration is incomplete:")
+        for _p in _config_problems:
+            logger.error("  • %s", _p)
+        raise RuntimeError(
+            "Invalid LLM provider configuration (see errors above). "
+            "Run the setup script (scripts/setup.sh or scripts/setup.ps1) "
+            "or edit .env — defaults and examples are in .env.example."
+        )
+    if not (settings.is_configured("ADZUNA_APP_ID") and settings.is_configured("ADZUNA_APP_KEY")):
+        logger.warning(
+            "ADZUNA_APP_ID/ADZUNA_APP_KEY not set — the Adzuna job source is disabled. "
+            "Other scraping sources and manual job entry still work."
+        )
+    if not settings.is_configured("CREDENTIAL_KEY"):
+        logger.warning(
+            "CREDENTIAL_KEY is not set in the environment. A key will be generated, "
+            "but in a container it cannot be persisted to .env — set CREDENTIAL_KEY in "
+            ".env (the setup script does this) so stored credentials survive restarts."
+        )
+
     # ── Instantiate singletons ────────────────────────────────────────────
     try:
         from backend.applier.engine import ApplicationEngine

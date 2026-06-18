@@ -285,7 +285,7 @@ def test_scrapling_fetcher_warns_on_selector_miss(caplog):
     first time a configured selector returns no nodes for a site."""
     from backend.scraping.scrapling_fetcher import ScraplingFetcher
 
-    fetcher = ScraplingFetcher(gemini_client=MagicMock())
+    fetcher = ScraplingFetcher(llm_client=MagicMock())
 
     # google_jobs has a content selector configured but our HTML contains
     # none of those nodes — so the selector pass will miss.
@@ -305,7 +305,7 @@ def test_scrapling_fetcher_resets_counter_after_match():
     from backend.scraping.scrapling_fetcher import ScraplingFetcher
     from backend.scraping.site_prompts import SITE_CONTENT_SELECTORS
 
-    fetcher = ScraplingFetcher(gemini_client=MagicMock())
+    fetcher = ScraplingFetcher(llm_client=MagicMock())
     fetcher._selector_miss_counts["google_jobs"] = 3
 
     sel = SITE_CONTENT_SELECTORS.get("google_jobs", "").split(",")[0].strip()
@@ -378,7 +378,7 @@ def test_engine_records_and_returns_pending_review():
     same payload from get_pending_review."""
     from backend.applier.engine import ApplicationEngine
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     engine.record_pending_review(
         42, filled_fields={"#name": "Alice"}, screenshot_b64="abc"
     )
@@ -393,7 +393,7 @@ def test_engine_clears_pending_review_on_signal_confirm():
     """A confirm signal consumes the snapshot — second GET should 404."""
     from backend.applier.engine import ApplicationEngine
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     engine.record_pending_review(7, filled_fields={}, screenshot_b64=None)
     # signal_confirm sets the confirm_event when present; register it so the
     # method finds something to set.

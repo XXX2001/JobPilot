@@ -18,7 +18,7 @@ from backend.scraping.site_prompts import (
 
 
 def _fetcher() -> ScraplingFetcher:
-    return ScraplingFetcher(gemini_client=MagicMock())
+    return ScraplingFetcher(llm_client=MagicMock())
 
 
 # ── Domain map source-of-truth ───────────────────────────────────────────────

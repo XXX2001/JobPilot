@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import pytest
 
-from backend.security.sanitizer import (
+from backend.defaults import (
     MAX_LEN_APPLY_URL,
     MAX_LEN_DESCRIPTION,
     MAX_LEN_TITLE,
+)
+from backend.security.sanitizer import (
     sanitize_for_prompt,
     sanitize_url,
     wrap_untrusted,

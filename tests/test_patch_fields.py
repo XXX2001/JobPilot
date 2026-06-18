@@ -53,7 +53,7 @@ def test_client_message_rejects_malformed_patch_fields():
 
 
 def _make_engine() -> ApplicationEngine:
-    return ApplicationEngine(api_key="test-key", daily_limit=10)
+    return ApplicationEngine(daily_limit=10)
 
 
 def test_signal_patch_fields_stores_and_get_returns_dict():
@@ -189,7 +189,7 @@ async def test_patches_refilled_before_submit(monkeypatch):
     )
 
     filler = PlaywrightFormFiller(
-        gemini_client=gemini,
+        llm_client=gemini,
         on_get_patches=lambda job_id: {"#name": "Edited", "#phone": "123"},
     )
 
@@ -246,7 +246,7 @@ async def test_failing_patch_logs_warning_but_still_submits(monkeypatch, caplog)
     )
 
     filler = PlaywrightFormFiller(
-        gemini_client=gemini,
+        llm_client=gemini,
         on_get_patches=lambda job_id: {"#broken": "x", "#ok": "y"},
     )
 

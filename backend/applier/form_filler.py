@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 from backend.config import settings
 
 if TYPE_CHECKING:
-    from backend.llm.gemini_client import GeminiClient
+    from backend.llm.base import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +37,18 @@ _KEEP_ATTRS = {"id", "name", "type", "placeholder", "required", "for", "class", 
 
 
 class PlaywrightFormFiller:
-    """Tier 1 apply: direct Playwright DOM manipulation + single Gemini call.
+    """Tier 1 apply: direct Playwright DOM manipulation + single LLM call.
 
     Raises on any unrecoverable error so the caller can fall back to Tier 2.
     """
 
     def __init__(
         self,
-        gemini_client: "GeminiClient",
+        llm_client: "LLMClient",
         on_review: Optional[Callable[..., None]] = None,
         on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
-        self._gemini = gemini_client
+        self._llm = llm_client
         # Engine callback invoked at apply_review broadcast time so the
         # pending-review snapshot is cached for HTTP re-fetch.
         self._on_review = on_review
@@ -157,7 +157,7 @@ class PlaywrightFormFiller:
                 has_letter=letter_pdf is not None and letter_pdf.exists(),
             )
 
-            raw = await self._gemini.generate_text(prompt)
+            raw = await self._llm.generate_text(prompt)
             mapping = self._parse_gemini_response(raw)
 
             # Phase 3: fill fields
@@ -341,7 +341,7 @@ class PlaywrightFormFiller:
                 has_letter=letter_pdf is not None and letter_pdf.exists(),
             )
 
-            raw = await self._gemini.generate_text(prompt)
+            raw = await self._llm.generate_text(prompt)
             mapping = self._parse_gemini_response(raw)
 
             filled_fields: dict[str, str] = {}

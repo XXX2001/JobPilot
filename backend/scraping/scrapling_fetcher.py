@@ -1,8 +1,8 @@
-"""Tier 1 scraper: Scrapling HTTP fetch + single Gemini call.
+"""Tier 1 scraper: Scrapling HTTP fetch + single LLM call.
 
 For known job boards (LinkedIn, Indeed, Google Jobs, WTTJ, Glassdoor) the page
 structure is predictable — we fetch the HTML, clean it down to essential content,
-then extract jobs with a single GeminiClient.generate_text() call instead of a
+then extract jobs with a single LLMClient.generate_text() call instead of a
 full browser-use Agent loop (~20 calls). Unknown/lab sites stay on Tier 2
 (AdaptiveScraper).
 """
@@ -28,7 +28,7 @@ from backend.scraping.site_prompts import (
 )
 
 if TYPE_CHECKING:
-    from backend.llm.gemini_client import GeminiClient
+    from backend.llm.base import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +41,12 @@ _MAX_CONTENT_CHARS = MAX_SCRAPLING_CONTENT_CHARS
 class ScraplingFetcher:
     """Tier 1 scraper: HTTP fetch via Scrapling + single LLM extraction call.
 
-    Reduces ~20 Gemini API calls per site/keyword to 1, and cuts wall-clock
+    Reduces ~20 LLM API calls per site/keyword to 1, and cuts wall-clock
     time from 60-180 s to ~10-30 s per site/keyword pair.
     """
 
-    def __init__(self, gemini_client: "GeminiClient") -> None:
-        self._gemini = gemini_client
+    def __init__(self, llm_client: "LLMClient") -> None:
+        self._llm = llm_client
         self._selector_miss_counts: dict[str, int] = {}
 
     # ------------------------------------------------------------------
@@ -64,7 +64,7 @@ class ScraplingFetcher:
         max_age_days: int | None = None,
         page: int = 1,
     ) -> list[RawJob]:
-        """Fetch a job listings page and extract jobs with a single Gemini call.
+        """Fetch a job listings page and extract jobs with a single LLM call.
 
         ``page`` is 1-indexed. Page > 1 is best-effort: not every adapter
         supports pagination cleanly (see ``_build_search_url``). Callers
@@ -110,13 +110,13 @@ class ScraplingFetcher:
         )
 
         try:
-            logger.info("[Tier 1] calling Gemini for extraction — site=%s", site)
+            logger.info("[Tier 1] calling LLM for extraction — site=%s", site)
             raw_text = await self._extract_jobs(cleaned, site=site)
         except Exception as exc:
-            logger.warning("[Tier 1] Gemini extraction FAILED — site=%s error=%s", site, exc)
+            logger.warning("[Tier 1] LLM extraction FAILED — site=%s error=%s", site, exc)
             return []
 
-        logger.debug("[Tier 1] Gemini raw response (%d chars):\n%s", len(raw_text), raw_text[:500])
+        logger.debug("[Tier 1] LLM raw response (%d chars):\n%s", len(raw_text), raw_text[:500])
 
         parsed = extract_json_from_text(raw_text)
         jobs = parse_jobs_from_json(parsed, source_url=search_url, source_name="scrapling")
@@ -402,14 +402,14 @@ class ScraplingFetcher:
         return result
 
     async def _extract_jobs(self, cleaned_content: str, site: str = "") -> str:
-        """Call Gemini with an extraction-only prompt and return raw text response."""
+        """Call the LLM with an extraction-only prompt and return raw text response."""
         prompt_template = EXTRACTION_PROMPTS.get(site) or EXTRACTION_PROMPTS["default"]
         prompt = prompt_template.format(cleaned_content=cleaned_content)
         logger.debug("[Tier 1] extraction prompt length: %d chars — site=%s", len(prompt), site)
-        return await self._gemini.generate_text(prompt)
+        return await self._llm.generate_text(prompt)
 
     def _parse_and_sanitize(self, raw_text: str, source_url: str = "") -> list[RawJob]:
-        """Parse Gemini output into RawJob list. Kept as public method for testability."""
+        """Parse LLM output into RawJob list. Kept as public method for testability."""
         parsed = extract_json_from_text(raw_text)
         return parse_jobs_from_json(parsed, source_url=source_url, source_name="scrapling")
 

@@ -5,13 +5,7 @@ import logging
 import re
 
 from backend.defaults import (
-    MAX_LEN_ADDITIONAL_ANSWERS,
     MAX_LEN_APPLY_URL,
-    MAX_LEN_COMPANY,
-    MAX_LEN_DESCRIPTION,
-    MAX_LEN_LOCATION,
-    MAX_LEN_SALARY_TEXT,
-    MAX_LEN_TITLE,
 )
 
 logger = logging.getLogger(__name__)

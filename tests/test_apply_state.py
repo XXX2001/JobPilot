@@ -527,7 +527,7 @@ async def test_dispatch_copies_strategy_browser_onto_ctx(monkeypatch):
     from backend.applier.manual_apply import ApplicationResult
     from backend.applier.state import ApplyContext
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     fake = _FakeBrowser()
     engine._auto._active_browser = fake
     engine._auto.apply = AsyncMock(
@@ -556,7 +556,7 @@ async def test_failed_terminal_closes_browser():
     from backend.applier.engine import ApplicationEngine
     from backend.applier.state import State
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     ctx = _build_ctx(engine, "auto")
     ctx.browser = _FakeBrowser()
     transitions = engine._build_transitions(ctx)
@@ -569,7 +569,7 @@ async def test_cancelled_terminal_closes_browser():
     from backend.applier.engine import ApplicationEngine
     from backend.applier.state import State
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     ctx = _build_ctx(engine, "auto")
     ctx.browser = _FakeBrowser()
     transitions = engine._build_transitions(ctx)
@@ -582,7 +582,7 @@ async def test_assisted_success_leaves_browser_open():
     from backend.applier.engine import ApplicationEngine
     from backend.applier.state import State
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     ctx = _build_ctx(engine, "assisted")
     ctx.browser = _FakeBrowser()
     transitions = engine._build_transitions(ctx)
@@ -595,7 +595,7 @@ async def test_auto_success_closes_browser():
     from backend.applier.engine import ApplicationEngine
     from backend.applier.state import State
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     ctx = _build_ctx(engine, "auto")
     ctx.browser = _FakeBrowser()
     transitions = engine._build_transitions(ctx)
@@ -618,7 +618,7 @@ async def test_rslf_terminal_closes_browser_for_auto():
     from backend.applier.engine import ApplicationEngine
     from backend.applier.state import State
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     ctx = _build_ctx(engine, "auto")
     ctx.db = _FakeDb()  # type: ignore[assignment]
     ctx.browser = _FakeBrowser()
@@ -632,7 +632,7 @@ async def test_rslf_terminal_leaves_browser_open_for_assisted():
     from backend.applier.engine import ApplicationEngine
     from backend.applier.state import State
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     ctx = _build_ctx(engine, "assisted")
     ctx.db = _FakeDb()  # type: ignore[assignment]
     ctx.browser = _FakeBrowser()
@@ -647,7 +647,7 @@ async def test_cancelled_midflight_closes_browser():
 
     from backend.applier.engine import ApplicationEngine, ApplyMode
 
-    engine = ApplicationEngine(api_key="x", model="gemini-3.0-flash")
+    engine = ApplicationEngine()
     fake_browser = _FakeBrowser()
 
     async def fake_apply(**_kwargs):

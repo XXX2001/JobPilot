@@ -1,7 +1,8 @@
 """Adaptive browser-use scraper that works on any website.
 
-Uses browser-use + Gemini to extract job listings without hardcoded selectors.
-Falls back gracefully on malformed agent output.
+Uses browser-use + the configured browser LLM provider (see
+``backend.llm.factory.make_browser_llm``) to extract job listings without
+hardcoded selectors. Falls back gracefully on malformed agent output.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ import logging
 from typing import Any
 
 from backend.config import settings
-from backend.defaults import GEMINI_FALLBACK_MODEL
 from backend.models.schemas import JobDetails, RawJob
 from backend.scraping.json_utils import extract_json_from_text, parse_jobs_from_json
 from backend.scraping.site_prompts import SITE_PROMPTS, format_prompt
@@ -26,21 +26,17 @@ _extract_json_from_text = extract_json_from_text
 class AdaptiveScraper:
     """LLM-powered scraper that works on ANY website.
 
-    Uses browser-use + Gemini to understand page structure and extract job data
-    without hardcoded selectors.  All browser-use Agent calls are capped with
-    max_steps to respect the Gemini 15 RPM free tier.
+    Uses browser-use + the configured browser LLM provider to understand page
+    structure and extract job data without hardcoded selectors.  All browser-use
+    Agent calls are capped with max_steps to respect provider rate limits.
     """
 
-    def __init__(self, gemini_api_key: str | None = None) -> None:
-        self._api_key = gemini_api_key or settings.GOOGLE_API_KEY.get_secret_value()
-
     def _make_llm(self):  # type: ignore[return]
-        """Create a ChatGoogle LLM instance for browser-use."""
+        """Build the configured browser-use LLM (provider-agnostic via the factory)."""
         try:
-            from browser_use import ChatGoogle  # type: ignore
+            from backend.llm.factory import make_browser_llm
 
-            model = settings.GOOGLE_MODEL or GEMINI_FALLBACK_MODEL
-            return ChatGoogle(model=model, api_key=self._api_key)
+            return make_browser_llm()
         except ImportError:
             logger.warning("browser_use not installed; AdaptiveScraper will be a no-op")
             return None

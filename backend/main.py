@@ -1,10 +1,8 @@
-import json
 import logging
 import platform
 import shutil
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, Request, Response  # type: ignore
@@ -13,7 +11,6 @@ from fastapi.responses import JSONResponse  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
 from pydantic import BaseModel  # type: ignore
 from sqlalchemy import text  # type: ignore
-from starlette.responses import FileResponse  # type: ignore
 from starlette.staticfiles import NotModifiedResponse  # type: ignore
 
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
@@ -126,9 +123,9 @@ async def lifespan(app: FastAPI):
         letter_pipeline = LetterPipeline(cv_editor=cv_editor)
         adzuna = AdzunaClient()
         dedup = JobDeduplicator()
-        adaptive = AdaptiveScraper(gemini_api_key=settings.GOOGLE_API_KEY.get_secret_value())
+        adaptive = AdaptiveScraper()
         session_mgr = BrowserSessionManager()
-        scrapling = ScraplingFetcher(gemini_client=gen_client) if settings.SCRAPLING_ENABLED else None
+        scrapling = ScraplingFetcher(llm_client=gen_client) if settings.SCRAPLING_ENABLED else None
         orchestrator = ScrapingOrchestrator(
             adzuna_client=adzuna,
             adaptive_scraper=adaptive,
@@ -139,10 +136,7 @@ async def lifespan(app: FastAPI):
         matcher = JobMatcher()
         from backend.defaults import DAILY_LIMIT
 
-        apply_engine = ApplicationEngine(
-            api_key=settings.GOOGLE_API_KEY.get_secret_value(),
-            daily_limit=DAILY_LIMIT,
-        )
+        apply_engine = ApplicationEngine(daily_limit=DAILY_LIMIT)
 
         # DB factory for the batch runner (creates a new session each call)
         from backend.database import AsyncSessionLocal
@@ -153,7 +147,7 @@ async def lifespan(app: FastAPI):
             cv_pipeline=cv_pipeline,
             db_factory=AsyncSessionLocal,
             fit_engine=FitEngine(),
-            embedder=Embedder(gemini_client=make_embedding_client()),
+            embedder=Embedder(embedding_client=make_embedding_client()),
         )
 
         # Store on app.state for dependency injection

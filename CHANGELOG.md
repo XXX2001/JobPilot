@@ -4,6 +4,18 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## multi-provider-llm (finish) 2026-06-18
+
+Completes the provider-agnostic LLM abstraction designed in [`docs/superpowers/specs/2026-06-01-multi-provider-llm-design.md`](docs/superpowers/specs/2026-06-01-multi-provider-llm-design.md) and planned in [`docs/superpowers/plans/2026-06-01-multi-provider-llm.md`](docs/superpowers/plans/2026-06-01-multi-provider-llm.md). Generation, embeddings, and the browser agent each select a provider (Gemini / OpenAI-compatible incl. DeepSeek + local Ollama/LM Studio / Anthropic) via `.env`, applied on restart.
+
+- **Protocols + factory.** `backend/llm/base.py` defines `LLMClient`/`EmbeddingClient` Protocols and provider-neutral exceptions (`LLMRateLimitError`/`LLMJSONError`/`LLMCallFailed`, with `Gemini*` aliases kept for back-compat). `backend/llm/factory.py` exposes `make_llm_client` / `make_embedding_client` / `make_browser_llm`, each keyed off the matching `*_PROVIDER` setting and defaulting to today's Gemini behaviour.
+- **Native adapters.** `providers/openai_compat.py` (generation + embeddings, configurable `base_url`) and `providers/anthropic_client.py` (generation). `GeminiClient` was conformed to the Protocols.
+- **No hard-coded Gemini anywhere.** Beyond the planned consumers (CV editor/modifier, job analyzer, embedder, both appliers), the abstraction was extended so the scraper tier (`AdaptiveScraper` → `make_browser_llm`, `ScraplingFetcher` → injected `LLMClient`) and the apply form-filler (`PlaywrightFormFiller` → `make_llm_client`) no longer instantiate `GeminiClient`/`ChatGoogle` directly. The vestigial `api_key`/`model` plumbing through `ApplicationEngine`/`AutoApplyStrategy`/`AssistedApplyStrategy` was removed.
+- **Embedding dimension guard.** `cosine_similarity` returns `0.0` on length mismatch, so switching embedding providers (e.g. Gemini 768 vs OpenAI 1536) can never crash a fit run.
+- Deps: `openai`, `anthropic`. Config + `.env.example` document every `LLM_*` / `EMBEDDING_*` / `BROWSER_LLM_*` key (incl. a local-Ollama example). Tests: `tests/test_llm_*.py` (adapters + factory + wiring).
+
+---
+
 ## fix-sprint (finish) 2026-05-30
 
 Closes the three fix-sprint tracks that were started but never landed on `main` (see [`docs/reports/2026-05-30-dev-consolidation.md`](docs/reports/2026-05-30-dev-consolidation.md) "Still NOT done"). Designed in [`docs/superpowers/specs/2026-05-30-finish-inflight-sprint-design.md`](docs/superpowers/specs/2026-05-30-finish-inflight-sprint-design.md) and executed lot-by-lot with two-stage review. The follow-on tracks (T1b, T4b, T7b, T2b) remain deferred.

@@ -1,7 +1,11 @@
 # Multi-Provider LLM Abstraction — Design
 
 **Date:** 2026-06-01
-**Status:** Approved (pending implementation plan)
+**Status:** Implemented (2026-06-18). All 11 plan tasks landed; the abstraction was
+extended beyond the original blast radius so **no call site hard-binds to Gemini** —
+the scraper (`AdaptiveScraper`, `ScraplingFetcher`), the apply form-filler, and both
+appliers now resolve their client through `backend/llm/factory.py`. The only remaining
+manual step is the optional cross-provider smoke test (Task 11, Step 2 — needs live keys).
 
 ## 1. Goal & scope
 

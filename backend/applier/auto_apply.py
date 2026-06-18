@@ -55,13 +55,9 @@ class AutoApplyStrategy:
 
     def __init__(
         self,
-        api_key: str,
-        model: str | None = None,
         on_review: Optional[Callable[..., None]] = None,
         on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
-        self._api_key = api_key
-        self._model = model or settings.GOOGLE_MODEL
         # Engine callback invoked at apply_review broadcast time so the
         # pending-review snapshot is cached for HTTP re-fetch.
         self._on_review = on_review
@@ -70,10 +66,10 @@ class AutoApplyStrategy:
         self._on_get_patches = on_get_patches
 
         try:
-            from backend.llm.gemini_client import GeminiClient
+            from backend.llm.factory import make_llm_client
             from backend.applier.form_filler import PlaywrightFormFiller
             self._form_filler = PlaywrightFormFiller(
-                gemini_client=GeminiClient(),
+                llm_client=make_llm_client(),
                 on_review=on_review,
                 on_get_patches=on_get_patches,
             )

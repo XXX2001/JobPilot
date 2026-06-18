@@ -19,7 +19,7 @@ from backend.applier.engine import ApplicationEngine
 
 
 def _make_engine() -> ApplicationEngine:
-    return ApplicationEngine(api_key="test-key", daily_limit=10)
+    return ApplicationEngine(daily_limit=10)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -121,7 +121,7 @@ async def test_auto_tier2_broadcast_records_pending_review(monkeypatch):
             }
         )
 
-    strategy = AutoApplyStrategy(api_key="key", on_review=on_review)
+    strategy = AutoApplyStrategy(on_review=on_review)
 
     # Cancel immediately so the wait returns without blocking.
     cancel = asyncio.Event()

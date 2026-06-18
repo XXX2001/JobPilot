@@ -96,7 +96,7 @@ async def test_assisted_apply_fallback_when_no_browser_use(monkeypatch):
     monkeypatch.setattr(mod, "Agent", None)
 
     with patch("webbrowser.open") as mock_open:
-        strategy = AssistedApplyStrategy(api_key="test-key")
+        strategy = AssistedApplyStrategy()
         result = await strategy.apply(apply_url="https://example.com/job")
     assert result.status == "assisted"
 
@@ -115,7 +115,7 @@ async def test_auto_apply_fallback_when_no_browser_use(monkeypatch):
     monkeypatch.setattr(mod, "Agent", None)
 
     with patch("webbrowser.open"):
-        strategy = AutoApplyStrategy(api_key="test-key")
+        strategy = AutoApplyStrategy()
         result = await strategy.apply(
             job_id=99,
             apply_url="https://example.com/job",
@@ -129,7 +129,7 @@ async def test_auto_apply_fallback_when_no_browser_use(monkeypatch):
 
 
 def _make_engine() -> ApplicationEngine:
-    return ApplicationEngine(api_key="test-key", daily_limit=10)
+    return ApplicationEngine(daily_limit=10)
 
 
 @pytest.mark.asyncio
@@ -283,7 +283,7 @@ async def test_auto_apply_tier1_success_no_tier2():
     from backend.applier.auto_apply import AutoApplyStrategy
     from unittest.mock import AsyncMock, patch
 
-    strategy = AutoApplyStrategy(api_key="key")
+    strategy = AutoApplyStrategy()
     fake_result = {"status": "applied", "filled_fields": {}, "screenshot_b64": None}
 
     with patch(_SANITIZE, side_effect=lambda u: u), \
@@ -303,7 +303,7 @@ async def test_auto_apply_tier1_failure_falls_back_to_tier2():
     from backend.applier.manual_apply import ApplicationResult
     from unittest.mock import AsyncMock, patch
 
-    strategy = AutoApplyStrategy(api_key="key")
+    strategy = AutoApplyStrategy()
 
     with patch(_SANITIZE, side_effect=lambda u: u), \
          patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock(side_effect=RuntimeError("preflight failed"))) as mock_t1, \
@@ -321,7 +321,7 @@ async def test_auto_apply_tier1_cancelled_does_not_fall_back():
     from backend.applier.auto_apply import AutoApplyStrategy
     from unittest.mock import AsyncMock, patch
 
-    strategy = AutoApplyStrategy(api_key="key")
+    strategy = AutoApplyStrategy()
     fake_result = {"status": "cancelled", "filled_fields": {}, "screenshot_b64": None}
 
     with patch(_SANITIZE, side_effect=lambda u: u), \
@@ -342,7 +342,7 @@ async def test_auto_apply_tier1_disabled_goes_straight_to_tier2(monkeypatch):
     from unittest.mock import AsyncMock, patch
 
     monkeypatch.setattr("backend.config.settings.APPLY_TIER1_ENABLED", False)
-    strategy = AutoApplyStrategy(api_key="key")
+    strategy = AutoApplyStrategy()
 
     with patch(_SANITIZE, side_effect=lambda u: u), \
          patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock()) as mock_t1, \
@@ -379,7 +379,7 @@ async def test_browser_use_apply_parses_additional_answers_json(monkeypatch):
 
     monkeypatch.setattr(mod, "Agent", fake_agent)
 
-    strategy = AutoApplyStrategy(api_key="key")
+    strategy = AutoApplyStrategy()
     answers = json.dumps({"years_experience": "3", "visa_required": "no"})
 
     cancel = asyncio.Event()
@@ -406,7 +406,7 @@ async def test_assisted_apply_tier1_success():
     from backend.applier.assisted_apply import AssistedApplyStrategy
     from unittest.mock import AsyncMock, patch
 
-    strategy = AssistedApplyStrategy(api_key="key")
+    strategy = AssistedApplyStrategy()
     fake_result = {"status": "assisted", "filled_fields": {"#name": "Alice"}}
 
     with patch.object(strategy._form_filler, "fill_only", new=AsyncMock(return_value=fake_result)) as mock_t1:
@@ -424,7 +424,7 @@ async def test_assisted_apply_tier1_failure_falls_back():
     from backend.applier.assisted_apply import AssistedApplyStrategy
     from unittest.mock import AsyncMock, MagicMock, patch
 
-    strategy = AssistedApplyStrategy(api_key="key")
+    strategy = AssistedApplyStrategy()
 
     import backend.llm.factory as _factory
 

@@ -7,7 +7,7 @@ from backend.applier.form_filler import PlaywrightFormFiller
 def _filler() -> PlaywrightFormFiller:
     """Create a filler instance without any live clients."""
     from unittest.mock import MagicMock
-    return PlaywrightFormFiller(gemini_client=MagicMock())
+    return PlaywrightFormFiller(llm_client=MagicMock())
 
 
 # ── _clean_form_html ──────────────────────────────────────────────────────────

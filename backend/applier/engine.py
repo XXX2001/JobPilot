@@ -25,7 +25,6 @@ from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
 from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.applier.recorder import ApplicationRecorder
 from backend.applier.state import ApplyContext, State, Statechart, Transition
-from backend.config import settings
 from backend.defaults import DAILY_LIMIT, MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
 
 logger = logging.getLogger(__name__)
@@ -54,23 +53,15 @@ class ApplicationEngine:
 
     def __init__(
         self,
-        api_key: str,
-        model: Optional[str] = None,
         daily_limit: int = DAILY_LIMIT,
     ) -> None:
-        self._api_key = api_key
-        self._model = model or settings.GOOGLE_MODEL
         self._daily_limit = daily_limit
 
         self._auto = AutoApplyStrategy(
-            api_key=api_key,
-            model=self._model,
             on_review=self.record_pending_review,
             on_get_patches=self.get_pending_patches,
         )
         self._assisted = AssistedApplyStrategy(
-            api_key=api_key,
-            model=self._model,
             on_review=self.record_pending_review,
             on_get_patches=self.get_pending_patches,
         )

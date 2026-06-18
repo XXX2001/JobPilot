@@ -18,7 +18,7 @@ async def test_scraper_retries_on_agent_failure():
     """AdaptiveScraper retries up to 3 times on browser-use agent failure."""
     from backend.scraping.adaptive_scraper import AdaptiveScraper
 
-    scraper = AdaptiveScraper(gemini_api_key="test-key")
+    scraper = AdaptiveScraper()
 
     call_count = 0
 
@@ -60,7 +60,7 @@ async def test_scraper_succeeds_on_second_attempt():
     """AdaptiveScraper returns results when second attempt succeeds."""
     from backend.scraping.adaptive_scraper import AdaptiveScraper
 
-    scraper = AdaptiveScraper(gemini_api_key="test-key")
+    scraper = AdaptiveScraper()
 
     attempt = 0
 

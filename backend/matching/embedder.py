@@ -1,5 +1,5 @@
 # backend/matching/embedder.py
-"""Embedder — batch embedding of CV and job profiles via Gemini."""
+"""Embedder — batch embedding of CV and job profiles via the configured provider."""
 from __future__ import annotations
 
 import logging
@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 class Embedder:
     """Wraps an EmbeddingClient.embed() with profile-level batch operations."""
 
-    def __init__(self, gemini_client) -> None:  # accepts any EmbeddingClient
-        self._client = gemini_client
+    def __init__(self, embedding_client) -> None:  # any EmbeddingClient
+        self._client = embedding_client
 
     async def embed_cv_profile(self, profile: CVProfile) -> CVProfile:
         """Embed all skills in a CVProfile that don't already have embeddings."""

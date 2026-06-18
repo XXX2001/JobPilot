@@ -43,6 +43,9 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-p no:launch_testing -p no:launch_ros -p no:ament_flake8 -p no:ament_lint -p no:ament_copyright -p no:ament_pep257 -p no:ament_xmllint"
 norecursedirs = [".venv", "node_modules", "__pycache__", ".git", "frontend"]
+markers = [
+    "integration: real-network integration tests; auto-skip when the endpoint is unreachable",
+]
 
 [tool.coverage.run]
 source = ["backend"]

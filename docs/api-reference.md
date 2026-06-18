@@ -1,1911 +1,294 @@
-# API Reference
+# HTTP & WebSocket API
 
-## Base URL
+JobPilot's backend is a FastAPI app (`backend/main.py`) that mounts a set of `APIRouter` modules under `/api/*` plus a single `/ws` WebSocket; this reference enumerates every route module, the WebSocket protocol, dependency injection, and the health schema.
 
+## How the app is assembled
+
+The app object is built in `backend/main.py`. Routers are imported and mounted inside a `try/except` block (`backend/main.py:301-332`) so a missing module degrades gracefully instead of crashing startup:
+
+```python
+app.include_router(jobs.router)
+app.include_router(queue.router)
+app.include_router(today.router)
+# Export router first so /export is not shadowed by /{id} on applications router
+app.include_router(applications_export.router)
+app.include_router(applications.router)
+...
+app.include_router(ws.router)
 ```
-http://localhost:8000
-```
 
-All REST endpoints are prefixed with `/api`. The WebSocket endpoint is at `/ws`.
+Note the ordering comment at `backend/main.py:319`: `applications_export.router` (which owns `GET /api/applications/export`) is mounted **before** `applications.router`, so the literal `/export` path is not captured by the `/{application_id}` path parameter.
 
-## Authentication
+There is **no** `health.py` or `onboarding.py` module — the health probe is defined inline in `backend/main.py:335`, and onboarding/setup state is served by the settings router (`GET /api/settings/status`, `backend/api/settings.py:320`).
 
-There is no authentication. Every endpoint is completely open. JobPilot is designed as a local single-user tool and relies on network-level access control (binding to `127.0.0.1` by default) as its only security boundary. There are no API keys, sessions, JWTs, or OAuth flows on the backend.
+### Router modules
 
----
-
-## REST Endpoints
-
-### Jobs
-
-#### `GET /api/jobs`
-
-**Description:** List all scraped job postings, newest first. Each job is annotated with its latest `JobMatch.score` if one exists.
-
-**Auth required:** No
-
-**Query params:**
-
-| Parameter | Type | Default | Description |
+| Module | Prefix | Tag | File |
 |---|---|---|---|
-| `skip` | integer | 0 | Number of rows to skip (offset pagination) |
-| `limit` | integer | 50 | Max rows to return; range 1–200 |
-| `min_score` | float | none | If provided, jobs with a match score below this value (or no score at all) are excluded from the `jobs` array; the `total` count is not filtered |
+| jobs | `/api/jobs` | jobs | `backend/api/jobs.py:16` |
+| queue | `/api/queue` | queue | `backend/api/queue.py:17` |
+| today | `/api/today` | today | `backend/api/today.py:41` |
+| applications_export | `/api/applications` | applications | `backend/api/applications_export.py:25` |
+| applications | `/api/applications` | applications | `backend/api/applications.py:24` |
+| documents | `/api/documents` | documents | `backend/api/documents.py:24` |
+| settings | `/api/settings` | settings | `backend/api/settings.py:72` |
+| analytics | `/api/analytics` | analytics | `backend/api/analytics.py:17` |
+| gmail_auth | `/api/gmail` | gmail | `backend/api/gmail_auth.py:27` |
+| gmail | `/api/gmail` | gmail | `backend/api/gmail.py:12` |
+| correspondence | `/api/correspondence` | correspondence | `backend/api/correspondence.py:16` |
+| ws | _(none)_ | — | `backend/api/ws.py:39` |
 
-**Request body:** None
+Most routers set `redirect_slashes=False`, so trailing-slash variants are not auto-redirected.
 
-**Response `200`:**
+## Dependency injection
 
-```json
-{
-  "jobs": [
-    {
-      "id": 42,
-      "title": "Backend Engineer",
-      "company": "Acme Corp",
-      "location": "London, UK",
-      "salary_text": "£60k – £80k",
-      "salary_min": 60000,
-      "salary_max": 80000,
-      "description": "We are looking for a senior...",
-      "url": "https://linkedin.com/jobs/view/42",
-      "apply_url": "https://linkedin.com/jobs/apply/42",
-      "posted_at": "2026-03-01T00:00:00",
-      "scraped_at": "2026-03-11T08:05:00",
-      "score": 74.5
-    }
-  ],
-  "total": 210
-}
+DI is intentionally minimal. `backend/api/deps.py` exposes a **single** public symbol:
+
+```python
+DBSession = Annotated[AsyncSession, Depends(get_db)]
 ```
 
-`score` is `null` when no `JobMatch` row exists for the job.
+`get_db` (`backend/database.py:121`) yields an `AsyncSession` from the shared `AsyncSessionLocal` pool. Route handlers take `db: DBSession` to get a request-scoped session.
 
-**Error responses:**
+The older `get_session_manager` / `get_apply_engine` / `get_cv_pipeline` / `get_scraping_orchestrator` / `get_batch_runner` helpers were removed (see the note at `backend/api/deps.py:14-19`). Long-lived singletons are **not** injected via `Depends`; they are read directly off `request.app.state` inside each endpoint.
 
-| Status | Condition |
+### `app.state` singletons
+
+Wired during the lifespan startup (`backend/main.py:179-188`, `:259`):
+
+| Attribute | Purpose |
 |---|---|
-| 500 | Unhandled database or serialisation error |
+| `app.state.gemini` | LLM generation client |
+| `app.state.cv_pipeline` | CV tailoring pipeline |
+| `app.state.letter_pipeline` | Cover-letter pipeline |
+| `app.state.adzuna` | Adzuna API client |
+| `app.state.adaptive_scraper` | Adaptive scraping engine |
+| `app.state.session_manager` | Browser session manager |
+| `app.state.scraping_orchestrator` | Scraping orchestrator |
+| `app.state.matcher` | Job/profile matcher |
+| `app.state.apply_engine` | Auto-apply engine |
+| `app.state.batch_runner` | Batch run-loop (holds `running` + `last_status`) |
+| `app.state.gmail_token_manager` | Gmail OAuth token manager |
+
+Endpoints reach these via `request: Request` + `getattr(request.app.state, "...", None)`, returning `503` when a singleton is missing (e.g. `backend/api/gmail.py:57`).
 
 ---
 
-#### `GET /api/jobs/{job_id}`
+## Jobs — `/api/jobs`
 
-**Description:** Retrieve a single job by its database ID, including its latest match score.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `job_id` | integer | Database ID of the job |
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:** Same shape as a single entry in `GET /api/jobs`.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No job with the given ID |
-
----
-
-#### `POST /api/jobs/search`
-
-**Description:** Trigger a live search against the Adzuna API. New results are deduplicated against the database and stored. Returns the count of newly stored jobs and a summary list of all returned jobs (including existing duplicates).
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{
-  "keywords": ["python", "fastapi"],
-  "location": "London",
-  "country": "gb",
-  "max_results": 20
-}
-```
-
-| Field | Type | Required | Description |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `keywords` | array of strings | Yes | Search terms joined into the Adzuna query string |
-| `location` | string | No | City or region string passed to Adzuna `where` parameter |
-| `country` | string | No (default `"gb"`) | ISO 2-letter country code for the Adzuna country endpoint |
-| `max_results` | integer | No (default `20`) | Maximum results requested from Adzuna; Adzuna caps at 50 per page |
+| GET | `/api/jobs` | `JobListOut` | List/paginate scraped jobs |
+| GET | `/api/jobs/{job_id}` | `JobOut` | Fetch a single job |
+| POST | `/api/jobs/search` | `SearchResponse` | Trigger a scrape/search run (`search_jobs`, `backend/api/jobs.py:163`) |
+| GET | `/api/jobs/{job_id}/score` | `JobScoreOut` | Fit/ATS score for a job |
 
-**Response `200`:**
+## Queue — `/api/queue`
 
-```json
-{
-  "stored": 12,
-  "jobs": [
-    {"title": "Backend Engineer", "company": "Acme Corp"},
-    {"title": "Python Developer", "company": "StartupXYZ"}
-  ]
-}
-```
+The queue holds tailored `Match` candidates awaiting review/apply.
 
-`stored` is the count of newly inserted rows (duplicates are skipped). `jobs` contains all jobs returned by Adzuna regardless of whether they were new.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 502 | Adzuna API returned a non-200 response |
-
----
-
-#### `GET /api/jobs/{job_id}/score`
-
-**Description:** Return only the latest match score and keyword hits for a job, without fetching the full job record.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `job_id` | integer | Database ID of the job |
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{"job_id": 42, "score": 74.5, "keyword_hits": ["python", "fastapi"]}
-```
-
-When no `JobMatch` row exists:
-
-```json
-{"job_id": 42, "score": null}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No job with the given ID |
-
----
-
-### Queue
-
-#### `GET /api/queue`
-
-**Description:** Return all pending job matches with `status="new"`, ordered by `batch_date` descending then `score` descending. Each match includes the full embedded job record.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "matches": [
-    {
-      "id": 7,
-      "job_id": 42,
-      "score": 81.0,
-      "status": "new",
-      "batch_date": "2026-03-11",
-      "matched_at": "2026-03-11T08:05:00",
-      "job": {
-        "id": 42,
-        "title": "Backend Engineer",
-        "company": "Acme Corp",
-        "location": "London, UK",
-        "country": "gb",
-        "salary_min": 60000,
-        "salary_max": 80000,
-        "description": "We are looking for...",
-        "url": "https://linkedin.com/jobs/view/42",
-        "apply_url": "https://linkedin.com/jobs/apply/42",
-        "apply_method": "easy_apply",
-        "posted_at": "2026-03-01T00:00:00"
-      }
-    }
-  ],
-  "total": 5
-}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 500 | Database error |
-
----
-
-#### `POST /api/queue/refresh`
-
-**Description:** Manually trigger a morning batch run (scrape + match + store + pre-generate CVs + broadcast). The batch is launched as a background `asyncio.create_task()` and the endpoint returns immediately. Progress is delivered over WebSocket.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None (empty body or omit)
-
-**Response `200`:**
-
-```json
-{"status": "started", "message": "Morning batch triggered in background"}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 503 | `morning_scheduler` singleton is not on `app.state` (failed to initialise at startup) |
-
----
-
-#### `GET /api/queue/{match_id}`
-
-**Description:** Fetch a single queue match by its `JobMatch` ID with the embedded job record.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `match_id` | integer | Database ID of the `JobMatch` row |
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:** Same shape as a single entry in `GET /api/queue`.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No match with the given ID |
-
----
-
-#### `PATCH /api/queue/{match_id}/skip`
-
-**Description:** Mark a queue match as `"skipped"`, removing it from the default queue view.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `match_id` | integer | `JobMatch` ID |
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{"match_id": 7, "status": "skipped"}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No match with the given ID |
-
----
-
-#### `PATCH /api/queue/{match_id}/status`
-
-**Description:** Set the status of a queue match to any allowed value.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `match_id` | integer | `JobMatch` ID |
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{"status": "applying"}
-```
-
-| Field | Type | Required | Allowed values |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `status` | string | Yes | `"new"`, `"skipped"`, `"applying"`, `"applied"`, `"rejected"` |
+| GET | `/api/queue` | `QueueOut` | List queued matches |
+| GET | `/api/queue/status` | `BatchStatusOut` | Current batch-run status |
+| GET | `/api/queue/source-health` | _(dict)_ | Per-source scraper health (see `SourceHealthTracker`) |
+| POST | `/api/queue/refresh` | `RefreshResponse \| PreviewResponse` | Refresh queue; preview vs. commit |
+| GET | `/api/queue/{match_id}` | `QueueMatchOut` | One match |
+| PATCH | `/api/queue/{match_id}/skip` | `MatchStatusUpdateOut` | Skip a match |
+| PATCH | `/api/queue/{match_id}/status` | `MatchStatusUpdateOut` | Update match status |
+| POST | `/api/queue/{match_id}/enrich-description` | `EnrichmentResponse` | Fetch/enrich full job description |
 
-**Response `200`:**
+## Today — `/api/today`
 
-```json
-{"match_id": 7, "status": "applying"}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No match with the given ID |
-| 422 | `status` is not one of the allowed values |
-
----
-
-### Applications
-
-#### `POST /api/applications`
-
-**Description:** Create a new application record manually (without triggering automation).
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{
-  "job_match_id": 17,
-  "method": "manual",
-  "status": "pending",
-  "notes": "Applied via company portal"
-}
-```
-
-| Field | Type | Required | Description |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `job_match_id` | integer | No | ID of the associated `JobMatch` row |
-| `method` | string | No (default `"manual"`) | `"auto"`, `"assisted"`, or `"manual"` |
-| `status` | string | No (default `"pending"`) | `"pending"`, `"applied"`, `"cancelled"`, `"failed"`, `"interview"`, `"offer"`, or `"rejected"` |
-| `notes` | string | No | Freeform notes |
+| GET | `/api/today` | `TodayOut` | Dashboard "today" summary |
 
-**Response `201`:**
+## Applications — `/api/applications`
 
-```json
-{
-  "id": 1,
-  "job_match_id": 17,
-  "method": "manual",
-  "status": "pending",
-  "applied_at": null,
-  "notes": "Applied via company portal",
-  "error_log": null,
-  "created_at": "2026-03-11T10:00:00",
-  "events": [],
-  "job_title": "Backend Engineer",
-  "company": "Acme Corp",
-  "location": "London, UK",
-  "url": "https://linkedin.com/jobs/view/42"
-}
-```
+Split across two routers (`applications_export.py` mounted first).
 
-The `job_title`, `company`, `location`, and `url` fields are denormalized from the linked `Job` via `JobMatch`. They are `null` if no `job_match_id` is provided or the join fails.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 422 | Invalid `method` or `status` value |
-
----
-
-#### `GET /api/applications`
-
-**Description:** List applications with optional status filter and pagination. Each application includes all its lifecycle events and denormalized job fields.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:**
-
-| Parameter | Type | Default | Description |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `skip` | integer | 0 | Offset for pagination (min 0) |
-| `limit` | integer | 50 | Max rows to return; range 1–200 |
-| `status` | string | none | Filter to a specific status value. One of: `pending`, `applied`, `cancelled`, `failed`, `interview`, `offer`, `rejected` |
-| `needs_follow_up` | boolean | none | If `true`, return only applications that need a follow-up — i.e. applications with a `follow_up_due` event that do not yet have a subsequent `follow_up` event (NOT EXISTS anti-join). Use to populate the "Needs follow-up" tracker tab. |
+| GET | `/api/applications/export` | `StreamingResponse` (CSV) | Stream all applications as CSV download; `?format=csv` required, else `400` (`backend/api/applications_export.py:65`) |
+| POST | `/api/applications` | `ApplicationOut` (201) | Create an application record |
+| GET | `/api/applications` | `ApplicationListOut` | List applications |
+| GET | `/api/applications/limit-status` | `LimitStatusOut` | Daily apply-limit status |
+| GET | `/api/applications/{application_id}` | `ApplicationOut` | One application |
+| PATCH | `/api/applications/{application_id}` | `ApplicationOut` | Update an application |
+| POST | `/api/applications/{application_id}/events` | `ApplicationEventOut` (201) | Append a status/event to the timeline |
+| GET | `/api/applications/{job_id}/review-state` | _(dict)_ | Review state for a job |
+| POST | `/api/applications/{match_id}/apply` | `ApplicationResult` | Run the auto-apply engine for a match |
 
-**Request body:** None
+## Documents — `/api/documents`
 
-**Response `200`:**
+Generated CVs, cover letters, and template validation. PDF routes return `FileResponse`; LaTeX failures surface as `422` via the global handler (see below).
 
-```json
-{
-  "applications": [
-    {
-      "id": 1,
-      "job_match_id": 17,
-      "method": "auto",
-      "status": "applied",
-      "applied_at": "2026-03-11T08:12:00",
-      "notes": null,
-      "error_log": null,
-      "created_at": "2026-03-11T08:10:00",
-      "events": [
-        {
-          "id": 1,
-          "application_id": 1,
-          "event_type": "applied",
-          "details": "Submitted via AutoApplyStrategy Tier 1",
-          "event_date": "2026-03-11T08:12:00"
-        }
-      ],
-      "job_title": "Backend Engineer",
-      "company": "Acme Corp",
-      "location": "London, UK",
-      "url": "https://linkedin.com/jobs/view/42"
-    }
-  ],
-  "total": 42
-}
-```
-
-Events are batch-fetched to avoid N+1 queries.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 500 | Database error |
-
----
-
-#### `GET /api/applications/limit-status`
-
-**Description:** Return today's application count, the configured daily limit, and the UTC reset time. Reads the same `COUNTABLE_STATUSES` counter as `DailyLimitGuard`, so the result is always consistent with `POST /api/applications/{match_id}/apply` rejections.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "used": 7,
-  "limit": 10,
-  "resets_at": "2026-05-24T00:00:00+00:00"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `used` | integer | Number of applications counted today (statuses in `COUNTABLE_STATUSES`: `applied`, `pending`) |
-| `limit` | integer | `SearchSettings.daily_limit` (defaults to `DAILY_LIMIT` constant if no settings row exists) |
-| `resets_at` | string (ISO 8601) | Start of next UTC day — when the counter resets to 0 |
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 500 | Database error |
-
----
-
-#### `GET /api/applications/export`
-
-**Description:** Stream all applications as a downloadable CSV file. The response is a `StreamingResponse` — rows are emitted as they are serialised, suitable for large datasets.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:**
-
-| Parameter | Type | Required | Description |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `format` | string | Yes | Export format. Only `csv` is supported; any other value returns 400. |
+| GET | `/api/documents` | `list[DocumentOut]` | List generated documents |
+| POST | `/api/documents/validate-template` | `ValidateTemplateResponse` | Validate a LaTeX template |
+| POST | `/api/documents/compile-test` | `CompileTestResponse` | Test-compile a template |
+| GET | `/api/documents/{match_id}/cv/pdf` | `FileResponse` | Download tailored CV PDF |
+| GET | `/api/documents/{match_id}/letter/pdf` | `FileResponse` | Download cover-letter PDF |
+| GET | `/api/documents/{match_id}/diff` | `CVDiffResponse` | Diff of tailored vs. base CV |
+| POST | `/api/documents/{match_id}/regenerate` | `RegenerateResponse` | Re-tailor the CV |
+| POST | `/api/documents/{match_id}/letter/regenerate` | `LetterRegenerateResponse` | Regenerate the cover letter |
 
-**Request body:** None
+## Settings — `/api/settings`
 
-**Response `200`:** CSV stream with headers:
-- `Content-Type: text/csv; charset=utf-8`
-- `Content-Disposition: attachment; filename="jobpilot-applications-YYYYMMDD.csv"` (UTC date)
+Profile, search config, sources, credentials, custom sites, and the onboarding/setup status probe.
 
-The CSV contains a header row followed by one row per application, in 13 columns (in this order): `applied_at`, `status`, `method`, `company`, `title`, `location`, `salary_text`, `job_url`, `score`, `ats_score`, `last_event_type`, `last_event_at`, `last_event_details`. Datetime fields use ISO 8601 with `+00:00` suffix; missing values are empty strings.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 400 | `format` is not `csv` |
-
----
-
-#### `GET /api/applications/{application_id}`
-
-**Description:** Get a single application by its database ID, including all lifecycle events.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `application_id` | integer | Database ID of the `Application` row |
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:** Same shape as a single entry in `GET /api/applications`.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No application with the given ID |
-
----
-
-#### `PATCH /api/applications/{application_id}`
-
-**Description:** Update an application's mutable fields. All fields are optional; only provided fields are updated.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `application_id` | integer | Database ID of the application |
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{
-  "status": "interview",
-  "notes": "Phone screen scheduled for Friday",
-  "applied_at": "2026-03-11T10:00:00",
-  "error_log": null
-}
-```
-
-| Field | Type | Required | Description |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `status` | string | No | New status value |
-| `notes` | string | No | Freeform notes |
-| `applied_at` | datetime (ISO 8601) | No | Override the applied timestamp |
-| `error_log` | string | No | Error details; pass `null` to clear |
+| GET | `/api/settings/profile` | `ProfileOut` | Read user profile |
+| PUT | `/api/settings/profile` | `ProfileOut` | Update profile |
+| GET | `/api/settings/search` | `SearchSettingsOut` | Read search settings |
+| PUT | `/api/settings/search` | `SearchSettingsOut` | Update search settings |
+| GET | `/api/settings/sources` | `SourcesOut` | Read enabled job sources |
+| PUT | `/api/settings/sources` | `SourcesUpdateResponse` | Update sources |
+| GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness |
+| POST | `/api/settings/profile/cv-upload` | `CvUploadResponse` | Upload base CV (multipart `UploadFile`) |
+| GET | `/api/settings/sites` | `list[SiteOut]` | List configured sites |
+| PUT | `/api/settings/sites/{site_name}` | `SiteToggleResponse` | Enable/disable a site |
+| GET | `/api/settings/credentials` | `list[CredentialOut]` | List site credentials (email masked) |
+| PUT | `/api/settings/credentials/{site_name}` | `CredentialSaveResponse` | Save site credentials |
+| DELETE | `/api/settings/credentials/{site_name}/session` | `SessionClearResponse` | Clear a saved browser session |
+| GET | `/api/settings/custom-sites` | `list[CustomSiteOut]` | List custom (lab-website) sources |
+| POST | `/api/settings/custom-sites` | `CustomSiteOut` | Add a custom source |
+| DELETE | `/api/settings/custom-sites/{site_id}` | `CustomSiteDeleteResponse` | Delete a custom source |
 
-**Response `200`:** Full `ApplicationOut` with updated fields.
+## Analytics — `/api/analytics`
 
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No application with the given ID |
-
----
-
-#### `POST /api/applications/{application_id}/events`
-
-**Description:** Append a lifecycle event to an existing application. Events are append-only; they cannot be edited or deleted.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `application_id` | integer | Database ID of the application |
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{
-  "event_type": "interview",
-  "details": "Technical interview scheduled for 2026-03-15 at 14:00"
-}
-```
-
-| Field | Type | Required | Allowed values for `event_type` |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `event_type` | string | Yes | `"pending"`, `"applied"`, `"cancelled"`, `"failed"`, `"interview"`, `"offer"`, `"rejected"`, `"viewed"`, `"follow_up"` |
-| `details` | string | No | Human-readable description of the event |
+| GET | `/api/analytics/summary` | `AnalyticsSummary` | Aggregate counts/metrics |
+| GET | `/api/analytics/trends` | `AnalyticsTrends` | Time-series trends (`DailyTrend` rows) |
 
-**Response `201`:**
+## Gmail OAuth — `/api/gmail` (`gmail_auth.py`)
 
-```json
-{
-  "id": 5,
-  "application_id": 1,
-  "event_type": "interview",
-  "details": "Technical interview scheduled for 2026-03-15 at 14:00",
-  "event_date": "2026-03-11T14:00:00"
-}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No application with the given ID |
-| 422 | `event_type` is not an allowed value |
-
----
-
-#### `POST /api/applications/{match_id}/apply`
-
-**Description:** Trigger automated or assisted application for a job match. The API layer resolves the tailored CV and cover letter PDF paths from the `TailoredDocument` table, resolves the `apply_url` from the `Job` record if not supplied, and delegates to `ApplicationEngine.apply()`. For `auto` and `assisted` modes, the result is delivered interactively via WebSocket while this HTTP request is in progress.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
+| Method | Path | Purpose |
 |---|---|---|
-| `match_id` | integer | `JobMatch` ID (not `Application` ID) |
+| GET | `/api/gmail/oauth/start` | Begin OAuth flow (redirect to Google) |
+| GET | `/api/gmail/oauth/callback` | OAuth redirect handler; exchanges code, stores token |
+| POST | `/api/gmail/disconnect` | Revoke/forget the connected account |
 
-**Query params:** None
+## Gmail sync — `/api/gmail` (`gmail.py`)
 
-**Request body:**
-
-```json
-{
-  "method": "auto",
-  "apply_url": "https://jobs.example.com/apply/123",
-  "full_name": "Jane Smith",
-  "email": "jane@example.com",
-  "phone": "+447700900000",
-  "location": "London, UK",
-  "additional_answers_json": "{\"years_experience\": \"5\", \"notice_period\": \"1 month\"}"
-}
-```
-
-| Field | Type | Required | Description |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `method` | string | Yes | `"auto"`, `"assisted"`, or `"manual"` |
-| `apply_url` | string | No | Direct application URL. If omitted, resolved from `Job.apply_url` falling back to `Job.url`. Must be `http` or `https`, max 2048 characters. |
-| `full_name` | string | No | Applicant's full name for form filling |
-| `email` | string | No | Applicant's email for form filling |
-| `phone` | string | No | Applicant's phone number for form filling |
-| `location` | string | No | Applicant's location for form filling |
-| `additional_answers_json` | string | No | JSON-serialised dict of custom question/answer pairs. Max 5000 characters. Truncated silently if longer. |
+| GET | `/api/gmail/status` | `GmailStatusOut` | Connection state, account, last sync, message count |
+| POST | `/api/gmail/sync` | `SyncOut` | Force a sync pass (uses `app.state.gmail_token_manager`; `404` if no account, `503` if integration uninitialised) |
 
-**Response `200`:**
+## Correspondence — `/api/correspondence`
 
-```json
-{
-  "status": "applied",
-  "method": "auto",
-  "message": "Application submitted successfully via Tier 1 form filler"
-}
-```
+Links inbound Gmail threads to applications.
 
-The response structure is the `ApplicationResult` dict returned by the engine. `status` is one of `"applied"`, `"assisted"`, `"manual"`, or `"cancelled"`.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 422 | `method` is not one of the allowed values, or `apply_url` is not a valid HTTP/HTTPS URL |
-| 503 | `ApplicationEngine` singleton is not available (startup failure) |
-
----
-
-### Documents
-
-#### `GET /api/documents`
-
-**Description:** List all tailored document records in the database, newest first.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-[
-  {
-    "id": 3,
-    "job_match_id": 17,
-    "doc_type": "cv",
-    "tex_path": "/home/user/data/cvs/17/cv.tex",
-    "pdf_path": "/home/user/data/cvs/17/cv.pdf",
-    "diff_json": [
-      {
-        "section": "Experience",
-        "original_text": "Developed internal tooling",
-        "edited_text": "Developed and deployed internal tooling using Python and FastAPI",
-        "change_description": "Aligned with job requirement for FastAPI experience"
-      }
-    ],
-    "created_at": "2026-03-11T08:00:00"
-  }
-]
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 500 | Database error |
-
----
-
-#### `POST /api/documents/validate-template`
-
-**Description:** Check whether a LaTeX string contains properly balanced JOBPILOT section marker pairs. Returns whether markers are present and a list of any imbalance warnings.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{"tex_content": "\\documentclass{article}\n% --- JOBPILOT:SUMMARY:START ---\nMy summary.\n% --- JOBPILOT:SUMMARY:END ---\n\\begin{document}\\end{document}"}
-```
-
-| Field | Type | Required | Description |
+| Method | Path | Response model | Purpose |
 |---|---|---|---|
-| `tex_content` | string | Yes | Full LaTeX source to validate |
-
-**Response `200`:**
-
-```json
-{
-  "has_markers": true,
-  "warnings": []
-}
-```
-
-If markers are imbalanced:
-
-```json
-{
-  "has_markers": true,
-  "warnings": ["Marker 'EXPERIENCE' has START but no END"]
-}
-```
-
-An empty `warnings` list means all markers are balanced. `has_markers` is `false` when no JOBPILOT markers are found at all (the template will still compile but LLM-guided section editing will not work).
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 422 | LaTeX compilation error (surface as `latex_compile_error` code) |
+| GET | `/api/correspondence/unlinked` | `UnlinkedListOut` | Messages not yet linked to an application |
+| GET | `/api/correspondence/{application_id}` | `CorrespondenceThreadOut` | Thread for one application |
+| POST | `/api/correspondence/link` | `CorrespondenceLinkOut` (201) | Link a message/thread to an application |
+| DELETE | `/api/correspondence/{link_id}` | _(204, no body)_ | Remove a link |
 
 ---
 
-#### `GET /api/documents/{match_id}/cv/pdf`
+## Health — `GET /api/health`
 
-**Description:** Stream the compiled tailored CV PDF for a job match as a binary file download.
+Defined inline at `backend/main.py:335`. It actively pings the DB (`SELECT 1` through `AsyncSessionLocal`), checks for a `tectonic` binary, and checks whether `GOOGLE_API_KEY` is configured. On DB failure it returns **HTTP 503** with `status="degraded"` so k8s/Docker probes can react; exception text is never leaked — only a short `db_error_code` is surfaced and the traceback is logged.
 
-**Auth required:** No
+`HealthOut` schema (`backend/main.py:30`):
 
-**Path params:**
-
-| Parameter | Type | Description |
+| Field | Type | Notes |
 |---|---|---|
-| `match_id` | integer | `JobMatch` ID |
+| `status` | `"ok" \| "degraded"` | `degraded` only when the DB ping fails |
+| `version` | `str` | currently `"0.1.0"` |
+| `timestamp` | `datetime` | UTC |
+| `db` | `"ok" \| "error"` | DB ping result |
+| `tectonic` | `bool` | LaTeX engine present |
+| `gemini_key_set` | `bool` | `GOOGLE_API_KEY` configured |
+| `tectonic_hint` | `str \| null` | install hint when tectonic missing |
+| `db_error_code` | `str \| null` | e.g. `"db_unreachable"` |
 
-**Query params:** None
+`tectonic` and `gemini_key_set` are advisory only — their absence does **not** flip overall status.
 
-**Request body:** None
+## Global error handlers
 
-**Response `200`:** Binary PDF stream with headers:
-- `Content-Type: application/pdf`
-- `Content-Disposition: inline; filename="cv_match_{match_id}.pdf"`
+Registered in `backend/main.py:400-464`. They normalize internal exceptions into JSON `{"error", "code"}` bodies:
 
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No `TailoredDocument` with `doc_type="cv"` for this match, no `pdf_path` on the record, or the PDF file does not exist on disk |
-
----
-
-#### `GET /api/documents/{match_id}/letter/pdf`
-
-**Description:** Stream the compiled tailored cover letter PDF for a job match.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
+| Exception | Status | `code` |
 |---|---|---|
-| `match_id` | integer | `JobMatch` ID |
+| `LaTeXCompilationError` | 422 | `latex_compile_error` |
+| `GeminiJSONError` (LLM JSON validation) | 500 | `gemini_json_error` |
+| `GeminiRateLimitError` | 429 | `rate_limit` |
+| any unhandled `Exception` | 500 | `internal_error` |
 
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:** Binary PDF stream with headers:
-- `Content-Type: application/pdf`
-- `Content-Disposition: inline; filename="letter_match_{match_id}.pdf"`
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No `TailoredDocument` with `doc_type="letter"` for this match, no `pdf_path`, or file missing from disk |
+The Gemini exception aliases now map to provider-neutral `LLM*` exceptions (`backend/llm/base.py`), so the handlers cover any LLM provider. Non-API paths fall through to the SPA fallback (`SPAStaticFiles`, `backend/main.py:468`) which serves `index.html`.
 
 ---
 
-#### `GET /api/documents/{match_id}/diff`
+## WebSocket — `/ws`
 
-**Description:** Return the JSON diff of CV customisations made for a job match, showing what text was changed and in which section.
+Endpoint `websocket_endpoint` (`backend/api/ws.py:105`) plus the `ConnectionManager` (`backend/api/ws.py:43`) implement a JSON push channel for live batch-run narration. Message schemas live in `backend/api/ws_models.py`.
 
-**Auth required:** No
+### Connection lifecycle
 
-**Path params:**
+1. Client connects to `/ws`; `manager.connect()` assigns a `client_id`.
+2. **Resume replay**: if `app.state.batch_runner` is `running` and has a `last_status`, the server immediately sends it so reconnecting clients catch up (`backend/api/ws.py:113-119`).
+3. Server loops on `receive_text()`; each frame is JSON-decoded and dispatched by its `type` field.
+4. On `WebSocketDisconnect` the loop breaks and `manager.disconnect(client_id)` runs in `finally`.
 
-| Parameter | Type | Description |
+### Dispatch & encoding
+
+`ConnectionManager` (`backend/api/ws.py:43`) holds the connection set and a `_message_handlers: Dict[str, handler]` registry populated via `register_handler(msg_type, handler)`. Outgoing messages are serialized by the static `_encode()` and pushed to all peers via `broadcast()`. Module-level helpers wrap broadcasts: `broadcast_status`, `broadcast_job_assessment`, `broadcast_gmail_sync_status`, `broadcast_gmail_message_received` (`backend/api/ws.py:149+`).
+
+`type` is the discriminator on every message. Unknown inbound types are logged and ignored; `{"type":"ping"}` is answered with `Pong` directly in the loop (`backend/api/ws.py:134`).
+
+### Server → client messages (`WSMessage`, `ws_models.py:154`)
+
+Discriminated union (Pydantic `Field(discriminator="type")`):
+
+| Class | `type` wire value | Key fields |
 |---|---|---|
-| `match_id` | integer | `JobMatch` ID |
+| `Status` | `status` | `message`, `progress` |
+| `JobAssessment` | `job_progress` (legacy discriminator kept) | `match_id`, `ats_score`, `gap_severity`, `decision`, `covered: list[str]`, `gaps: list[SkillGap]` |
+| `ScrapingStatus` | `scraping_status` | `message`, `source`, `progress` |
+| `MatchingStatus` | `matching_status` | `count` |
+| `TailoringStatus` | `tailoring_status` | `job_id`, `progress` |
+| `ApplyReview` | `apply_review` | `job_id`, `filled_fields: dict[str,str]`, `screenshot_base64?` |
+| `ApplyResult` | `apply_result` | `job_id`, `status`, `method` |
+| `LoginRequired` | `login_required` | `site`, `browser_window_title` |
+| `LoginConfirmed` | `login_confirmed` | `site` |
+| `CaptchaDetected` | `captcha_detected` | `site`, `job_id?`, `message` |
+| `CaptchaResolved` | `captcha_resolved` | `job_id?` |
+| `GmailSyncStatus` | `gmail_sync_status` | `last_history_id?`, `messages_synced`, `progress` |
+| `GmailMessageReceived` | `gmail_message_received` | `gmail_message_id`, `from_address`, `subject?`, `category?`, `category_confidence?`, `linked_application_id?`, `link_confidence?` |
+| `Pong` | `pong` | _(reply to `ping`)_ |
+| `ErrorMessage` | `error` | `message`, `code` |
 
-**Query params:** None
+`SkillGap` (`ws_models.py:36`) is a nested payload inside `JobAssessment`: `{ skill: str, criticality: float }` — `criticality` is a float weight on the wire.
 
-**Request body:** None
+### Client → server messages (`ClientMessage`, `ws_models.py:208`)
 
-**Response `200`:**
-
-```json
-{
-  "match_id": 17,
-  "diff": [
-    {
-      "section": "Experience",
-      "original_text": "Developed internal tooling",
-      "edited_text": "Developed and deployed internal tooling using Python and FastAPI",
-      "change_description": "Aligned with job requirement for FastAPI experience"
-    }
-  ],
-  "generated_at": "2026-03-11T08:00:00"
-}
-```
-
-`diff` is an empty array if `TailoredDocument.diff_json` is `null`.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No `TailoredDocument` with `doc_type="cv"` for this match |
-
----
-
-#### `POST /api/documents/{match_id}/regenerate`
-
-**Description:** Queue re-generation of tailored documents for a job match. If `force=true`, existing `TailoredDocument` rows for this match are deleted first. **Note:** The actual pipeline invocation is not yet implemented; this endpoint returns `"status": "queued"` but does not trigger CV generation.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
+| Class | `type` | Key fields |
 |---|---|---|
-| `match_id` | integer | `JobMatch` ID |
+| `ConfirmSubmit` | `confirm_submit` | `job_id` |
+| `CancelApply` | `cancel_apply` | `job_id` |
+| `PatchFields` | `patch_fields` | `job_id`, `fields: dict[str,str]` (selector → corrected value, sent before `confirm_submit`) |
+| `LoginDone` | `login_done` | `site` |
+| `LoginCancel` | `login_cancel` | `site` |
 
-**Query params:** None
+Plus the bare `{"type":"ping"}` handled inline. Inbound types other than `ping` must have a handler registered via `register_handler`, or they are logged as unknown.
 
-**Request body:**
-
-```json
-{"force": false}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `force` | boolean | No (default `false`) | If `true`, delete existing `TailoredDocument` rows for this match before queuing |
-
-**Response `200`:**
-
-```json
-{
-  "match_id": 17,
-  "status": "queued",
-  "message": "Document regeneration has been queued"
-}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No `JobMatch` with the given ID |
+> Compatibility note: `ws_models.py` defines a fallback `BaseModel`/`Field`/`confloat` shim (`ws_models.py:7-25`) so the module imports even if Pydantic is unavailable.
 
 ---
 
-### Analytics
-
-#### `GET /api/analytics/summary`
-
-**Description:** Return high-level application statistics derived from the `Application` table and `JobMatch` table.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "total_apps": 42,
-  "apps_this_week": 7,
-  "response_rate": 14.3,
-  "avg_match_score": 61.5
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `total_apps` | integer | Total `Application` rows |
-| `apps_this_week` | integer | `Application` rows with `created_at` in the last 7 days |
-| `response_rate` | float | Percentage of applications with `status IN ("interview", "offer", "rejected")` |
-| `avg_match_score` | float or null | Average `JobMatch.score` across all matches; `null` if the table is empty or the query fails silently |
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 500 | Database error |
-
----
-
-#### `GET /api/analytics/trends`
-
-**Description:** Return daily application counts for the last N days, zero-filled for days with no applications.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:**
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `days` | integer | 30 | Number of days to include; range 1–365 |
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "days": 30,
-  "trends": [
-    {"date": "2026-02-10", "count": 3},
-    {"date": "2026-02-11", "count": 0},
-    {"date": "2026-02-12", "count": 1}
-  ]
-}
-```
-
-Dates are in `YYYY-MM-DD` format. The array always has exactly `days` entries, ordered from oldest to newest.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 422 | `days` is outside the range 1–365 |
-
----
-
-### Settings
-
-#### `GET /api/settings/profile`
-
-**Description:** Retrieve the singleton user profile (row with `id=1`). Returns a zeroed-out profile with `id=0` rather than a 404 if no profile has been created yet. Check `id == 0` to detect the unset state.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "id": 1,
-  "full_name": "Jane Smith",
-  "email": "jane@example.com",
-  "phone": "+447700900000",
-  "location": "London, UK",
-  "base_cv_path": "/data/templates/cv.tex",
-  "base_letter_path": "/data/templates/letter.tex",
-  "additional_info": {"linkedin": "https://linkedin.com/in/jane"},
-  "created_at": "2026-03-01T00:00:00",
-  "updated_at": "2026-03-11T10:00:00"
-}
-```
-
----
-
-#### `PUT /api/settings/profile`
-
-**Description:** Create or update (upsert) the singleton user profile. All fields are optional; missing fields are left unchanged on update.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{
-  "full_name": "Jane Smith",
-  "email": "jane@example.com",
-  "phone": "+447700900000",
-  "location": "London, UK",
-  "base_cv_path": "/data/templates/cv.tex",
-  "base_letter_path": "/data/templates/letter.tex",
-  "additional_info": {"linkedin": "https://linkedin.com/in/jane"}
-}
-```
-
-All fields are optional strings (or dict for `additional_info`).
-
-**Response `200`:** Same shape as `GET /api/settings/profile`.
-
----
-
-#### `POST /api/settings/profile/cv-upload`
-
-**Description:** Upload a LaTeX CV template file, replacing any previously uploaded base CV. The file is saved atomically (write to a temp file, then rename) and `UserProfile.base_cv_path` is updated with a relative path.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** `multipart/form-data` with a single file field named `file`.
-
-| Constraint | Value |
-|---|---|
-| Allowed extensions | `.tex` only |
-| Maximum file size | 2 MB |
-
-**Response `200`:**
-
-```json
-{
-  "base_cv_path": "templates/cv.tex"
-}
-```
-
-`base_cv_path` is the relative path (relative to `{data_dir}`) where the file was stored. Pass this value to `PUT /api/settings/profile` as `base_cv_path` if you need to persist it to the profile row.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 400 | Path-traversal attempt detected (filename contains `..` or an absolute path) |
-| 413 | File exceeds the 2 MB size limit |
-| 415 | File extension is not `.tex` |
-
----
-
-#### `GET /api/settings/search`
-
-**Description:** Retrieve the singleton search and matching settings (row with `id=1`).
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "id": 1,
-  "keywords": {"include": ["python", "fastapi"]},
-  "excluded_keywords": {"exclude": ["senior manager"]},
-  "locations": {"cities": ["London"]},
-  "salary_min": 50000,
-  "experience_min": 2,
-  "experience_max": 8,
-  "remote_only": false,
-  "job_types": {"types": ["full-time"]},
-  "languages": {"langs": ["English"]},
-  "excluded_companies": {"names": []},
-  "daily_limit": 10,
-  "batch_time": "08:00",
-  "min_match_score": 40.0,
-  "countries": {"codes": ["gb"]}
-}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No `SearchSettings` row has been created yet |
-
----
-
-#### `PUT /api/settings/search`
-
-**Description:** Create or update (upsert) the singleton search settings. All fields are optional.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** All fields from `GET /api/settings/search` response except `id`, all optional.
-
-Defaults applied on first creation if omitted: `keywords={"include": []}`, `remote_only=false`, `daily_limit=10`, `batch_time="08:00"`, `min_match_score=30.0`.
-
-**Response `200`:** Same shape as `GET /api/settings/search`.
-
----
-
-#### `GET /api/settings/sources`
-
-**Description:** Return which external API sources are configured. Key values are never returned in full; only masked hints are shown.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "adzuna": {
-    "configured": true,
-    "app_id_hint": "a1b2****"
-  },
-  "gemini": {
-    "configured": true
-  }
-}
-```
-
-A source is considered unconfigured if its env var value is `null`, `""`, or `"placeholder"`.
-
----
-
-#### `PUT /api/settings/sources`
-
-**Description:** Placeholder route. API keys must be set in the `.env` file; they cannot be updated at runtime via the API. This endpoint accepts the request body but ignores it entirely, returning guidance text.
-
-**Auth required:** No
-
-**Request body:** All fields optional and ignored:
-
-```json
-{
-  "adzuna_app_id": "...",
-  "adzuna_app_key": "...",
-  "google_api_key": "..."
-}
-```
-
-**Response `200`:**
-
-```json
-{
-  "message": "API keys must be set in the .env file at the project root. Edit ADZUNA_APP_ID, ADZUNA_APP_KEY, and GOOGLE_API_KEY then restart the server.",
-  "env_file": ".env"
-}
-```
-
----
-
-#### `GET /api/settings/status`
-
-**Description:** Return setup completeness flags used by the frontend onboarding flow.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{
-  "gemini_key_set": true,
-  "adzuna_key_set": true,
-  "tectonic_found": true,
-  "base_cv_uploaded": true,
-  "setup_complete": true
-}
-```
-
-| Field | Logic |
-|---|---|
-| `gemini_key_set` | `GOOGLE_API_KEY` env var is set and not `""` or `"placeholder"` |
-| `adzuna_key_set` | Both `ADZUNA_APP_ID` and `ADZUNA_APP_KEY` are set and not `""` or `"placeholder"` |
-| `tectonic_found` | `bin/tectonic` exists relative to CWD, or `tectonic` is on `PATH` |
-| `base_cv_uploaded` | `UserProfile.base_cv_path` points to an existing file, or any `*.tex` file exists in `{data_dir}/templates/` |
-| `setup_complete` | `gemini_key_set AND adzuna_key_set AND base_cv_uploaded` (tectonic is not required) |
-
----
-
-#### `GET /api/settings/sites`
-
-**Description:** Return all known job-source sites with their current enabled state and browser session presence.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-[
-  {
-    "name": "linkedin",
-    "display_name": "LinkedIn",
-    "type": "browser",
-    "requires_login": true,
-    "base_url": "https://www.linkedin.com",
-    "enabled": true,
-    "has_session": false
-  },
-  {
-    "name": "adzuna",
-    "display_name": "Adzuna",
-    "type": "api",
-    "requires_login": false,
-    "base_url": "https://api.adzuna.com",
-    "enabled": true,
-    "has_session": false
-  }
-]
-```
-
-`has_session` is `true` when a valid Playwright storage-state file exists for the site. Site configuration is sourced from `SITE_CONFIGS` in `backend/scraping/site_prompts.py`; the `enabled` flag is stored in the `job_sources` table and defaults to `true`.
-
----
-
-#### `PUT /api/settings/sites/{site_name}`
-
-**Description:** Enable or disable a job-source site. The change is persisted to the `job_sources` table and takes effect on the next batch run.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `site_name` | string | Site key (e.g. `"linkedin"`, `"adzuna"`, `"google_jobs"`) |
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{"enabled": false}
-```
-
-**Response `200`:**
-
-```json
-{"name": "linkedin", "enabled": false}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | Site name is not in `SITE_CONFIGS` |
-
----
-
-#### `GET /api/settings/credentials`
-
-**Description:** Return all sites that require login, with masked email addresses and session status. Emails are Fernet-decrypted for masking (first two characters shown, rest replaced with `***@domain`).
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-[
-  {
-    "site_name": "linkedin",
-    "display_name": "LinkedIn",
-    "masked_email": "ja***@example.com",
-    "has_session": true
-  },
-  {
-    "site_name": "indeed",
-    "display_name": "Indeed",
-    "masked_email": null,
-    "has_session": false
-  }
-]
-```
-
-Only sites with `requires_login: true` in `SITE_CONFIGS` are returned.
-
----
-
-#### `PUT /api/settings/credentials/{site_name}`
-
-**Description:** Encrypt and store email/password credentials for a login-required site using Fernet symmetric encryption (keyed by `CREDENTIAL_KEY` env var). An existing credential for the site is updated; a new row is created if none exists.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `site_name` | string | Site key (e.g. `"linkedin"`) |
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{
-  "email": "jane@example.com",
-  "password": "s3cret"
-}
-```
-
-Both fields are required strings.
-
-**Response `200`:**
-
-```json
-{"site_name": "linkedin", "saved": true}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 400 | Site does not require login, or `CREDENTIAL_KEY` is not set in the environment |
-| 404 | Site name is not known |
-
----
-
-#### `DELETE /api/settings/credentials/{site_name}/session`
-
-**Description:** Delete browser session state files for a site, forcing a new login on the next scrape or apply run. Deletes both the canonical `browser_profiles/{site}/state.json` path and the legacy `browser_sessions/{site}_state.json` path for backward compatibility.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `site_name` | string | Site key |
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{"cleared": true}
-```
-
-Returns `{"cleared": false}` if no session files existed for the site.
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | Site name is not known |
-
----
-
-#### `GET /api/settings/custom-sites`
-
-**Description:** Return all custom job-source entries (user-added lab or company career page URLs).
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-[
-  {
-    "id": 5,
-    "name": "mylab",
-    "display_name": "My Lab Jobs",
-    "url": "https://mylab.io/jobs",
-    "enabled": true
-  }
-]
-```
-
-Custom sites are `JobSource` rows with `type="lab_url"`.
-
----
-
-#### `POST /api/settings/custom-sites`
-
-**Description:** Add a new custom job-source URL. A `JobSource` row with `type="lab_url"` is created.
-
-**Auth required:** No
-
-**Path params:** None
-
-**Query params:** None
-
-**Request body:**
-
-```json
-{
-  "name": "mylab",
-  "url": "https://mylab.io/jobs",
-  "display_name": "My Lab Jobs"
-}
-```
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `name` | string | Yes | Internal identifier (used as the source key) |
-| `url` | string | Yes | Full URL of the careers or jobs page |
-| `display_name` | string | No | Human-readable label for the UI |
-
-**Response `200`:** Same shape as a single entry in `GET /api/settings/custom-sites`.
-
----
-
-#### `DELETE /api/settings/custom-sites/{site_id}`
-
-**Description:** Delete a custom job-source by its database ID.
-
-**Auth required:** No
-
-**Path params:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `site_id` | integer | Database ID of the `JobSource` row |
-
-**Query params:** None
-
-**Request body:** None
-
-**Response `200`:**
-
-```json
-{"deleted": 5}
-```
-
-**Error responses:**
-
-| Status | Condition |
-|---|---|
-| 404 | No custom site with the given ID |
-
----
-
-### Health
-
-#### `GET /api/health`
-
-**Description:** System health check. Returns version, database connectivity, Tectonic availability, and Gemini key presence.
-
-**Auth required:** No
-
-**Response `200`:**
-
-```json
-{
-  "status": "ok",
-  "version": "0.1.0",
-  "db": "connected",
-  "tectonic": true,
-  "gemini_key_set": true
-}
-```
-
-When Tectonic is not found, an additional `tectonic_hint` field provides installation instructions:
-
-```json
-{
-  "tectonic_hint": "Tectonic not found. Run: uv run python scripts/download_tectonic.py"
-}
-```
-
----
-
-## WebSocket Protocol
-
-### `GET /ws`
-
-Upgrade an HTTP connection to a persistent WebSocket. The server assigns a UUID to each connection and registers it in the `ConnectionManager`. The connection is kept alive until the client disconnects or the server shuts down. Reconnection is handled by the client (the SvelteKit frontend reconnects every 3 seconds on drop).
-
-**Connection flow:**
-
-1. Client sends an HTTP `GET /ws` with `Upgrade: websocket` headers.
-2. Server accepts the connection and assigns a connection UUID.
-3. Client and server exchange JSON-encoded text frames as needed.
-4. On disconnect, the connection UUID is removed from the manager.
-
-All messages are JSON text frames. Both directions use `{"type": "<message_type>", ...}` as the discriminant field.
-
----
-
-### Built-in Ping/Pong
-
-| Client sends | Server replies |
-|---|---|
-| `{"type": "ping"}` | `{"type": "pong"}` |
-
----
-
-### Server-to-Client Messages
-
-All server-to-client messages are broadcast to all connected clients unless noted otherwise.
-
-#### `scraping_status`
-
-Emitted during a scraping run to report progress on a specific source.
-
-```json
-{
-  "type": "scraping_status",
-  "message": "Scraping LinkedIn for 'python'...",
-  "source": "linkedin",
-  "progress": 0.45
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"scraping_status"` |
-| `message` | string | Human-readable status description |
-| `source` | string | Site key being scraped (e.g. `"linkedin"`, `"adzuna"`) |
-| `progress` | float | Overall batch progress in range 0.0–1.0 |
-
----
-
-#### `matching_status`
-
-Emitted after the matching step of a batch run.
-
-```json
-{
-  "type": "matching_status",
-  "count": 12
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"matching_status"` |
-| `count` | integer | Number of jobs that passed the minimum match score threshold |
-
----
-
-#### `tailoring_status`
-
-Emitted during CV pre-generation to report progress per job.
-
-```json
-{
-  "type": "tailoring_status",
-  "job_id": 42,
-  "progress": 0.75
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"tailoring_status"` |
-| `job_id` | integer | `Job` database ID being tailored |
-| `progress` | float | Progress for this specific job, 0.0–1.0 |
-
----
-
-#### `apply_review`
-
-Emitted by the applier during an `auto` mode apply, after the form has been pre-filled but before submission. The client must respond with `confirm_submit` or `cancel_apply` within 30 minutes, or the apply is automatically cancelled.
-
-```json
-{
-  "type": "apply_review",
-  "job_id": 7,
-  "filled_fields": {
-    "#first-name": "Jane",
-    "#email": "jane@example.com",
-    "#cover-letter": "Dear Hiring Manager..."
-  },
-  "screenshot_base64": "iVBORw0KGgo..."
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"apply_review"` |
-| `job_id` | integer | `JobMatch` ID for which the review is requested |
-| `filled_fields` | object | Map of CSS selector → filled value for all fields that were successfully filled |
-| `screenshot_base64` | string or null | Base64-encoded PNG screenshot of the filled form, or `null` if screenshot failed |
-
----
-
-#### `apply_result`
-
-Emitted after an apply attempt completes (whether successful, cancelled, or failed).
-
-```json
-{
-  "type": "apply_result",
-  "job_id": 7,
-  "status": "applied",
-  "method": "auto"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"apply_result"` |
-| `job_id` | integer | `JobMatch` ID |
-| `status` | string | `"applied"`, `"assisted"`, `"manual"`, or `"cancelled"` |
-| `method` | string | `"auto"`, `"assisted"`, or `"manual"` |
-
----
-
-#### `login_required`
-
-Emitted by `BrowserSessionManager` when a job board requires manual login and no stored session exists. The server opens a visible browser window and waits for the user to log in and signal completion.
-
-```json
-{
-  "type": "login_required",
-  "site": "linkedin",
-  "browser_window_title": "Please log in to LinkedIn in the browser window that just opened"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"login_required"` |
-| `site` | string | Site key requiring login |
-| `browser_window_title` | string | Instruction message for the user |
-
-The server waits up to 600 seconds (10 minutes) for a `login_done` or `login_cancel` client message before timing out.
-
----
-
-#### `login_confirmed`
-
-Emitted by `BrowserSessionManager` after a successful login is confirmed and the session has been saved.
-
-```json
-{
-  "type": "login_confirmed",
-  "site": "linkedin"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"login_confirmed"` |
-| `site` | string | Site key for which login succeeded |
-
----
-
-#### `error`
-
-Emitted when a backend operation fails in a way that the user should be notified about.
-
-```json
-{
-  "type": "error",
-  "message": "Gemini rate limit reached — please try again shortly",
-  "code": "rate_limit"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"error"` |
-| `message` | string | Human-readable error description |
-| `code` | string | Machine-readable error code (e.g. `"rate_limit"`, `"latex_compile_error"`, `"gemini_json_error"`, `"internal_error"`) |
-
----
-
-#### `status` (broadcast helper)
-
-A generic progress broadcast emitted by `broadcast_status()` used throughout the scraping and scheduling modules. Note: this message type does not correspond to any typed model in `ws_models.py` and uses a different shape from the typed messages above.
-
-```json
-{
-  "type": "status",
-  "message": "12 applications ready for review",
-  "progress": 1.0
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"status"` |
-| `message` | string | Human-readable status text |
-| `progress` | float | Overall progress in range 0.0–1.0 |
-
----
-
-### Client-to-Server Messages
-
-Client messages are dispatched by raw `type` string lookup to registered handlers. Unrecognised message types are silently ignored.
-
-#### `confirm_submit`
-
-Sent by the user to approve submission of a pre-filled application form. Must be sent while the server is paused at the `apply_review` gate for the specified job.
-
-```json
-{
-  "type": "confirm_submit",
-  "job_id": 7
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"confirm_submit"` |
-| `job_id` | integer | `JobMatch` ID to confirm |
-
-**Effect:** Sets the `confirm_event` asyncio.Event in `ApplicationEngine`, unblocking the apply strategy and proceeding to click the submit button.
-
----
-
-#### `cancel_apply`
-
-Sent by the user to abort a pending apply review. The apply attempt will be recorded as `status="cancelled"`.
-
-```json
-{
-  "type": "cancel_apply",
-  "job_id": 7
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"cancel_apply"` |
-| `job_id` | integer | `JobMatch` ID to cancel |
-
-**Effect:** Sets the `cancel_event` asyncio.Event in `ApplicationEngine`, unblocking the strategy and returning `status="cancelled"`.
-
----
-
-#### `login_done`
-
-Sent by the user after they have completed manual login in the browser window opened by `BrowserSessionManager`. The session is then saved and scraping continues.
-
-```json
-{
-  "type": "login_done",
-  "site": "linkedin"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"login_done"` |
-| `site` | string | Site key for which login was completed |
-
-**Effect:** Calls `BrowserSessionManager.confirm_login(site)`, which sets the internal asyncio.Event to unblock `get_or_create_session`.
-
----
-
-#### `login_cancel`
-
-Sent by the user to abort the manual login flow for a site.
-
-```json
-{
-  "type": "login_cancel",
-  "site": "linkedin"
-}
-```
-
-| Field | Type | Description |
-|---|---|---|
-| `type` | string | Always `"login_cancel"` |
-| `site` | string | Site key for which login is being cancelled |
-
-**Effect:** Calls `BrowserSessionManager.cancel_login(site)`, which marks the site as cancelled and raises `RuntimeError` in the waiting `get_or_create_session` call, causing the scraper to skip this site.
-
----
-
-#### `ping`
-
-Standard liveness check. No handler registration needed; handled directly in the WebSocket receive loop.
-
-```json
-{"type": "ping"}
-```
-
-**Effect:** Server replies immediately with `{"type": "pong"}`.
-
----
-
-### Global Exception Handlers
-
-The following HTTP error responses can be returned by any endpoint when the corresponding condition occurs:
-
-| Exception | HTTP Status | Response body |
-|---|---|---|
-| `LaTeXCompilationError` | 422 | `{"error": "<message>", "code": "latex_compile_error"}` |
-| `GeminiJSONError` | 500 | `{"error": "LLM response validation failed", "code": "gemini_json_error"}` |
-| `GeminiRateLimitError` | 429 | `{"error": "LLM rate limit reached — please try again shortly", "code": "rate_limit"}` |
-| Any uncaught `Exception` | 500 | `{"error": "Internal server error", "code": "internal_error"}` |
+## Related
+
+- [Architecture](architecture.md) — how the routers, `app.state` singletons, and pipelines fit together
+- [File Map](file-map.md) — backend file-by-file index
+- [Frontend File Map](frontend-file-map.md) — Svelte client that consumes this API + `/ws`
+- [User Guide](user-guide.md) — running the app end to end
+- [Custom Templates](custom-templates.md) — LaTeX templates used by the documents routes
+- [Docs index](index.md) · [README](../README.md)

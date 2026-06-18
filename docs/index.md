@@ -40,7 +40,7 @@
 
 ## Archive
 
-Older documentation is preserved in [docs/plans/archive/](plans/archive/).
+Older design docs and implementation plans are preserved under [docs/superpowers/](superpowers/) (`specs/` and `plans/`).
 
 ---
 

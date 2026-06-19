@@ -1,0 +1,72 @@
+# JobPilot — single-service compose for self-hosting.
+#
+# Usage:
+#   1. bash scripts/setup.sh   (Windows: .\scripts\setup.ps1)  — pick a provider, writes .env
+#   2. docker compose up -d --build
+#   3. browse to http://<host>:8000
+#
+# Pointing at a model on THIS host (Ollama/llama.cpp/etc): use
+#   LLM_BASE_URL=http://host.docker.internal:<port>/v1   in .env.
+# `extra_hosts` below makes host.docker.internal resolve on Linux too.
+#
+# To add a Postgres service later (instead of bundled SQLite), uncomment below
+# and point a DATABASE_URL env var at it:
+#
+#   postgres:
+#     image: postgres:16-alpine
+#     restart: unless-stopped
+#     environment:
+#       POSTGRES_USER: jobpilot
+#       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+#       POSTGRES_DB: jobpilot
+#     volumes:
+#       - pgdata:/var/lib/postgresql/data
+#     healthcheck:
+#       test: ["CMD-SHELL", "pg_isready -U jobpilot"]
+#       interval: 10s
+#       retries: 5
+#   # volumes: { pgdata: {} }
+
+services:
+  jobpilot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jobpilot:latest
+    container_name: jobpilot
+    restart: unless-stopped
+    # Chromium (browser-use/Playwright) crashes with the default 64 MB /dev/shm.
+    shm_size: "1gb"
+    # Make a model running on the Docker host reachable as host.docker.internal
+    # (works on Docker Desktop out of the box; this line adds Linux support).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Override host-binding so the container is reachable from outside.
+      JOBPILOT_HOST: 0.0.0.0
+      JOBPILOT_PORT: "8000"
+      JOBPILOT_DATA_DIR: /app/data
+      JOBPILOT_SCRAPER_HEADLESS: "true"
+      # CORS allow-list. If you front this container with a reverse proxy on a
+      # different host, add that origin (comma-separated) here or via .env.
+      JOBPILOT_ALLOWED_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000"
+    volumes:
+      # Persist SQLite DB, logs, CVs, browser sessions across container restarts.
+      - ./data:/app/data
+    # Cap log growth so a long-running container can't fill the host disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # First boot runs DB migrations + a Playwright check, which can exceed 20s.
+      start_period: 40s

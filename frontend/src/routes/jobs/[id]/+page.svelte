@@ -1,0 +1,612 @@
+<script lang="ts">
+	import { page } from '$app/stores';
+	import { onMount } from 'svelte';
+	import { apiFetch } from '$lib/api';
+	import { fetchThread } from '$lib/api/gmail';
+	import { getApplyConfirmation } from '$lib/utils/easterEggs';
+	import ScoreIndicator from '$lib/components/ScoreIndicator.svelte';
+	import { computeScoreBreakdown, type KeywordHits } from '$lib/utils/scoreBreakdown';
+	import {
+		ArrowLeft,
+		Briefcase,
+		MapPin,
+		DollarSign,
+		Clock,
+		ExternalLink,
+		Zap,
+		MousePointer,
+		Globe,
+		FileText,
+		Mail,
+		AlertCircle,
+		CheckCircle2,
+		Sparkles,
+		Target
+	} from 'lucide-svelte';
+	import type { QueueMatch, DiffEntry } from '$lib/types/api';
+
+	interface JobScoreResponse {
+		job_id: number;
+		score: number | null;
+		keyword_hits: KeywordHits;
+	}
+
+	interface SearchSettingsResponse {
+		keywords?: { include?: string[] };
+		salary_min?: number | null;
+	}
+
+	interface DiffResponse {
+		match_id: number;
+		diff: DiffEntry[];
+		generated_at?: string;
+	}
+
+	interface CorrespondenceMessage {
+		id: number;
+		gmail_message_id: string;
+		gmail_thread_id: string;
+		from_address: string;
+		subject: string | null;
+		snippet: string | null;
+		received_at: string;
+		category: string | null;
+		category_confidence: number | null;
+	}
+
+	interface CorrespondenceThread {
+		application_id: number;
+		messages: CorrespondenceMessage[];
+	}
+
+	interface ApplicationSummary {
+		id: number;
+		job_match_id: number | null;
+	}
+
+	interface ApplicationListResponse {
+		applications: ApplicationSummary[];
+		total: number;
+	}
+
+	const matchId = $derived(parseInt($page.params.id ?? '0'));
+
+	let matchData = $state<QueueMatch | null>(null);
+	const job = $derived(matchData?.job ?? null);
+	const score = $derived(matchData?.score ?? 0);
+	let diff = $state<DiffEntry[]>([]);
+	let loading = $state(true);
+	let applyLoading = $state('');
+	let error = $state('');
+	let successMsg = $state('');
+	let activeTab = $state<'description' | 'score' | 'diff' | 'emails'>('description');
+	let enriching = $state(false);
+
+	// "Why this score" inputs, composed client-side from existing endpoints:
+	// keyword_hits comes from GET /api/jobs/{job_id}/score and the configured
+	// include-keywords + salary target come from GET /api/settings/search.
+	let keywordHits = $state<KeywordHits>(null);
+	let searchSettings = $state<SearchSettingsResponse | null>(null);
+	const breakdown = $derived(
+		job
+			? computeScoreBreakdown(
+					keywordHits,
+					searchSettings?.keywords?.include ?? [],
+					{ min: job.salary_min ?? null, max: job.salary_max ?? null },
+					searchSettings?.salary_min ?? null
+				)
+			: null
+	);
+	const fmtSalary = (v: number | null) => (v == null ? '—' : `${Math.round(v / 1000)}k€`);
+
+	// Linked-emails state. applicationId is resolved by looking up the
+	// Application row whose job_match_id matches the current matchId.
+	// Stays null when the user hasn't applied yet — in that case we show a
+	// hint instead of an empty thread.
+	let applicationId = $state<number | null>(null);
+	let linkedMessages = $state<CorrespondenceMessage[]>([]);
+	let emailsLoading = $state(false);
+	let emailsError = $state('');
+
+	const salary = $derived(() => {
+		if (!job) return null;
+		if (!job.salary_min && !job.salary_max) return null;
+		if (job.salary_min && job.salary_max)
+			return `${Math.round(job.salary_min / 1000)}k€ – ${Math.round(job.salary_max / 1000)}k€`;
+		if (job.salary_min) return `${Math.round(job.salary_min / 1000)}k€+`;
+		return `jusqu'à ${Math.round((job.salary_max ?? 0) / 1000)}k€`;
+	});
+
+	const timeAgo = (dateStr?: string) => {
+		if (!dateStr) return '';
+		const d = new Date(dateStr);
+		const now = new Date();
+		const hrs = Math.round((now.getTime() - d.getTime()) / 3600000);
+		if (hrs < 1) return 'just now';
+		if (hrs < 24) return `${hrs}h ago`;
+		return `${Math.floor(hrs / 24)}d ago`;
+	};
+
+	async function load() {
+		loading = true;
+		error = '';
+		try {
+			matchData = await apiFetch<QueueMatch>(`/api/queue/${matchId}`);
+			try {
+				const diffData = await apiFetch<DiffResponse>(`/api/documents/${matchId}/diff`);
+				diff = diffData.diff ?? [];
+			} catch {
+				diff = [];
+			}
+			// Fire-and-forget: resolve the application linked to this match so
+			// we can light up the "Linked emails" tab. Tracker is the
+			// authoritative source for application rows.
+			resolveApplicationId();
+			// Fire-and-forget: pull keyword_hits + search settings for the
+			// "Why this score" breakdown. Non-fatal — the panel degrades
+			// gracefully to "all configured keywords missing" if either fails.
+			loadScoreBreakdown();
+		} catch (e: any) {
+			error = e.message ?? 'Failed to load job';
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function loadScoreBreakdown() {
+		if (!matchData) return;
+		try {
+			const [scoreRes, settingsRes] = await Promise.all([
+				apiFetch<JobScoreResponse>(`/api/jobs/${matchData.job_id}/score`),
+				apiFetch<SearchSettingsResponse>('/api/settings/search')
+			]);
+			keywordHits = scoreRes.keyword_hits ?? null;
+			searchSettings = settingsRes;
+		} catch {
+			// Non-fatal: leave defaults so the breakdown still renders.
+		}
+	}
+
+	async function resolveApplicationId() {
+		try {
+			// Pull a reasonable window of applications and pick the one whose
+			// job_match_id matches. The list endpoint already powers /tracker
+			// so the cache should be warm in most sessions.
+			const data = await apiFetch<ApplicationListResponse>('/api/applications?limit=200');
+			const app = (data.applications ?? []).find((a) => a.job_match_id === matchId);
+			if (app) {
+				applicationId = app.id;
+				loadEmails();
+			} else {
+				applicationId = null;
+			}
+		} catch {
+			// Non-fatal — emails tab will show an error banner only if the
+			// user explicitly opens it and the lookup fails again.
+			applicationId = null;
+		}
+	}
+
+	async function loadEmails() {
+		if (applicationId === null) return;
+		emailsLoading = true;
+		emailsError = '';
+		try {
+			const thread = (await fetchThread(applicationId)) as CorrespondenceThread;
+			linkedMessages = thread.messages ?? [];
+		} catch (e: any) {
+			emailsError = e?.message ?? 'Failed to load linked emails';
+			linkedMessages = [];
+		} finally {
+			emailsLoading = false;
+		}
+	}
+
+	async function applyWith(method: string) {
+		applyLoading = method;
+		error = '';
+		successMsg = '';
+		try {
+			const res = await apiFetch<{ status: string; method: string; message: string }>(`/api/applications/${matchId}/apply`, {
+				method: 'POST',
+				body: JSON.stringify({ method })
+			});
+			successMsg = method === 'manual'
+				? (res.message || 'Job opened — apply manually. Tailored CV copied to ~/Downloads.')
+				: method === 'assisted'
+				? 'Assisted apply started — follow the browser instructions.'
+				: 'Auto-apply queued — confirm in the pop-up when ready.';
+		} catch (e: any) {
+			error = e.message ?? 'Apply failed';
+		} finally {
+			applyLoading = '';
+		}
+	}
+
+	const isEasyApply = $derived(job?.apply_method === 'easy_apply' || job?.apply_method === 'auto');
+	let applyQuote = $state(getApplyConfirmation());
+
+	onMount(load);
+</script>
+
+<!-- Breadcrumb -->
+<div class="flex items-center gap-2 text-xs text-muted-foreground mb-5">
+	<a href="/" class="flex items-center gap-1 hover:text-foreground transition-colors">
+		<ArrowLeft size={13} />
+		Job Queue
+	</a>
+	{#if job}
+		<span>/</span>
+		<span class="text-foreground truncate max-w-xs">{job.title} @ {job.company}</span>
+	{/if}
+</div>
+
+{#if loading}
+	<div class="space-y-4 animate-pulse">
+		<div class="h-7 bg-muted rounded w-1/2"></div>
+		<div class="h-4 bg-muted rounded w-1/3"></div>
+		<div class="h-64 bg-muted rounded-lg mt-6"></div>
+	</div>
+{:else if error}
+	<div class="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2 mb-4">
+		<AlertCircle size={13} />
+		{error}
+		<button onclick={() => (error = '')} class="ml-auto hover:text-red-300">✕</button>
+	</div>
+{:else if job}
+	<!-- Header -->
+	<div class="flex items-start gap-4 mb-6">
+		<ScoreIndicator score={Math.round(score)} />
+		<div class="flex-1 min-w-0">
+			<h1 class="text-xl font-semibold tracking-tight">{job.title}</h1>
+			<div class="flex items-center gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
+				<span class="flex items-center gap-1"><Briefcase size={12} />{job.company}</span>
+				{#if job.location}
+					<span class="flex items-center gap-1"><MapPin size={12} />{job.location}</span>
+				{/if}
+				{#if salary()}
+					<span class="flex items-center gap-1"><DollarSign size={12} />{salary()}</span>
+				{/if}
+				{#if job.posted_at}
+					<span class="flex items-center gap-1"><Clock size={12} />{timeAgo(job.posted_at)}</span>
+				{/if}
+				{#if job.apply_method}
+					<span class="px-2 py-0.5 rounded-full text-xs bg-accent text-accent-foreground capitalize">{job.apply_method.replace('_', ' ')}</span>
+				{/if}
+			</div>
+		</div>
+
+		<!-- Action buttons -->
+		<div class="flex items-center gap-2 flex-shrink-0">
+			<a
+				href={job.url}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors"
+			>
+				<ExternalLink size={13} />
+				View Listing
+			</a>
+		</div>
+	</div>
+
+	<!-- Success message -->
+	{#if successMsg}
+		<div class="flex items-center gap-2 text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-md px-3 py-2 mb-4">
+			<CheckCircle2 size={13} />
+			{successMsg}
+			<button onclick={() => (successMsg = '')} class="ml-auto hover:text-green-300">✕</button>
+		</div>
+	{/if}
+
+	<!-- Apply section -->
+	<p class="text-xs italic text-muted-foreground/60 mb-2 animate-fade-in-up">{applyQuote}</p>
+	<div class="flex items-center gap-2 mb-6 p-4 bg-card border border-border rounded-lg">
+		<span class="text-xs text-muted-foreground mr-2">Apply via:</span>
+
+		<button
+			onclick={() => applyWith('auto')}
+			disabled={!!applyLoading}
+			class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors disabled:opacity-50"
+		>
+			<Zap size={12} />
+			{applyLoading === 'auto' ? 'Starting…' : 'Auto Apply'}
+		</button>
+
+		<button
+			onclick={() => applyWith('assisted')}
+			disabled={!!applyLoading}
+			class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+		>
+			<MousePointer size={12} />
+			{applyLoading === 'assisted' ? 'Starting…' : 'Assisted Apply'}
+		</button>
+
+		<button
+			onclick={() => applyWith('manual')}
+			disabled={!!applyLoading}
+			class="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors disabled:opacity-50"
+		>
+			<Globe size={12} />
+			{applyLoading === 'manual' ? 'Opening…' : 'Open & Apply'}
+		</button>
+	</div>
+
+	<!-- Tabs: Description | CV Diff | Linked Emails -->
+	<div class="flex items-center gap-1 border-b border-border mb-4">
+		<button
+			onclick={() => (activeTab = 'description')}
+			class="text-xs px-4 py-2 border-b-2 transition-colors {activeTab === 'description'
+				? 'border-primary text-foreground font-medium'
+				: 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			Description
+		</button>
+		<button
+			onclick={() => (activeTab = 'score')}
+			class="flex items-center gap-1.5 text-xs px-4 py-2 border-b-2 transition-colors {activeTab === 'score'
+				? 'border-primary text-foreground font-medium'
+				: 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<Sparkles size={12} />
+			Why this score
+		</button>
+		<button
+			onclick={() => (activeTab = 'diff')}
+			class="flex items-center gap-1.5 text-xs px-4 py-2 border-b-2 transition-colors {activeTab === 'diff'
+				? 'border-primary text-foreground font-medium'
+				: 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<FileText size={12} />
+			CV Diff
+			{#if diff.length > 0}
+				<span class="ml-1 px-1.5 py-0.5 rounded-full bg-primary/20 text-primary text-xs">{diff.length}</span>
+			{/if}
+		</button>
+		<button
+			onclick={() => {
+				activeTab = 'emails';
+				if (applicationId !== null && linkedMessages.length === 0 && !emailsLoading) {
+					loadEmails();
+				}
+			}}
+			class="flex items-center gap-1.5 text-xs px-4 py-2 border-b-2 transition-colors {activeTab === 'emails'
+				? 'border-primary text-foreground font-medium'
+				: 'border-transparent text-muted-foreground hover:text-foreground'}"
+		>
+			<Mail size={12} />
+			Linked Emails
+			{#if linkedMessages.length > 0}
+				<span class="ml-1 px-1.5 py-0.5 rounded-full bg-primary/20 text-primary text-xs">{linkedMessages.length}</span>
+			{/if}
+		</button>
+	</div>
+
+	{#if activeTab === 'description'}
+		<div class="bg-card border border-border rounded-lg p-5 max-w-3xl">
+			{#if job.description}
+				<div class="prose prose-sm max-w-none text-sm text-foreground leading-relaxed whitespace-pre-wrap">
+					{job.description}
+				</div>
+			{:else}
+				<p class="text-muted-foreground text-sm">No description available for this listing.</p>
+			{/if}
+			{#if !job.description || job.description.length < 300}
+				<button
+					onclick={async () => {
+						enriching = true;
+						error = '';
+						try {
+							const res = await apiFetch<{ status: string; description: string }>(`/api/queue/${matchId}/enrich-description`, { method: 'POST' });
+							if (res.description && matchData?.job) {
+								matchData = { ...matchData, job: { ...matchData.job, description: res.description } };
+							}
+						} catch (e: any) {
+							error = e.message ?? 'Failed to fetch full description';
+						} finally {
+							enriching = false;
+						}
+					}}
+					disabled={enriching}
+					class="mt-3 flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors disabled:opacity-50"
+				>
+					<Globe size={12} />
+					{enriching ? 'Fetching full description…' : 'Fetch Full Description'}
+				</button>
+			{/if}
+		</div>
+	{:else if activeTab === 'score'}
+		<!-- Why this score: keyword match + salary comparison -->
+		<div class="max-w-3xl space-y-4">
+			<div class="flex items-center gap-4 bg-card border border-border rounded-lg p-5">
+				<ScoreIndicator score={Math.round(score)} />
+				<div>
+					<h2 class="text-sm font-semibold">Match score: {Math.round(score)}/100</h2>
+					<p class="text-xs text-muted-foreground mt-0.5">
+						Based on your configured keywords and salary target.
+					</p>
+				</div>
+			</div>
+
+			<!-- Keywords -->
+			<div class="bg-card border border-border rounded-lg p-5">
+				<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">
+					Matched keywords
+				</h3>
+				{#if breakdown && breakdown.matched.length > 0}
+					<div class="flex flex-wrap gap-1.5">
+						{#each breakdown.matched as kw (kw)}
+							<span
+								class="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-green-500/15 text-green-400 border border-green-500/20"
+							>
+								<CheckCircle2 size={11} />
+								{kw}
+							</span>
+						{/each}
+					</div>
+				{:else}
+					<p class="text-xs text-muted-foreground">No matched keywords recorded for this match.</p>
+				{/if}
+
+				{#if breakdown && breakdown.missing.length > 0}
+					<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mt-4 mb-3">
+						Missing keywords
+					</h3>
+					<div class="flex flex-wrap gap-1.5">
+						{#each breakdown.missing as kw (kw)}
+							<span
+								class="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border"
+							>
+								{kw}
+							</span>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Salary comparison -->
+			<div class="bg-card border border-border rounded-lg p-5">
+				<h3 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3 flex items-center gap-1.5">
+					<Target size={12} />
+					Salary vs target
+				</h3>
+				{#if breakdown}
+					<div class="flex items-center gap-6 text-sm">
+						<div>
+							<p class="text-xs text-muted-foreground">Job range</p>
+							<p class="font-medium">
+								{#if breakdown.salary.jobMin == null && breakdown.salary.jobMax == null}
+									Not disclosed
+								{:else}
+									{fmtSalary(breakdown.salary.jobMin)} – {fmtSalary(breakdown.salary.jobMax)}
+								{/if}
+							</p>
+						</div>
+						<div>
+							<p class="text-xs text-muted-foreground">Your target</p>
+							<p class="font-medium">{fmtSalary(breakdown.salary.target)}</p>
+						</div>
+						<div class="ml-auto">
+							{#if breakdown.salary.meetsTarget === true}
+								<span class="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-green-500/15 text-green-400 border border-green-500/20">
+									<CheckCircle2 size={12} />
+									Meets target
+								</span>
+							{:else if breakdown.salary.meetsTarget === false}
+								<span class="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 border border-red-500/20">
+									<AlertCircle size={12} />
+									Below target
+								</span>
+							{:else}
+								<span class="flex items-center gap-1 text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground border border-border">
+									Unknown
+								</span>
+							{/if}
+						</div>
+					</div>
+				{/if}
+			</div>
+		</div>
+	{:else if activeTab === 'diff'}
+		<!-- CV Diff view -->
+		<div class="max-w-3xl">
+			{#if diff.length === 0}
+				<div class="flex flex-col items-center justify-center py-16 gap-3 bg-card border border-border rounded-lg">
+					<FileText size={32} class="text-muted-foreground/40" />
+					<p class="text-sm text-muted-foreground font-medium">No CV changes yet</p>
+					<p class="text-xs text-muted-foreground">CV tailoring runs during the job scan. Check back after it completes.</p>
+				</div>
+			{:else}
+				<div class="space-y-3">
+					{#each diff as entry, i (i)}
+						<div class="bg-card border border-border rounded-lg overflow-hidden">
+							<div class="px-4 py-2 bg-muted/50 border-b border-border flex items-center gap-2">
+								<span class="text-xs font-medium text-muted-foreground">{entry.section}</span>
+								{#if entry.change_description}
+									<span class="text-xs text-muted-foreground/70">· {entry.change_description}</span>
+								{/if}
+							</div>
+							<div class="p-4 space-y-2">
+								{#if entry.original_text}
+									<div class="flex gap-2">
+										<span class="text-red-500 text-xs font-mono mt-0.5 flex-shrink-0">−</span>
+										<p class="text-xs line-through text-muted-foreground leading-relaxed">{entry.original_text}</p>
+									</div>
+								{/if}
+								{#if entry.edited_text}
+									<div class="flex gap-2">
+										<span class="text-green-500 text-xs font-mono mt-0.5 flex-shrink-0">+</span>
+										<p class="text-xs text-green-400 leading-relaxed">{entry.edited_text}</p>
+									</div>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+
+				<!-- PDF preview link -->
+				<div class="mt-4 flex items-center gap-2">
+					<a
+						href="/api/documents/{matchId}/cv/pdf"
+						target="_blank"
+						rel="noopener noreferrer"
+						class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors"
+					>
+						<FileText size={12} />
+						View Tailored CV (PDF)
+					</a>
+				</div>
+			{/if}
+		</div>
+	{:else}
+		<!-- Linked Emails view -->
+		<div class="max-w-3xl">
+			{#if applicationId === null}
+				<div class="flex flex-col items-center justify-center py-16 gap-3 bg-card border border-border rounded-lg">
+					<Mail size={32} class="text-muted-foreground/40" />
+					<p class="text-sm text-muted-foreground font-medium">No application yet</p>
+					<p class="text-xs text-muted-foreground">
+						Apply to this job to start tracking linked emails.
+					</p>
+				</div>
+			{:else if emailsLoading}
+				<div class="space-y-2">
+					{#each Array(3) as _, i (i)}
+						<div class="h-20 bg-card/40 border border-border/30 rounded-lg animate-pulse"></div>
+					{/each}
+				</div>
+			{:else if emailsError}
+				<div class="flex items-center gap-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-3 py-2">
+					<AlertCircle size={13} />
+					{emailsError}
+					<button onclick={loadEmails} class="ml-auto hover:text-red-300 underline">Retry</button>
+				</div>
+			{:else if linkedMessages.length === 0}
+				<div class="flex flex-col items-center justify-center py-16 gap-3 bg-card border border-border rounded-lg">
+					<Mail size={32} class="text-muted-foreground/40" />
+					<p class="text-sm text-muted-foreground font-medium">No linked emails yet</p>
+					<p class="text-xs text-muted-foreground">
+						Visit the
+						<a href="/inbox" class="text-primary hover:underline">Inbox</a>
+						to attach recruiter messages to this application.
+					</p>
+				</div>
+			{:else}
+				<ul class="space-y-2">
+					{#each linkedMessages as m (m.id)}
+						<li class="rounded-lg border border-border bg-card p-3">
+							<header class="flex items-center justify-between text-xs text-muted-foreground mb-1 gap-2">
+								<span class="truncate" title={m.from_address}>{m.from_address}</span>
+								<span class="flex-shrink-0">{new Date(m.received_at).toLocaleString()}</span>
+							</header>
+							<p class="text-sm text-foreground font-medium">{m.subject ?? '(no subject)'}</p>
+							{#if m.snippet}
+								<p class="text-xs text-muted-foreground mt-1 line-clamp-2">{m.snippet}</p>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+	{/if}
+{/if}

@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import logging
+
+import httpx
+
+from backend.config import settings
+from backend.matching.filters import JobFilters
+from backend.models.schemas import RawJob
+
+logger = logging.getLogger(__name__)
+
+
+class AdzunaAPIError(Exception):
+    pass
+
+
+class AdzunaClient:
+    """Structured job search via Adzuna REST API. 250 free calls/day."""
+
+    BASE_URL = "https://api.adzuna.com/v1/api/jobs"
+
+    def __init__(self) -> None:
+        self.app_id = settings.ADZUNA_APP_ID
+        self.app_key = settings.ADZUNA_APP_KEY.get_secret_value()
+
+    async def search(
+        self,
+        keywords: list[str],
+        filters: JobFilters,
+        country: str = "gb",
+        page: int = 1,
+        results_per_page: int = 20,
+        max_days_old: int | None = None,
+        max_pages: int = 1,
+    ) -> list[RawJob]:
+        """Search Adzuna for jobs matching keywords + filters.
+
+        Args:
+            page: Starting 1-indexed page number.
+            max_pages: How many sequential pages to fetch starting from ``page``.
+                Defaults to 1 (backward-compat). Loop stops early if a page
+                returns fewer than ``results_per_page`` results.
+        """
+        all_jobs: list[RawJob] = []
+        max_pages = max(1, int(max_pages))
+        for offset in range(max_pages):
+            current_page = page + offset
+            jobs = await self._fetch_page(
+                keywords=keywords,
+                filters=filters,
+                country=country,
+                page=current_page,
+                results_per_page=results_per_page,
+                max_days_old=max_days_old,
+            )
+            all_jobs.extend(jobs)
+            # Stop early once a page comes back partial — Adzuna has no
+            # explicit "has_next" flag; a short page means the result set
+            # is exhausted.
+            if len(jobs) < results_per_page:
+                break
+        return all_jobs
+
+    async def _fetch_page(
+        self,
+        *,
+        keywords: list[str],
+        filters: JobFilters,
+        country: str,
+        page: int,
+        results_per_page: int,
+        max_days_old: int | None,
+    ) -> list[RawJob]:
+        params: dict = {
+            "app_id": self.app_id,
+            "app_key": self.app_key,
+            "what": " ".join(keywords),
+            "where": filters.locations[0] if filters.locations else "",
+            "salary_min": filters.salary_min,
+            "results_per_page": results_per_page,
+        }
+        if max_days_old is not None:
+            params["max_days_old"] = max_days_old
+        if "full-time" in (filters.job_types or []):
+            params["full_time"] = 1
+        params = {k: v for k, v in params.items() if v is not None and v != ""}
+        url = f"{self.BASE_URL}/{country}/search/{page}"
+        logger.debug(
+            "Adzuna request: url=%s params=%s",
+            url, {k: v for k, v in params.items() if k != "app_key"},
+        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params)
+            if response.status_code != 200:
+                raise AdzunaAPIError(
+                    f"Adzuna returned {response.status_code}: {response.text[:200]}"
+                )
+            data = response.json()
+        jobs = [self._parse_job(j) for j in data.get("results", [])]
+        for job in jobs:
+            job.country = country
+        return jobs
+
+    @staticmethod
+    def _coerce_salary(value: int | float | str | None) -> int | None:
+        """Adzuna returns salaries as floats (e.g. 67255.94); RawJob wants int."""
+        if value is None:
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
+    def _parse_job(self, data: dict) -> RawJob:
+        return RawJob(
+            external_id=str(data.get("id", "")),
+            title=data.get("title", ""),
+            company=data.get("company", {}).get("display_name", ""),
+            location=data.get("location", {}).get("display_name", ""),
+            salary_text="",
+            salary_min=self._coerce_salary(data.get("salary_min")),
+            salary_max=self._coerce_salary(data.get("salary_max")),
+            description=data.get("description", ""),
+            url=data.get("redirect_url", ""),
+            apply_url=data.get("redirect_url", ""),
+            source_name="adzuna",
+        )

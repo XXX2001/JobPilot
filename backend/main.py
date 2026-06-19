@@ -1,0 +1,514 @@
+import logging
+import platform
+import shutil
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Any, Literal
+
+from fastapi import FastAPI, Request, Response  # type: ignore
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from fastapi.responses import JSONResponse  # type: ignore
+from fastapi.staticfiles import StaticFiles  # type: ignore
+from pydantic import BaseModel  # type: ignore
+from sqlalchemy import text  # type: ignore
+from starlette.staticfiles import NotModifiedResponse  # type: ignore
+
+from backend.config import DATA_DIR, PROJECT_ROOT, settings
+from backend.logging_config import configure_logging
+
+# Importable at module level so tests can patch backend.main.GmailSyncWorker.
+# Wrapped in try/except to keep import resilient in trimmed-down test/CLI envs.
+try:
+    from backend.gmail.sync import GmailSyncWorker  # noqa: F401
+except Exception:
+    GmailSyncWorker = None  # type: ignore[assignment]
+
+
+# ─── Health response schema (OBS-03) ──────────────────────────────────────────
+
+
+class HealthOut(BaseModel):
+    status: Literal["ok", "degraded"]
+    version: str
+    timestamp: datetime
+    db: Literal["ok", "error"]
+    tectonic: bool
+    llm_key_set: bool
+    tectonic_hint: str | None = None
+    db_error_code: str | None = None
+
+logger = logging.getLogger("jobpilot")
+
+
+async def _run_gmail_poll() -> None:
+    """Cron entrypoint — iterate enabled credentials, run sync for each."""
+    from sqlalchemy import select
+
+    from backend.database import AsyncSessionLocal
+    from backend.models.gmail import GmailCredential
+
+    if GmailSyncWorker is None:
+        return
+    token_mgr = getattr(app.state, "gmail_token_manager", None)
+    worker = GmailSyncWorker(token_manager=token_mgr)  # type: ignore[arg-type]
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(GmailCredential).where(GmailCredential.enabled.is_(True))
+        )).scalars().all()
+        emails = [r.email_address for r in rows]
+    for email in emails:
+        try:
+            await worker.sync_now(email)
+        except Exception:
+            logger.exception("Gmail poll failed for %s", email)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: wire JSON logging FIRST (honors JOBPILOT_LOG_LEVEL + writes
+    # to <DATA_DIR>/logs/jobpilot.log) so every subsequent log line is
+    # structured.
+    configure_logging(data_dir=DATA_DIR)
+
+    logger.info("Starting JobPilot application")
+
+    # Ensure data subdirectories exist
+    data_dirs = [
+        DATA_DIR / "cvs",
+        DATA_DIR / "letters",
+        DATA_DIR / "templates",
+        DATA_DIR / "browser_sessions",
+        DATA_DIR / "browser_profiles",
+        DATA_DIR / "logs",
+    ]
+    for d in data_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Initialize DB (create tables if not exists via SQLAlchemy)
+    try:
+        from backend.database import init_db
+
+        await init_db()
+        logger.info("Database initialized")
+    except Exception:
+        logger.exception("DB init failed (may already be up)")
+
+    # ── Validate provider configuration (fail-fast, provider-aware) ───────
+    # Only the credentials the *chosen* providers need are required, so a
+    # local-model setup never demands a Google key. See Settings.validate_runtime_config.
+    _config_problems = settings.validate_runtime_config()
+    if _config_problems:
+        logger.error("LLM provider configuration is incomplete:")
+        for _p in _config_problems:
+            logger.error("  • %s", _p)
+        raise RuntimeError(
+            "Invalid LLM provider configuration (see errors above). "
+            "Run the setup script (scripts/setup.sh or scripts/setup.ps1) "
+            "or edit .env — defaults and examples are in .env.example."
+        )
+    if not (settings.is_configured("ADZUNA_APP_ID") and settings.is_configured("ADZUNA_APP_KEY")):
+        logger.warning(
+            "ADZUNA_APP_ID/ADZUNA_APP_KEY not set — the Adzuna job source is disabled. "
+            "Other scraping sources and manual job entry still work."
+        )
+    if not settings.is_configured("CREDENTIAL_KEY"):
+        logger.warning(
+            "CREDENTIAL_KEY is not set in the environment. A key will be generated, "
+            "but in a container it cannot be persisted to .env — set CREDENTIAL_KEY in "
+            ".env (the setup script does this) so stored credentials survive restarts."
+        )
+
+    # ── Instantiate singletons ────────────────────────────────────────────
+    try:
+        from backend.applier.engine import ApplicationEngine
+        from backend.latex.applicator import CVApplicator
+        from backend.latex.pipeline import CVPipeline, LetterPipeline
+        from backend.llm.cv_editor import CVEditor
+        from backend.llm.cv_modifier import CVModifier
+        from backend.llm.job_analyzer import JobAnalyzer
+        from backend.matching.embedder import Embedder
+        from backend.matching.fit_engine import FitEngine
+        from backend.matching.matcher import JobMatcher
+        from backend.scheduler.batch_runner import BatchRunner
+        from backend.scraping.adaptive_scraper import AdaptiveScraper
+        from backend.scraping.adzuna_client import AdzunaClient
+        from backend.scraping.deduplicator import JobDeduplicator
+        from backend.scraping.orchestrator import ScrapingOrchestrator
+        from backend.scraping.scrapling_fetcher import ScraplingFetcher
+        from backend.scraping.session_manager import BrowserSessionManager
+
+        from backend.llm.factory import make_embedding_client, make_llm_client
+        gen_client = make_llm_client()
+        cv_editor = CVEditor(client=gen_client)
+        cv_pipeline = CVPipeline(
+            job_analyzer=JobAnalyzer(client=gen_client),
+            cv_modifier=CVModifier(client=gen_client),
+            cv_applicator=CVApplicator(),
+        )
+        letter_pipeline = LetterPipeline(cv_editor=cv_editor)
+        adzuna = AdzunaClient()
+        dedup = JobDeduplicator()
+        adaptive = AdaptiveScraper()
+        session_mgr = BrowserSessionManager()
+        scrapling = ScraplingFetcher(llm_client=gen_client) if settings.SCRAPLING_ENABLED else None
+        orchestrator = ScrapingOrchestrator(
+            adzuna_client=adzuna,
+            adaptive_scraper=adaptive,
+            session_mgr=session_mgr,
+            deduplicator=dedup,
+            scrapling_fetcher=scrapling,
+        )
+        matcher = JobMatcher()
+        from backend.defaults import DAILY_LIMIT
+
+        apply_engine = ApplicationEngine(daily_limit=DAILY_LIMIT)
+
+        # DB factory for the batch runner (creates a new session each call)
+        from backend.database import AsyncSessionLocal
+
+        batch_runner = BatchRunner(
+            scraper=orchestrator,
+            matcher=matcher,
+            cv_pipeline=cv_pipeline,
+            db_factory=AsyncSessionLocal,
+            fit_engine=FitEngine(),
+            embedder=Embedder(embedding_client=make_embedding_client()),
+        )
+
+        # Store on app.state for dependency injection
+        app.state.llm = gen_client
+        app.state.cv_pipeline = cv_pipeline
+        app.state.letter_pipeline = letter_pipeline
+        app.state.adzuna = adzuna
+        app.state.adaptive_scraper = adaptive
+        app.state.session_manager = session_mgr
+        app.state.scraping_orchestrator = orchestrator
+        app.state.matcher = matcher
+        app.state.apply_engine = apply_engine
+        app.state.batch_runner = batch_runner
+
+        logger.info("All singletons initialised")
+    except Exception:
+        # Fail-fast: a half-initialised app.state can boot a half-broken server
+        # (no apply_engine, no batch_runner, no orchestrator) that returns 200
+        # on /api/health and then 5xx on every real route. Surface the original
+        # traceback and abort startup so the operator sees the failure.
+        # (Re-opens deep-dive CRIT in
+        # docs/reports/2026-05-23-codebase-deep-dive/01-app-shell-and-api.md.)
+        logger.exception("Singleton init failed — aborting startup")
+        raise
+
+    # ── Scan for overdue follow-ups at startup ───────────────────────────
+    try:
+        from backend.applier.follow_up import scan_overdue
+
+        _created = await scan_overdue()
+        logger.info("Startup follow-up scan: %d event(s) created", _created)
+    except Exception as _fu_exc:
+        logger.warning(
+            "follow_up.scan_overdue failed at startup (non-fatal): %s", _fu_exc, exc_info=True
+        )
+
+    # ── Wire WS client message routing ──────────────────────────────────
+    try:
+        from backend.api import ws as ws_module
+
+        def _handle_login_done(msg: dict) -> None:
+            site = msg.get("site", "")
+            sm = getattr(app.state, "session_manager", None)
+            if sm:
+                sm.confirm_login(site)
+
+        def _handle_login_cancel(msg: dict) -> None:
+            site = msg.get("site", "")
+            sm = getattr(app.state, "session_manager", None)
+            if sm:
+                sm.cancel_login(site)
+
+        def _handle_confirm_submit(msg: dict) -> None:
+            job_id = msg.get("job_id", -1)
+            engine = getattr(app.state, "apply_engine", None)
+            if engine:
+                engine.signal_confirm(job_id)
+
+        def _handle_cancel_apply(msg: dict) -> None:
+            job_id = msg.get("job_id", -1)
+            engine = getattr(app.state, "apply_engine", None)
+            if engine:
+                engine.signal_cancel(job_id)
+
+        def _handle_patch_fields(msg: dict) -> None:
+            job_id = msg.get("job_id", -1)
+            engine = getattr(app.state, "apply_engine", None)
+            if engine:
+                engine.signal_patch_fields(job_id, msg.get("fields", {}))
+
+        ws_module.manager.register_handler("login_done", _handle_login_done)
+        ws_module.manager.register_handler("login_cancel", _handle_login_cancel)
+        ws_module.manager.register_handler("confirm_submit", _handle_confirm_submit)
+        ws_module.manager.register_handler("cancel_apply", _handle_cancel_apply)
+        ws_module.manager.register_handler("patch_fields", _handle_patch_fields)
+
+    except Exception as exc:
+        logger.warning("WS handler registration failed (non-fatal): %s", exc)
+
+    # ── Gmail token manager singleton ────────────────────────────────────
+    try:
+        from backend.gmail.auth import GmailTokenManager
+
+        app.state.gmail_token_manager = GmailTokenManager()
+    except Exception as exc:
+        logger.warning("GmailTokenManager init failed (non-fatal): %s", exc)
+
+    # ── APScheduler: poll Gmail every N minutes (Phase 1) ─────────────────
+    try:
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        scheduler = AsyncIOScheduler()
+        interval = max(1, int(settings.GMAIL_POLL_INTERVAL_MINUTES))
+        scheduler.add_job(_run_gmail_poll, "interval", minutes=interval, id="gmail_poll")
+        scheduler.start()
+        app.state.scheduler = scheduler
+        logger.info("Gmail poller scheduled every %d minute(s)", interval)
+    except Exception as exc:
+        logger.warning("Could not start Gmail scheduler: %s", exc, exc_info=True)
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down JobPilot application")
+    scheduler = getattr(app.state, "scheduler", None)
+    if scheduler is not None:
+        try:
+            scheduler.shutdown(wait=False)
+        except Exception:
+            pass
+
+
+app: Any = FastAPI(lifespan=lifespan, redirect_slashes=False)  # type: ignore[arg-type]
+
+# CORS: restrict to configured origins. Default covers local dev hosts;
+# production deployments override via JOBPILOT_ALLOWED_ORIGINS.
+_allowed_origins = [o.strip() for o in settings.jobpilot_allowed_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Include API routers (stubs implemented in backend/api/*.py)
+try:
+    import backend.api.analytics as analytics  # type: ignore
+    import backend.api.applications as applications  # type: ignore
+    import backend.api.applications_export as applications_export  # type: ignore
+    import backend.api.documents as documents  # type: ignore
+    import backend.api.correspondence as correspondence  # type: ignore
+    import backend.api.gmail as gmail  # type: ignore
+    import backend.api.gmail_auth as gmail_auth  # type: ignore
+    import backend.api.jobs as jobs  # type: ignore
+    import backend.api.queue as queue  # type: ignore
+    import backend.api.settings as api_settings  # type: ignore
+    import backend.api.today as today  # type: ignore
+    import backend.api.ws as ws  # type: ignore
+
+    app.include_router(jobs.router)
+    app.include_router(queue.router)
+    app.include_router(today.router)
+    # Export router first so /export is not shadowed by /{id} on applications router
+    app.include_router(applications_export.router)
+    app.include_router(applications.router)
+    app.include_router(documents.router)
+    app.include_router(api_settings.router)
+    app.include_router(analytics.router)
+    app.include_router(gmail_auth.router)
+    app.include_router(gmail.router)
+    app.include_router(correspondence.router)
+    # ws.py is present but may not register routes yet
+    app.include_router(ws.router)
+except Exception as e:
+    # If api package or modules don't exist yet, continue — stubs will be added
+    logger.debug("API routers not all available yet: %s", e)
+
+
+@app.get("/api/health", response_model=HealthOut)
+async def health(response: Response) -> HealthOut:
+    """Liveness/readiness probe — actually pings the DB (OBS-03).
+
+    Returns 200 when everything's healthy; 503 when the DB ping fails so
+    container/k8s health-checks can react. Exception text is never leaked
+    in the response body (EH-05) — a short error code is returned instead
+    and the full traceback is logged server-side.
+    """
+    # Tectonic check: cheap synchronous filesystem call — fine for a probe.
+    tectonic_name = "tectonic.exe" if platform.system() == "Windows" else "tectonic"
+    tectonic_bin = PROJECT_ROOT / "bin" / tectonic_name
+    tectonic = tectonic_bin.exists() or shutil.which("tectonic") is not None
+
+    llm_key_set = settings.llm_configured()
+
+    # ── DB ping ────────────────────────────────────────────────────────────
+    # Use the shared AsyncSessionLocal so we go through the existing pool
+    # rather than spinning up a fresh engine on every probe.
+    db_status: Literal["ok", "error"] = "ok"
+    db_error_code: str | None = None
+    try:
+        # Late import + module-level lookup so tests can monkeypatch
+        # `backend.database.AsyncSessionLocal` to simulate DB failure.
+        from backend import database as _db
+
+        async with _db.AsyncSessionLocal() as session:
+            result = await session.execute(text("SELECT 1"))
+            value = result.scalar_one()
+            if value != 1:
+                raise RuntimeError(f"SELECT 1 returned {value!r}")
+    except Exception as exc:
+        # Log full traceback server-side, surface only a short code (EH-05).
+        logger.warning("Health-check DB ping failed: %s", exc, exc_info=True)
+        db_status = "error"
+        db_error_code = "db_unreachable"
+
+    # T9: conservative degradation — only DB failure flips overall status,
+    # mirroring the pre-existing contract used by Docker / k8s probes. The
+    # ``tectonic`` and ``llm_key_set`` booleans surface as advisory
+    # component flags; downstream code paths handle their absence
+    # gracefully (LaTeX routes return 422, LLM calls 5xx).
+    overall_status: Literal["ok", "degraded"] = "ok" if db_status == "ok" else "degraded"
+    if db_status == "error":
+        # 503 lets orchestrators (k8s liveness, Docker healthcheck) react.
+        response.status_code = 503
+
+    tectonic_hint = (
+        None
+        if tectonic
+        else "Tectonic not found. Run: uv run python scripts/download_tectonic.py"
+    )
+
+    return HealthOut(
+        status=overall_status,
+        version="0.1.0",
+        timestamp=datetime.now(timezone.utc),
+        db=db_status,
+        tectonic=bool(tectonic),
+        llm_key_set=bool(llm_key_set),
+        tectonic_hint=tectonic_hint,
+        db_error_code=db_error_code,
+    )
+
+
+# ── Global exception handlers ────────────────────────────────────────────────
+try:
+    from backend.latex.compiler import LaTeXCompilationError as _LaTeXErr
+except ImportError:
+    _LaTeXErr = None  # type: ignore[assignment,misc]
+
+try:
+    # Provider-neutral LLM exceptions (see backend/llm/base.py) — the handlers
+    # cover every provider adapter.
+    from backend.llm.base import LLMCallFailed as _LLMCallFailed
+    from backend.llm.base import LLMJSONError as _LLMJSONErr
+    from backend.llm.base import LLMRateLimitError as _LLMRateErr
+except ImportError:
+    _LLMCallFailed = None  # type: ignore[assignment,misc]
+    _LLMJSONErr = None  # type: ignore[assignment,misc]
+    _LLMRateErr = None  # type: ignore[assignment,misc]
+
+
+if _LaTeXErr is not None:
+
+    @app.exception_handler(_LaTeXErr)
+    async def _latex_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("LaTeX compilation error: %s", exc, exc_info=True)
+        return JSONResponse(
+            status_code=422,
+            content={"error": "LaTeX compilation failed", "code": "latex_compile_error"},
+        )
+
+
+if _LLMJSONErr is not None:
+
+    @app.exception_handler(_LLMJSONErr)
+    async def _llm_json_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("LLM JSON error: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "LLM response validation failed", "code": "llm_json_error"},
+        )
+
+
+if _LLMRateErr is not None:
+
+    @app.exception_handler(_LLMRateErr)
+    async def _llm_rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("LLM rate limit: %s", exc)
+        return JSONResponse(
+            status_code=429,
+            content={
+                "error": "LLM rate limit reached — please try again shortly",
+                "code": "rate_limit",
+            },
+        )
+
+
+if _LLMCallFailed is not None:
+
+    @app.exception_handler(_LLMCallFailed)
+    async def _llm_call_failed_handler(request: Request, exc: Exception) -> JSONResponse:
+        # The adapter already builds an actionable, secret-free message
+        # (timeout → raise LLM_TIMEOUT_SECONDS/disable thinking; connection →
+        # check the endpoint). Surface it so the user can self-serve instead of
+        # seeing a bare 500.
+        logger.warning("LLM call failed: %s", exc)
+        return JSONResponse(
+            status_code=502,
+            content={"error": str(exc) or "LLM request failed", "code": "llm_unreachable"},
+        )
+
+
+@app.exception_handler(Exception)
+async def _generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.error(
+        "Unhandled exception on %s %s: %s",
+        request.method,
+        request.url.path,
+        exc,
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": "Internal server error", "code": "internal_error"},
+    )
+
+
+# SPA fallback — serve index.html for any path not handled by the API
+class SPAStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except Exception:
+            # Fall back to index.html for client-side routing
+            response = await super().get_response("index.html", scope)
+
+        # Immutable assets (hashed filenames) can be cached forever.
+        # Everything else (index.html, fallback) must revalidate so the
+        # browser always picks up new builds.
+        if "/_app/immutable/" in path:
+            response.headers["cache-control"] = "public, max-age=31536000, immutable"
+        elif not isinstance(response, NotModifiedResponse):
+            response.headers["cache-control"] = "no-cache"
+
+        return response
+
+
+# Serve frontend static files if built (don't crash if missing)
+try:
+    static_dir = PROJECT_ROOT / "frontend" / "build"
+    if static_dir.exists():
+        app.mount("/", SPAStaticFiles(directory=str(static_dir), html=True), name="static")
+    else:
+        logger.warning(
+            "Frontend build not found at %s — run 'npm run build' in frontend/", static_dir
+        )
+except Exception as e:
+    logger.warning("Could not mount static files: %s", e)

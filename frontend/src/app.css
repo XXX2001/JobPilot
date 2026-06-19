@@ -1,0 +1,187 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================================
+   JobPilot — "Soft Futuristic / Aurora" design system
+   Dark-first. One graphite-black base, a violet→cyan duotone signal, tasteful
+   glass surfaces over a slow-drifting aurora mesh. All tokens are HSL triplets
+   so Tailwind's `/<alpha>` modifiers (border-border/50, bg-card/40, …) work.
+   ========================================================================== */
+
+@layer base {
+  :root {
+    /* Light "aurora at dawn" — soft, airy, still on-brand. */
+    --background: 250 40% 99%;
+    --foreground: 245 32% 12%;
+    --muted: 245 30% 95%;
+    --muted-foreground: 245 12% 42%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 245 32% 12%;
+    --card: 0 0% 100%;
+    --card-foreground: 245 32% 12%;
+    --border: 245 26% 90%;
+    --input: 245 26% 88%;
+    --primary: 255 70% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 245 35% 95%;
+    --secondary-foreground: 255 50% 28%;
+    --accent: 252 60% 95%;
+    --accent-foreground: 255 60% 32%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --ring: 255 70% 60%;
+    --radius: 0.75rem;
+
+    /* Duotone signal — used by .text-aurora / .aurora-ring / glows. */
+    --aurora-from: 255 88% 66%;   /* violet  */
+    --aurora-to: 187 84% 47%;     /* cyan    */
+  }
+
+  .dark {
+    /* Dark "aurora at night" — the primary, designed-for experience. */
+    --background: 240 24% 5%;     /* #0A0A0F graphite-black */
+    --foreground: 250 22% 94%;
+    --muted: 245 18% 14%;
+    --muted-foreground: 245 12% 64%;
+    --popover: 245 28% 7%;
+    --popover-foreground: 250 22% 94%;
+    --card: 245 24% 9%;
+    --card-foreground: 250 22% 94%;
+    --border: 250 20% 20%;
+    --input: 250 20% 22%;
+    --primary: 255 92% 76%;       /* #A78BFA violet */
+    --primary-foreground: 250 45% 9%;
+    --secondary: 245 20% 16%;
+    --secondary-foreground: 250 22% 94%;
+    --accent: 252 38% 18%;        /* violet-tinted lifted surface (hovers/active) */
+    --accent-foreground: 250 30% 96%;
+    --destructive: 0 72% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --ring: 255 92% 76%;
+
+    --aurora-from: 255 92% 76%;   /* #A78BFA */
+    --aurora-to: 187 85% 53%;     /* #22D3EE */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* Base color lives on <html> so the fixed aurora layer (body::before,
+     z-index:-1) paints above it but behind the app, which sits on transparent
+     surfaces and lets the glow read through. */
+  html {
+    background-color: hsl(var(--background));
+  }
+
+  body {
+    background: transparent;
+    color: hsl(var(--foreground));
+    font-family: 'Hanken Grotesk', system-ui, sans-serif;
+    font-feature-settings: 'ss01', 'cv01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+  }
+
+  /* The aurora mesh. Three blurred radial blooms in the duotone, drifting
+     slowly. Low opacity so content stays legible. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: -10%;
+    z-index: -1;
+    pointer-events: none;
+    background:
+      radial-gradient(38rem 38rem at 10% -8%, hsl(var(--aurora-from) / 0.22), transparent 60%),
+      radial-gradient(34rem 34rem at 96% 6%, hsl(var(--aurora-to) / 0.16), transparent 62%),
+      radial-gradient(40rem 40rem at 62% 116%, hsl(var(--aurora-from) / 0.14), transparent 60%);
+    filter: blur(36px) saturate(125%);
+    animation: aurora-drift 32s ease-in-out infinite alternate;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    body::before { animation: none; }
+  }
+
+  /* Headings carry the display face app-wide. */
+  h1, h2, h3, h4 {
+    font-family: 'Clash Display', 'Hanken Grotesk', sans-serif;
+    letter-spacing: -0.02em;
+  }
+
+  @keyframes aurora-drift {
+    0%   { transform: translate3d(0, 0, 0) scale(1); }
+    100% { transform: translate3d(0, -4%, 0) scale(1.1); }
+  }
+}
+
+@layer components {
+  /* Distinctive display utility for hero/wordmark moments. */
+  .font-display {
+    font-family: 'Clash Display', 'Hanken Grotesk', sans-serif;
+    letter-spacing: -0.02em;
+  }
+
+  .font-mono-num {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-feature-settings: 'tnum';
+  }
+
+  /* Violet→cyan gradient text — reserve for key numerals / the wordmark. */
+  .text-aurora {
+    background-image: linear-gradient(110deg, hsl(var(--aurora-from)), hsl(var(--aurora-to)));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* Tasteful glass panel: translucent surface + blur + hairline ring, so the
+     aurora glows through. */
+  .glass {
+    background: hsl(var(--card) / 0.55);
+    backdrop-filter: blur(14px) saturate(120%);
+    -webkit-backdrop-filter: blur(14px) saturate(120%);
+    border: 1px solid hsl(var(--border) / 0.7);
+  }
+
+  /* Gradient hairline ring (1px) for the active/live element. */
+  .aurora-ring {
+    border: 1px solid transparent;
+    background:
+      linear-gradient(hsl(var(--card)), hsl(var(--card))) padding-box,
+      linear-gradient(120deg, hsl(var(--aurora-from)), hsl(var(--aurora-to))) border-box;
+  }
+
+  /* Soft outer glow for the "live" accent moment. */
+  .aurora-glow {
+    box-shadow:
+      0 0 0 1px hsl(var(--aurora-from) / 0.35),
+      0 8px 40px -12px hsl(var(--aurora-from) / 0.45);
+  }
+}
+
+@layer utilities {
+  /* Radar-style sweep used on the live/connected indicator. */
+  @keyframes ping-soft {
+    0%   { transform: scale(1);   opacity: 0.7; }
+    75%, 100% { transform: scale(2.4); opacity: 0; }
+  }
+  .animate-ping-soft::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: currentColor;
+    animation: ping-soft 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+
+  /* Thin styled scrollbar that suits the dark glass. */
+  .scrollbar-aurora {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+}

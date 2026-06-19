@@ -1,0 +1,35 @@
+"""JobAnalyzer — converts a raw JobDetails into a structured JobContext."""
+from __future__ import annotations
+
+import logging
+
+from backend.llm.cv_modifier import _strip_preamble
+from backend.llm.job_context import JobContext
+from backend.llm.prompts import JOB_ANALYZER_PROMPT
+from backend.models.schemas import JobDetails
+from backend.security.sanitizer import sanitize_for_prompt
+
+logger = logging.getLogger(__name__)
+
+
+class JobAnalyzer:
+    """Single LLM call: job description → structured JobContext."""
+
+    def __init__(self, client=None) -> None:
+        from backend.llm.factory import make_llm_client
+        self._client = client or make_llm_client()
+
+    async def analyze(self, job: JobDetails, cv_content: str = "") -> JobContext:
+        job_title = sanitize_for_prompt(job.title, 300, "title")
+        company = sanitize_for_prompt(job.company, 200, "company")
+        job_description = sanitize_for_prompt(job.description, 2000, "description")
+        # Strip LaTeX preamble from CV before sending — saves tokens
+        cv_body = _strip_preamble(cv_content) if cv_content else ""
+        cv_text = sanitize_for_prompt(cv_body, 3000, "cv") if cv_body else "Not provided."
+        prompt = JOB_ANALYZER_PROMPT.format(
+            job_title=job_title,
+            company=company,
+            job_description=job_description,
+            cv_content=cv_text,
+        )
+        return await self._client.generate_json(prompt, JobContext)

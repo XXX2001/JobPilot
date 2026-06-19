@@ -1,0 +1,57 @@
+# ─── Environment & Secrets ────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+frontend/.env
+
+# ─── Python ───────────────────────────────────────────────────────────────────
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# ─── Node / Frontend ─────────────────────────────────────────────────────────
+node_modules/
+frontend/build/
+frontend/.svelte-kit/
+
+# ─── Runtime Data ─────────────────────────────────────────────────────────────
+data/
+bin/
+*.db
+*.db-wal
+*.db-shm
+
+# ─── IDE / OS ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── OpenCode / Sisyphus ─────────────────────────────────────────────────────
+.sisyphus/
+.claude/
+
+# ─── Temporary / Generated ───────────────────────────────────────────────────
+*.png
+*.jpg
+*.jpeg
+!data/templates/*.jpeg
+captcha.md
+taste-skill/
+
+# ─── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+/tmp/
+.worktrees/

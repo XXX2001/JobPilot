@@ -1,0 +1,393 @@
+"""Tests for /api/applications, /api/documents, /api/settings, /api/analytics routes (T15)."""
+
+from __future__ import annotations
+
+from starlette.testclient import TestClient
+
+
+# ─── Applications ─────────────────────────────────────────────────────────────
+
+
+def test_list_applications_empty(test_app: TestClient):
+    """GET /api/applications returns 200 with empty list on fresh DB."""
+    resp = test_app.get("/api/applications")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "applications" in data
+    assert isinstance(data["applications"], list)
+    assert "total" in data
+
+
+def test_create_application(test_app: TestClient):
+    """POST /api/applications creates a new application record."""
+    resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "pending"},
+    )
+    assert resp.status_code == 201
+    data = resp.json()
+    assert data["method"] == "manual"
+    assert data["status"] == "pending"
+    assert "id" in data
+    assert data["events"] == []
+
+
+def test_get_application(test_app: TestClient):
+    """GET /api/applications/{id} returns the created application."""
+    # First create one. ``method='manual'`` keeps this a valid no-match
+    # application under the N2-T3 conditional CHECK
+    # (``ck_applications_job_match_required``): only manual applies may omit
+    # a ``job_match_id``. This test exercises the GET round-trip, not the
+    # apply method, so the manual path is sufficient.
+    create_resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "applied"},
+    )
+    assert create_resp.status_code == 201
+    app_id = create_resp.json()["id"]
+
+    # Then retrieve it
+    get_resp = test_app.get(f"/api/applications/{app_id}")
+    assert get_resp.status_code == 200
+    data = get_resp.json()
+    assert data["id"] == app_id
+    assert data["method"] == "manual"
+
+
+def test_get_application_not_found(test_app: TestClient):
+    """GET /api/applications/999999 returns 404."""
+    resp = test_app.get("/api/applications/999999")
+    assert resp.status_code == 404
+
+
+def test_update_application_status(test_app: TestClient):
+    """PATCH /api/applications/{id} updates status."""
+    create_resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "pending"},
+    )
+    app_id = create_resp.json()["id"]
+
+    patch_resp = test_app.patch(
+        f"/api/applications/{app_id}",
+        json={"status": "interview"},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["status"] == "interview"
+
+
+def test_patch_status_rejects_invalid_literal(test_app: TestClient):
+    """PATCH /api/applications/{id} rejects status strings outside the Literal set.
+
+    Pre-fix: ``UpdateApplicationRequest.status: Optional[str]`` had no
+    constraint, so a PATCH with ``{"status": "definitely-not-a-status"}``
+    succeeded and corrupted the lifecycle FSM (deep-dive HIGH-2 in
+    docs/reports/2026-05-23-codebase-deep-dive/01-app-shell-and-api.md).
+
+    Post-fix: ``UpdateApplicationRequest.status`` uses the module-level
+    ``ApplicationStatus`` Literal alias shared with ``CreateApplicationRequest``;
+    Pydantic returns 422 for unknown values, matching the create-time contract.
+    """
+    create_resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "pending"},
+    )
+    app_id = create_resp.json()["id"]
+
+    bad_patch = test_app.patch(
+        f"/api/applications/{app_id}",
+        json={"status": "definitely-not-a-status"},
+    )
+    assert bad_patch.status_code == 422, (
+        "PATCH with an unknown status string must be rejected — currently "
+        f"got {bad_patch.status_code}: {bad_patch.text}"
+    )
+
+    # Confirm DB row is unchanged (no partial mutation slipped through).
+    get_resp = test_app.get(f"/api/applications/{app_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["status"] == "pending"
+
+
+def test_patch_status_accepts_every_valid_literal(test_app: TestClient):
+    """Each value of the Literal must round-trip via PATCH.
+
+    Locks the create-time and update-time vocabularies together: if a value
+    is removed from one Literal but not the other, this test fails.
+    """
+    create_resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "pending"},
+    )
+    app_id = create_resp.json()["id"]
+
+    valid_statuses = [
+        "pending",
+        "applied",
+        "cancelled",
+        "failed",
+        "interview",
+        "offer",
+        "rejected",
+    ]
+    for status in valid_statuses:
+        resp = test_app.patch(
+            f"/api/applications/{app_id}",
+            json={"status": status},
+        )
+        assert resp.status_code == 200, (
+            f"Valid status {status!r} should be accepted; got "
+            f"{resp.status_code}: {resp.text}"
+        )
+        assert resp.json()["status"] == status
+
+
+def test_add_application_event(test_app: TestClient):
+    """POST /api/applications/{id}/events adds a lifecycle event."""
+    create_resp = test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "applied"},
+    )
+    app_id = create_resp.json()["id"]
+
+    event_resp = test_app.post(
+        f"/api/applications/{app_id}/events",
+        json={"event_type": "follow_up", "details": "Sent a polite nudge"},
+    )
+    assert event_resp.status_code == 201
+    data = event_resp.json()
+    assert data["event_type"] == "follow_up"
+    assert data["application_id"] == app_id
+
+
+def test_list_applications_status_filter(test_app: TestClient):
+    """GET /api/applications?status=interview filters by status."""
+    # Create one with status=interview
+    test_app.post(
+        "/api/applications",
+        json={"method": "manual", "status": "interview"},
+    )
+    resp = test_app.get("/api/applications?status=interview")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert all(a["status"] == "interview" for a in data["applications"])
+
+
+# ─── Documents ────────────────────────────────────────────────────────────────
+
+
+def test_list_documents_empty(test_app: TestClient):
+    """GET /api/documents returns 200 with empty list."""
+    resp = test_app.get("/api/documents")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+def test_get_cv_pdf_not_found(test_app: TestClient):
+    """GET /api/documents/{match_id}/cv/pdf returns 404 for unknown match."""
+    resp = test_app.get("/api/documents/999999/cv/pdf")
+    assert resp.status_code == 404
+
+
+def test_get_letter_pdf_not_found(test_app: TestClient):
+    """GET /api/documents/{match_id}/letter/pdf returns 404 for unknown match."""
+    resp = test_app.get("/api/documents/999999/letter/pdf")
+    assert resp.status_code == 404
+
+
+def test_get_diff_not_found(test_app: TestClient):
+    """GET /api/documents/{match_id}/diff returns 404 for unknown match."""
+    resp = test_app.get("/api/documents/999999/diff")
+    assert resp.status_code == 404
+
+
+def test_regenerate_not_found(test_app: TestClient):
+    """POST /api/documents/{match_id}/regenerate returns 404 for unknown match."""
+    resp = test_app.post(
+        "/api/documents/999999/regenerate",
+        json={"force": False},
+    )
+    assert resp.status_code == 404
+
+
+# ─── Settings ─────────────────────────────────────────────────────────────────
+
+
+def test_get_settings_status(test_app: TestClient):
+    """GET /api/settings/status returns setup flags."""
+    resp = test_app.get("/api/settings/status")
+    assert resp.status_code == 200
+    data = resp.json()
+    for key in (
+        "llm_key_set",
+        "adzuna_key_set",
+        "tectonic_found",
+        "base_cv_uploaded",
+        "setup_complete",
+    ):
+        assert key in data
+    assert isinstance(data["llm_key_set"], bool)
+
+
+def test_get_sources(test_app: TestClient):
+    """GET /api/settings/sources returns source configuration."""
+    resp = test_app.get("/api/settings/sources")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "adzuna" in data
+    assert "llm" in data
+
+
+def test_get_profile_not_found_initially(test_app: TestClient):
+    """GET /api/settings/profile returns 404 if profile not created yet."""
+    resp = test_app.get("/api/settings/profile")
+    # Either 404 (no profile) or 200 (if profile exists from other tests)
+    assert resp.status_code in (200, 404)
+
+
+def test_upsert_profile(test_app: TestClient):
+    """PUT /api/settings/profile creates or updates profile."""
+    resp = test_app.put(
+        "/api/settings/profile",
+        json={"full_name": "Jane Doe", "email": "jane@example.com"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["full_name"] == "Jane Doe"
+    assert data["email"] == "jane@example.com"
+
+
+def test_get_profile_after_upsert(test_app: TestClient):
+    """GET /api/settings/profile returns 200 after profile is created."""
+    # Ensure profile exists
+    test_app.put(
+        "/api/settings/profile",
+        json={"full_name": "Test User", "email": "test@example.com"},
+    )
+    resp = test_app.get("/api/settings/profile")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["email"] == "test@example.com"
+
+
+def test_upsert_search_settings(test_app: TestClient):
+    """PUT /api/settings/search creates search settings."""
+    resp = test_app.put(
+        "/api/settings/search",
+        json={
+            "keywords": {"include": ["python", "fastapi"]},
+            "remote_only": True,
+            "daily_limit": 5,
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["remote_only"] is True
+    assert data["daily_limit"] == 5
+
+
+def test_get_search_settings_after_upsert(test_app: TestClient):
+    """GET /api/settings/search returns 200 after settings are created."""
+    test_app.put(
+        "/api/settings/search",
+        json={"keywords": {"include": ["django"]}},
+    )
+    resp = test_app.get("/api/settings/search")
+    assert resp.status_code == 200
+
+
+# ─── F-Q4 regression: partial PUT must not clobber unset fields ───────────────
+
+
+def test_profile_partial_put_preserves_phone(test_app: TestClient) -> None:
+    """PUT /api/settings/profile omitting 'phone' must not overwrite an existing phone value.
+
+    This is the F-Q4 bug class: a field-by-field `if field is not None` guard
+    (or equivalently exclude_unset=True) must prevent a later partial PUT from
+    resetting previously-set optional fields to None.
+    """
+    # Step 1: set phone via a full PUT
+    r1 = test_app.put(
+        "/api/settings/profile",
+        json={"full_name": "Alice", "email": "alice@example.com", "phone": "+1-800-555-0100"},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["phone"] == "+1-800-555-0100"
+
+    # Step 2: PUT again WITHOUT phone field — phone must be preserved
+    r2 = test_app.put(
+        "/api/settings/profile",
+        json={"full_name": "Alice Updated", "email": "alice@example.com"},
+    )
+    assert r2.status_code == 200
+
+    # Step 3: GET and confirm phone survived
+    r3 = test_app.get("/api/settings/profile")
+    assert r3.status_code == 200
+    assert r3.json()["phone"] == "+1-800-555-0100", (
+        "phone was clobbered to None by a partial PUT that omitted the field"
+    )
+
+
+def test_search_partial_put_preserves_daily_limit(test_app: TestClient) -> None:
+    """PUT /api/settings/search omitting 'daily_limit' must not reset it to the default.
+
+    Same F-Q4 bug class applied to SearchSettings: a subsequent partial PUT
+    that omits daily_limit must keep the previously-saved value.
+    """
+    # Step 1: create settings with a non-default daily_limit
+    r1 = test_app.put(
+        "/api/settings/search",
+        json={"keywords": {"include": ["rust"]}, "daily_limit": 42},
+    )
+    assert r1.status_code == 200
+    assert r1.json()["daily_limit"] == 42
+
+    # Step 2: PUT again WITHOUT daily_limit — it must stay 42, not fall back to 10
+    r2 = test_app.put(
+        "/api/settings/search",
+        json={"keywords": {"include": ["rust", "go"]}},
+    )
+    assert r2.status_code == 200
+
+    # Step 3: GET and confirm daily_limit survived
+    r3 = test_app.get("/api/settings/search")
+    assert r3.status_code == 200
+    assert r3.json()["daily_limit"] == 42, (
+        "daily_limit was reset to default by a partial PUT that omitted the field"
+    )
+
+
+# ─── Analytics ────────────────────────────────────────────────────────────────
+
+
+def test_analytics_summary(test_app: TestClient):
+    """GET /api/analytics/summary returns stats."""
+    resp = test_app.get("/api/analytics/summary")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "total_apps" in data
+    assert "apps_this_week" in data
+    assert "response_rate" in data
+    assert isinstance(data["total_apps"], int)
+    assert isinstance(data["response_rate"], float)
+
+
+def test_analytics_trends_default(test_app: TestClient):
+    """GET /api/analytics/trends returns 30 days of trends."""
+    resp = test_app.get("/api/analytics/trends")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "trends" in data
+    assert "days" in data
+    assert data["days"] == 30
+    assert len(data["trends"]) == 30
+
+
+def test_analytics_trends_custom_days(test_app: TestClient):
+    """GET /api/analytics/trends?days=7 returns exactly 7 trend entries."""
+    resp = test_app.get("/api/analytics/trends?days=7")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["trends"]) == 7
+    assert data["days"] == 7

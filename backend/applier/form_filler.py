@@ -1,0 +1,545 @@
+"""Tier 1 apply: Playwright direct form filler + single LLM call.
+
+Architecture mirrors ScraplingFetcher (scraping Tier 1):
+  1. preflight_check_url()  — CAPTCHA detection (reuses captcha_handler)
+  2. launch_persistent_context() — load saved browser profile (cookies/auth)
+  3. page.goto(apply_url)
+  4. _clean_form_html()     — strip page to form skeleton
+  5. _build_fill_prompt()   — build single LLM prompt
+  6. LLM call               — returns JSON field mapping
+  7. page.fill() / page.set_input_files()
+  8. broadcast apply_review WS
+  9. wait confirm/cancel
+  10. page.click(submit_selector)
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Optional
+
+from backend.config import settings
+from backend.defaults import (
+    MAX_LEN_ADDITIONAL_ANSWERS,
+    MAX_LEN_EMAIL,
+    MAX_LEN_FULL_NAME,
+    MAX_LEN_LOCATION,
+    MAX_LEN_PHONE,
+)
+from backend.security.sanitizer import sanitize_for_prompt
+
+if TYPE_CHECKING:
+    from backend.llm.base import LLMClient
+
+logger = logging.getLogger(__name__)
+
+_MAX_FORM_CHARS = 15_000
+
+# Tags to strip — keep form skeleton only
+_NOISE_TAGS = {"script", "style", "nav", "footer", "header", "noscript", "svg", "iframe"}
+# Attributes to keep on form elements
+_KEEP_ATTRS = {"id", "name", "type", "placeholder", "required", "for", "class", "action", "method"}
+
+
+class PlaywrightFormFiller:
+    """Tier 1 apply: direct Playwright DOM manipulation + single LLM call.
+
+    Raises on any unrecoverable error so the caller can fall back to Tier 2.
+    """
+
+    def __init__(
+        self,
+        llm_client: "LLMClient",
+        on_review: Optional[Callable[..., None]] = None,
+        on_get_patches: Optional[Callable[[int], dict]] = None,
+    ) -> None:
+        self._llm = llm_client
+        # Engine callback invoked at apply_review broadcast time so the
+        # pending-review snapshot is cached for HTTP re-fetch.
+        self._on_review = on_review
+        # Engine accessor returning the user's field edits to re-fill before
+        # submit (selector→value). Injected the same way as ``on_review``.
+        self._on_get_patches = on_get_patches
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    async def fill_and_submit(
+        self,
+        apply_url: str,
+        job_id: int,
+        full_name: str = "",
+        email: str = "",
+        phone: str = "",
+        location: str = "",
+        additional_answers: str = "",
+        cv_pdf: Path | None = None,
+        letter_pdf: Path | None = None,
+        confirm_event: asyncio.Event | None = None,
+        cancel_event: asyncio.Event | None = None,
+    ) -> dict:
+        """Fill form, wait for user review, then submit.
+
+        Returns a dict with keys: status, filled_fields, screenshot_b64.
+        Raises on failure so AutoApplyStrategy can fall back to Tier 2.
+        """
+        from playwright.async_api import async_playwright
+
+        from backend.applier.captcha_handler import (
+            check_and_handle_captcha,
+            site_profile_key,
+        )
+
+        site_key = site_profile_key(apply_url)
+        profile_dir = Path(settings.jobpilot_data_dir) / "browser_profiles" / site_key
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        import platform as _platform
+        launch_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--no-first-run",
+            "--disable-infobars",
+        ]
+        if _platform.system() == "Windows":
+            launch_args.append("--disable-gpu")
+        else:
+            launch_args.append("--disable-dev-shm-usage")
+
+        pw = await async_playwright().start()
+        context = None
+        try:
+            context = await pw.chromium.launch_persistent_context(
+                user_data_dir=profile_dir.as_posix(),
+                headless=False,
+                args=launch_args,
+            )
+
+            # Apply stealth if available
+            try:
+                from playwright_stealth import stealth_async  # type: ignore
+                page = await context.new_page()
+                await stealth_async(page)
+            except ImportError:
+                page = await context.new_page()
+
+            await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
+
+            # Phase 1: inline CAPTCHA check within this browser (no separate window).
+            # T4a: forward the cancel_event so the user can short-circuit a
+            # long captcha wait without first solving the challenge.
+            captcha_handled = await check_and_handle_captcha(
+                page, job_id=job_id, cancel_event=cancel_event
+            )
+            if captcha_handled:
+                # If the user cancelled during the captcha wait, exit cleanly
+                # with "cancelled" rather than crashing the strategy.
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info(
+                        "[Tier 1] CAPTCHA wait cancelled by user for job_id=%d", job_id
+                    )
+                    return {
+                        "status": "cancelled",
+                        "filled_fields": {},
+                        "screenshot_b64": None,
+                    }
+                # Re-check after resolution — if still blocked, give up.
+                from backend.applier.captcha_handler import detect_any_block
+                if await detect_any_block(page):
+                    raise RuntimeError(f"CAPTCHA on {apply_url} could not be resolved")
+
+            # Phase 2: extract form structure + single LLM call
+            html = await page.content()
+            form_content = self._clean_form_html(html)
+            prompt = self._build_fill_prompt(
+                form_content=form_content,
+                full_name=full_name,
+                email=email,
+                phone=phone,
+                location=location,
+                additional_answers=additional_answers or None,
+                has_cv=cv_pdf is not None and cv_pdf.exists(),
+                has_letter=letter_pdf is not None and letter_pdf.exists(),
+            )
+
+            raw = await self._llm.generate_text(prompt)
+            mapping = self._parse_llm_response(raw)
+
+            # Phase 3: fill fields
+            filled_fields: dict[str, str] = {}
+            for field in mapping.get("fields", []):
+                sel = field.get("selector", "")
+                val = field.get("value", "")
+                if not sel or not val:
+                    continue
+                try:
+                    await page.fill(sel, val, timeout=3_000)
+                    filled_fields[sel] = val
+                except Exception as exc:
+                    logger.warning("Form fill failed: selector=%r: %s", sel, exc)
+
+            # Phase 4: file uploads
+            if cv_pdf and cv_pdf.exists():
+                for fi in mapping.get("file_inputs", []):
+                    if fi.get("file") == "cv":
+                        try:
+                            await page.set_input_files(fi["selector"], str(cv_pdf), timeout=3_000)
+                            logger.info("Uploaded CV: %s", cv_pdf)
+                        except Exception as exc:
+                            logger.warning("CV upload failed: selector=%r: %s", fi["selector"], exc)
+
+            if letter_pdf and letter_pdf.exists():
+                for fi in mapping.get("file_inputs", []):
+                    if fi.get("file") == "letter":
+                        try:
+                            await page.set_input_files(fi["selector"], str(letter_pdf), timeout=3_000)
+                            logger.info("Uploaded letter: %s", letter_pdf)
+                        except Exception as exc:
+                            logger.warning("Letter upload failed: selector=%r: %s", fi["selector"], exc)
+
+            # Phase 5: screenshot
+            screenshot_b64: str | None = None
+            try:
+                raw_ss = await page.screenshot(full_page=False)
+                import base64
+                screenshot_b64 = base64.b64encode(raw_ss).decode()
+            except Exception:
+                pass
+
+            # Phase 6: broadcast apply_review for user inspection
+            try:
+                from backend.api.ws import manager as ws_manager  # type: ignore
+                from backend.api.ws_models import ApplyReview  # type: ignore
+                await ws_manager.broadcast(
+                    ApplyReview(
+                        type="apply_review",
+                        job_id=job_id,
+                        filled_fields=filled_fields,
+                        screenshot_base64=screenshot_b64,
+                    )
+                )
+            except Exception as exc:
+                logger.warning("Could not broadcast apply_review: %s", exc)
+
+            # Cache the same snapshot the WS broadcast just sent so a
+            # reconnecting client can re-fetch it over HTTP.
+            if self._on_review is not None:
+                self._on_review(
+                    job_id,
+                    filled_fields=filled_fields,
+                    screenshot_b64=screenshot_b64,
+                )
+
+            # Phase 7: wait for confirm or cancel
+            if confirm_event is None:
+                confirm_event = asyncio.Event()
+            if cancel_event is None:
+                cancel_event = asyncio.Event()
+
+            done, _ = await asyncio.wait(
+                [
+                    asyncio.ensure_future(confirm_event.wait()),
+                    asyncio.ensure_future(cancel_event.wait()),
+                ],
+                timeout=1800,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                raise RuntimeError("Confirmation timed out after 30 minutes")
+
+            if not confirm_event.is_set():
+                return {"status": "cancelled", "filled_fields": filled_fields, "screenshot_b64": screenshot_b64}
+
+            # Phase 8: apply user edits (patch_fields) then submit. Patches are
+            # best-effort — a single failing re-fill must not abort the submit.
+            await self._apply_patches(page, job_id)
+
+            submit_sel = mapping.get("submit_selector", "button[type=submit]")
+            await page.click(submit_sel, timeout=5_000)
+            logger.info("[Tier 1] Submitted application for job_id=%d", job_id)
+
+            return {"status": "applied", "filled_fields": filled_fields, "screenshot_b64": screenshot_b64}
+
+        finally:
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            try:
+                await pw.stop()
+            except Exception:
+                pass
+
+    async def _apply_patches(self, page, job_id: int) -> None:
+        """Re-fill any user-edited review fields for *job_id* before submit.
+
+        Best-effort: a single failing ``page.fill`` is logged as a WARNING
+        (mirroring the Phase-3 fill failures) and never aborts the submit.
+        """
+        if self._on_get_patches is None:
+            return
+        patches = self._on_get_patches(job_id) or {}
+        for sel, val in patches.items():
+            if not sel:
+                continue
+            try:
+                await page.fill(sel, val, timeout=3_000)
+            except Exception as exc:
+                logger.warning("Patch fill failed: selector=%r: %s", sel, exc)
+
+    async def fill_only(
+        self,
+        apply_url: str,
+        full_name: str = "",
+        email: str = "",
+        phone: str = "",
+        location: str = "",
+        cv_pdf: Path | None = None,
+        letter_pdf: Path | None = None,
+    ) -> dict:
+        """Fill form fields and stop — for assisted apply (user submits manually).
+
+        Returns dict with status='assisted', filled_fields.
+        Raises on failure so AssistedApplyStrategy can fall back to browser-use.
+        """
+        from playwright.async_api import async_playwright
+
+        from backend.applier.captcha_handler import site_profile_key
+
+        site_key = site_profile_key(apply_url)
+        profile_dir = Path(settings.jobpilot_data_dir) / "browser_profiles" / site_key
+        profile_dir.mkdir(parents=True, exist_ok=True)
+
+        launch_args = [
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+        ]
+
+        pw = await async_playwright().start()
+        context = None
+        try:
+            context = await pw.chromium.launch_persistent_context(
+                user_data_dir=profile_dir.as_posix(),
+                headless=False,
+                args=launch_args,
+            )
+            try:
+                from playwright_stealth import stealth_async  # type: ignore
+                page = await context.new_page()
+                await stealth_async(page)
+            except ImportError:
+                page = await context.new_page()
+
+            await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
+
+            html = await page.content()
+            form_content = self._clean_form_html(html)
+            prompt = self._build_fill_prompt(
+                form_content=form_content,
+                full_name=full_name,
+                email=email,
+                phone=phone,
+                location=location,
+                additional_answers=None,
+                has_cv=cv_pdf is not None and cv_pdf.exists(),
+                has_letter=letter_pdf is not None and letter_pdf.exists(),
+            )
+
+            raw = await self._llm.generate_text(prompt)
+            mapping = self._parse_llm_response(raw)
+
+            filled_fields: dict[str, str] = {}
+            for field in mapping.get("fields", []):
+                sel = field.get("selector", "")
+                val = field.get("value", "")
+                if not sel or not val:
+                    continue
+                try:
+                    await page.fill(sel, val, timeout=3_000)
+                    filled_fields[sel] = val
+                except Exception as exc:
+                    logger.warning("Form fill failed: selector=%r: %s", sel, exc)
+
+            if cv_pdf and cv_pdf.exists():
+                for fi in mapping.get("file_inputs", []):
+                    if fi.get("file") == "cv":
+                        try:
+                            await page.set_input_files(fi["selector"], str(cv_pdf), timeout=3_000)
+                        except Exception as exc:
+                            logger.warning("CV upload failed: selector=%r: %s", fi["selector"], exc)
+
+            if letter_pdf and letter_pdf.exists():
+                for fi in mapping.get("file_inputs", []):
+                    if fi.get("file") == "letter":
+                        try:
+                            await page.set_input_files(fi["selector"], str(letter_pdf), timeout=3_000)
+                        except Exception as exc:
+                            logger.warning("Letter upload failed: selector=%r: %s", fi["selector"], exc)
+
+            logger.info("[Tier 1 assisted] Form pre-filled for %s", apply_url)
+            # Keep browser open — user completes submission manually
+            context = None  # prevent finally from closing it
+            return {"status": "assisted", "filled_fields": filled_fields}
+
+        finally:
+            if context:
+                try:
+                    await context.close()
+                except Exception:
+                    pass
+            try:
+                await pw.stop()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Pure helpers (testable without browser/LLM)
+    # ------------------------------------------------------------------
+
+    def _clean_form_html(self, html: str) -> str:
+        """Strip page HTML to form skeleton only (~15 KB max).
+
+        Same pipeline as ScraplingFetcher._clean_html but scoped to forms.
+        """
+        try:
+            from lxml.html import fromstring  # type: ignore
+            from lxml import etree  # type: ignore
+            from markdownify import markdownify  # type: ignore
+        except ImportError:
+            logger.warning("[Tier 1] lxml/markdownify not installed — using raw truncation")
+            return html[:_MAX_FORM_CHARS]
+
+        try:
+            root = fromstring(html)
+        except Exception as exc:
+            logger.warning("[Tier 1] HTML parse error: %s", exc)
+            return html[:_MAX_FORM_CHARS]
+
+        # Remove noise tags
+        for tag in _NOISE_TAGS:
+            for elem in root.findall(f".//{tag}"):
+                parent = elem.getparent()
+                if parent is not None:
+                    parent.remove(elem)
+
+        # Strip non-essential attributes
+        for elem in root.iter():
+            attribs = dict(elem.attrib)
+            for attr in attribs:
+                if attr not in _KEEP_ATTRS:
+                    del elem.attrib[attr]
+
+        try:
+            html_str = etree.tostring(root, encoding="unicode", method="html")
+            md = markdownify(html_str, heading_style="ATX", strip=["img"])
+        except Exception as exc:
+            logger.warning("[Tier 1] markdownify failed: %s", exc)
+            md = ""
+
+        # markdownify drops void elements like <input> — fall back to cleaned HTML
+        if not md or not md.strip():
+            try:
+                md = etree.tostring(root, encoding="unicode", method="html")
+            except Exception:
+                md = html[:_MAX_FORM_CHARS]
+
+        md = re.sub(r"\n{3,}", "\n\n", md)
+        md = re.sub(r"[ \t]+", " ", md)
+        return md[:_MAX_FORM_CHARS]
+
+    def _build_fill_prompt(
+        self,
+        form_content: str,
+        full_name: str,
+        email: str,
+        phone: str,
+        location: str,
+        additional_answers: str | None,
+        has_cv: bool,
+        has_letter: bool,
+    ) -> str:
+        """Build the single LLM prompt for form field mapping."""
+        lines = [
+            "You are a job application form analyst.",
+            "Analyse the form content below and return a JSON object with instructions",
+            "for filling every visible field. Use CSS selectors.",
+            "",
+            "Applicant details:",
+            f"  Name: {sanitize_for_prompt(full_name, MAX_LEN_FULL_NAME, 'full_name')}",
+            f"  Email: {sanitize_for_prompt(email, MAX_LEN_EMAIL, 'email')}",
+            f"  Phone: {sanitize_for_prompt(phone, MAX_LEN_PHONE, 'phone')}",
+            f"  Location: {sanitize_for_prompt(location, MAX_LEN_LOCATION, 'location')}",
+        ]
+
+        if additional_answers:
+            try:
+                parsed = json.loads(additional_answers)
+                lines.append("")
+                lines.append("Additional answers for custom questions:")
+                for k, v in (parsed.items() if isinstance(parsed, dict) else []):
+                    sk = sanitize_for_prompt(str(k), MAX_LEN_LOCATION, "answer_key")
+                    sv = sanitize_for_prompt(str(v), MAX_LEN_ADDITIONAL_ANSWERS, "answer_value")
+                    lines.append(f"  {sk}: {sv}")
+            except Exception:
+                lines.append(
+                    f"  Additional context: "
+                    f"{sanitize_for_prompt(additional_answers, 500, 'additional_answers')}"
+                )
+
+        file_note = []
+        if has_cv:
+            file_note.append("CV/resume (file='cv')")
+        if has_letter:
+            file_note.append("cover letter (file='letter')")
+        if file_note:
+            lines += ["", f"Files available to upload: {', '.join(file_note)}"]
+
+        lines += [
+            "",
+            "Return ONLY valid JSON — no markdown, no explanation — with this exact structure:",
+            '{',
+            '  "fields": [{"selector": "CSS_SELECTOR", "value": "VALUE_TO_FILL"}],',
+            '  "file_inputs": [{"selector": "CSS_SELECTOR", "file": "cv_or_letter"}],',
+            '  "submit_selector": "CSS_SELECTOR_FOR_SUBMIT_BUTTON"',
+            '}',
+            "",
+            "If a field cannot be identified, omit it. Do not invent selectors.",
+            "",
+            "Form content:",
+            form_content,
+        ]
+        return "\n".join(lines)
+
+    def _parse_llm_response(self, raw: str) -> dict:
+        """Extract and parse JSON from the LLM response.
+
+        Returns a safe default dict on any parse failure.
+        """
+        default: dict = {"fields": [], "file_inputs": [], "submit_selector": "button[type=submit]"}
+        if not raw:
+            return default
+        # Strip markdown code fences if present
+        cleaned = re.sub(r"```(?:json)?\s*", "", raw).strip().rstrip("`").strip()
+        # Find first JSON object
+        m = re.search(r"\{.*\}", cleaned, re.DOTALL)
+        if not m:
+            logger.warning("[Tier 1] No JSON found in LLM response")
+            return default
+        try:
+            parsed = json.loads(m.group())
+            if not isinstance(parsed, dict):
+                return default
+            parsed.setdefault("fields", [])
+            parsed.setdefault("file_inputs", [])
+            parsed.setdefault("submit_selector", "button[type=submit]")
+            return parsed
+        except json.JSONDecodeError as exc:
+            logger.warning("[Tier 1] JSON parse error: %s", exc)
+            return default
+
+
+__all__ = ["PlaywrightFormFiller"]

@@ -2,7 +2,7 @@
  * Pure helpers powering the `/onboarding` first-run stepper (M2-T4).
  *
  * The onboarding flow has four steps:
- *   1. API keys      — driven by `gemini_key_set` + `tectonic_found`
+ *   1. API keys      — driven by `llm_key_set` + `tectonic_found`
  *   2. CV upload     — driven by `base_cv_uploaded`
  *   3. Keywords      — no `SetupStatus` flag (UI-only saving)
  *   4. Source + run  — no `SetupStatus` flag (UI-only action)
@@ -27,7 +27,7 @@ export const ONBOARDING_TOTAL_STEPS = 4;
  * satisfied we resume at step 3 — the first actionable UI-only step.
  */
 export function firstIncompleteStep(status: SetupStatus): number {
-	if (!status.gemini_key_set || !status.tectonic_found) return 1;
+	if (!status.llm_key_set || !status.tectonic_found) return 1;
 	if (!status.base_cv_uploaded) return 2;
 	return 3;
 }

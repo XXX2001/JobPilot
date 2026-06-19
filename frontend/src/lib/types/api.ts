@@ -103,7 +103,7 @@ export interface Application {
  * settings page (System tab status row).
  */
 export interface SetupStatus {
-	gemini_key_set: boolean;
+	llm_key_set: boolean;
 	adzuna_key_set: boolean;
 	tectonic_found: boolean;
 	base_cv_uploaded: boolean;

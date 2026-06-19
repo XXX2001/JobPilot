@@ -14,11 +14,13 @@
 	import {
 		LayoutDashboard,
 		KanbanSquare,
+		Route,
 		FileText,
 		Mail,
 		Settings,
 		BarChart2,
 		Inbox,
+		Compass,
 		Sun,
 		Moon,
 		Wifi,
@@ -40,7 +42,7 @@
 	const navLinks = [
 		{ href: '/', label: 'Today', icon: LayoutDashboard },
 		{ href: '/queue', label: 'Queue', icon: KanbanSquare },
-		{ href: '/tracker', label: 'Tracker', icon: KanbanSquare },
+		{ href: '/tracker', label: 'Tracker', icon: Route },
 		{ href: '/inbox', label: 'Inbox', icon: Inbox },
 		{ href: '/cv', label: 'CV Manager', icon: FileText },
 		{ href: '/letters', label: 'Letters', icon: Mail },
@@ -101,12 +103,17 @@
 	</div>
 {/if}
 
-<div class="flex h-screen bg-background text-foreground overflow-hidden">
+<div class="flex h-screen text-foreground overflow-hidden">
 	<!-- Sidebar -->
-	<aside class="w-[220px] flex-shrink-0 border-r border-border flex flex-col py-4 px-3 gap-1">
-		<!-- Logo -->
-		<div class="px-3 py-2 mb-3">
-			<span class="text-lg font-semibold tracking-tight">JobPilot</span>
+	<aside class="glass w-[224px] flex-shrink-0 border-y-0 border-l-0 border-r flex flex-col py-5 px-3 gap-0.5">
+		<!-- Wordmark -->
+		<div class="px-3 py-2 mb-4 flex items-center gap-2.5">
+			<span
+				class="grid h-8 w-8 place-items-center rounded-xl aurora-ring aurora-glow text-primary"
+			>
+				<Compass size={17} strokeWidth={2.25} />
+			</span>
+			<span class="font-display text-[1.35rem] font-semibold leading-none text-aurora">JobPilot</span>
 		</div>
 
 		<!-- Nav links -->
@@ -114,12 +121,16 @@
 			{@const isActive = $page.url.pathname === link.href}
 			<a
 				href={link.href}
-				class="flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors
+				class="group relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200
 					{isActive
-					? 'bg-accent text-accent-foreground font-medium'
-					: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
+					? 'glass aurora-ring text-foreground font-medium shadow-aurora'
+					: 'text-muted-foreground hover:text-foreground hover:bg-accent/60'}"
 			>
-				<link.icon size={16} />
+				{#if isActive}
+					<span class="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-[3px] rounded-full"
+						style="background:linear-gradient(hsl(var(--aurora-from)),hsl(var(--aurora-to)))"></span>
+				{/if}
+				<link.icon size={16} class={isActive ? 'text-primary' : 'transition-transform group-hover:scale-110'} />
 				{link.label}
 			</a>
 		{/each}
@@ -128,15 +139,18 @@
 		<div class="flex-1"></div>
 
 		<!-- WS status indicator -->
-		<div class="px-3 py-2 flex items-center gap-2 text-xs text-muted-foreground">
+		<div class="px-3 py-2 flex items-center gap-2.5 text-xs text-muted-foreground">
 			{#if $wsStatus === 'connected'}
-				<Wifi size={14} class="text-green-500" />
-				<span>Connected</span>
+				<span class="relative inline-flex h-2 w-2 items-center justify-center">
+					<span class="animate-ping-soft text-emerald-400"></span>
+					<span class="relative h-2 w-2 rounded-full bg-emerald-400"></span>
+				</span>
+				<span>Live</span>
 			{:else if $wsStatus === 'reconnecting'}
-				<Loader2 size={14} class="animate-spin text-yellow-500" />
+				<Loader2 size={14} class="animate-spin text-amber-400" />
 				<span>Reconnecting…</span>
 			{:else}
-				<WifiOff size={14} class="text-red-500" />
+				<WifiOff size={14} class="text-red-400" />
 				<span>Offline</span>
 			{/if}
 		</div>

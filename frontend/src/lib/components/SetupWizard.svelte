@@ -32,7 +32,7 @@
 	let error = $state('');
 
 	const envSnippet = `# .env file (project root)
-GOOGLE_API_KEY=your_gemini_api_key_here
+LLM_API_KEY=your_llm_api_key_here
 ADZUNA_APP_ID=your_adzuna_app_id
 ADZUNA_APP_KEY=your_adzuna_app_key`;
 
@@ -164,12 +164,12 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 
 					<div class="space-y-2">
 						<div class="flex items-center gap-2 text-xs">
-							{#if status.gemini_key_set}
+							{#if status.llm_key_set}
 								<CheckCircle2 size={13} class="text-green-500" />
-								<span>Gemini API key set</span>
+								<span>LLM API key set</span>
 							{:else}
 								<AlertCircle size={13} class="text-yellow-500" />
-								<span class="text-muted-foreground">Gemini API key missing</span>
+								<span class="text-muted-foreground">LLM API key missing</span>
 							{/if}
 						</div>
 						<div class="flex items-center gap-2 text-xs">
@@ -183,7 +183,7 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						</div>
 					</div>
 
-					{#if !status.gemini_key_set || !status.adzuna_key_set}
+					{#if !status.llm_key_set || !status.adzuna_key_set}
 						<div>
 							<p class="text-xs text-muted-foreground mb-2">Copy this snippet to your <code class="bg-muted px-1 rounded">.env</code> file:</p>
 							<pre class="text-xs font-mono bg-muted p-3 rounded-lg overflow-x-auto text-muted-foreground leading-relaxed">{envSnippet}</pre>
@@ -205,13 +205,14 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						</div>
 					{:else}
 						<label class="block border-2 border-dashed border-border rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 transition-colors relative">
-							<input type="file" accept=".tex,.cls" onchange={handleCvUpload} class="sr-only" />
+							<input type="file" accept=".tex,.cls,.pdf,.docx" onchange={handleCvUpload} class="sr-only" />
 							<div class="flex flex-col items-center gap-2">
 								<Upload size={24} class="text-muted-foreground" />
 								{#if cvUploading}
-									<p class="text-sm text-muted-foreground">Uploading…</p>
+									<p class="text-sm text-muted-foreground">Uploading / converting…</p>
 								{:else}
-									<p class="text-sm font-medium">Click to upload .tex file</p>
+									<p class="text-sm font-medium">Click to upload your CV (.tex, .pdf or .docx)</p>
+									<p class="text-xs text-muted-foreground">PDF/DOCX are converted to LaTeX with your LLM (may take a moment).</p>
 								{/if}
 							</div>
 						</label>

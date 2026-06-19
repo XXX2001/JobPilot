@@ -80,22 +80,22 @@
 </script>
 
 <!-- Header -->
-<div class="mb-5 flex items-center justify-between">
-	<div>
-		<h1 class="text-xl font-semibold tracking-tight">Today</h1>
-		<p class="text-muted-foreground mt-0.5 text-xs">Your job search at a glance</p>
+<div class="mb-6 flex items-end justify-between">
+	<div class="animate-fade-in-up">
+		<h1 class="font-display text-3xl font-semibold tracking-tight">Today</h1>
+		<p class="text-muted-foreground mt-1 text-sm">Your job search, at a glance.</p>
 	</div>
 	<div class="flex items-center gap-2">
 		<a
 			href="/queue"
-			class="border-border hover:bg-accent flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors"
+			class="hover:bg-accent/60 flex items-center gap-2 rounded-lg border border-border/70 px-3 py-1.5 text-xs transition-colors"
 		>
 			Classic queue →
 		</a>
 		<button
 			onclick={refresh}
 			disabled={refreshing || loading}
-			class="border-border hover:bg-accent flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs transition-colors disabled:opacity-50"
+			class="glass hover:shadow-aurora flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs transition-all disabled:opacity-50"
 		>
 			<RefreshCw size={13} class={refreshing ? 'animate-spin' : ''} />
 			{refreshing ? 'Refreshing…' : 'Refresh'}
@@ -115,33 +115,59 @@
 {/if}
 
 {#if loading}
-	<div class="flex flex-col items-center justify-center gap-4 py-20">
-		<div class="relative">
-			<div
-				class="h-10 w-10 rounded-full border-2 border-primary/20 border-t-primary animate-spin"
-			></div>
-		</div>
+	<div class="flex flex-col items-center justify-center gap-4 py-24">
+		<div class="aurora-spinner"></div>
+		<p class="text-muted-foreground text-xs">Loading your flight deck…</p>
 	</div>
 {:else if data}
 	<div class="max-w-3xl space-y-8">
 		<!-- What needs attention -->
 		{#if data.blocked_actions.actions.length > 0}
-			<BlockedActionsStrip actions={data.blocked_actions.actions} />
-			<hr class="border-border" />
+			<div class="animate-fade-in-up" style="animation-delay:60ms">
+				<BlockedActionsStrip actions={data.blocked_actions.actions} />
+			</div>
+			<hr class="border-border/60" />
 		{/if}
 
 		<!-- What's new since last visit -->
-		<NewMatchesFeed
-			highConfidence={data.new_matches.high_confidence}
-			worthReviewing={data.new_matches.worth_reviewing}
-			skipped={data.new_matches.skipped}
-			total={data.new_matches.total}
-			since={data.new_matches.since}
-		/>
+		<div class="animate-fade-in-up" style="animation-delay:120ms">
+			<NewMatchesFeed
+				highConfidence={data.new_matches.high_confidence}
+				worthReviewing={data.new_matches.worth_reviewing}
+				skipped={data.new_matches.skipped}
+				total={data.new_matches.total}
+				since={data.new_matches.since}
+			/>
+		</div>
 
-		<hr class="border-border" />
+		<hr class="border-border/60" />
 
 		<!-- How am I doing this week -->
-		<WeekStats stats={data.week_stats} />
+		<div class="animate-fade-in-up" style="animation-delay:180ms">
+			<WeekStats stats={data.week_stats} />
+		</div>
 	</div>
 {/if}
+
+<style>
+	/* Aurora conic spinner — duotone ring masked into a thin stroke. */
+	.aurora-spinner {
+		width: 2.75rem;
+		height: 2.75rem;
+		border-radius: 9999px;
+		background: conic-gradient(
+			from 0deg,
+			hsl(var(--aurora-from)),
+			hsl(var(--aurora-to)),
+			hsl(var(--aurora-from))
+		);
+		-webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+		mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+		animation: spin 0.9s linear infinite;
+	}
+	@keyframes spin {
+		to {
+			transform: rotate(1turn);
+		}
+	}
+</style>

@@ -1,4 +1,3 @@
-import { fontFamily } from "tailwindcss/defaultTheme";
 import tailwindcssAnimate from "tailwindcss-animate";
 
 /** @type {import('tailwindcss').Config} */
@@ -16,8 +15,12 @@ const config = {
 		},
 		extend: {
 			colors: {
-				border: "var(--border)",
+				border: "hsl(var(--border) / <alpha-value>)",
 				input: "hsl(var(--input) / <alpha-value>)",
+				aurora: {
+					from: "hsl(var(--aurora-from) / <alpha-value>)",
+					to: "hsl(var(--aurora-to) / <alpha-value>)",
+				},
 				ring: "hsl(var(--ring) / <alpha-value>)",
 				background: "hsl(var(--background) / <alpha-value>)",
 				foreground: "hsl(var(--foreground) / <alpha-value>)",
@@ -38,7 +41,7 @@ const config = {
 					foreground: "hsl(var(--muted-foreground) / <alpha-value>)"
 				},
 				accent: {
-					DEFAULT: "var(--accent)",
+					DEFAULT: "hsl(var(--accent) / <alpha-value>)",
 					foreground: "hsl(var(--accent-foreground) / <alpha-value>)"
 				},
 				popover: {
@@ -67,7 +70,12 @@ const config = {
 				sm: "calc(var(--radius) - 4px)"
 			},
 			fontFamily: {
-				sans: ["Inter", "system-ui", "sans-serif"],
+				sans: ["Hanken Grotesk", "system-ui", "sans-serif"],
+				display: ["Clash Display", "Hanken Grotesk", "sans-serif"],
+				mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+			},
+			boxShadow: {
+				"aurora": "0 8px 40px -12px hsl(var(--aurora-from) / 0.45)",
 			},
 			keyframes: {
 				"accordion-down": {

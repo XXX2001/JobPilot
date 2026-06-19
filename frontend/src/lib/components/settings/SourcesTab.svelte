@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { apiFetch } from '$lib/api';
-	import { AlertCircle, CheckCircle2, Info, Globe, Trash2, Code, Cpu, Plus } from 'lucide-svelte';
+	import { AlertCircle, CheckCircle2, Info, Globe, Trash2, Code, Cpu, Plus, Loader2, Zap, XCircle } from 'lucide-svelte';
 
 	interface Sources {
 		adzuna: { configured: boolean; app_id_hint?: string };
-		gemini: { configured: boolean };
+		llm: { configured: boolean };
 	}
 
 	interface CustomSiteItem {
@@ -25,6 +25,52 @@
 	let customSitesLoading = $state(true);
 	let newCustomSite = $state({ name: '', url: '', display_name: '' });
 	let addingCustomSite = $state(false);
+
+	interface ProbeResult {
+		ok: boolean;
+		latency_ms?: number;
+		detail?: string;
+		error?: string;
+	}
+	interface TestConnResult {
+		generation: ProbeResult;
+		embedding: ProbeResult;
+	}
+	let testing = $state(false);
+	let testResult = $state<TestConnResult | null>(null);
+	let detectedModels = $state<string[]>([]);
+
+	// Typed rows so the {#each} below doesn't widen to string | ProbeResult.
+	let testRows = $derived(
+		testResult
+			? [
+					{ label: 'Generation', r: testResult.generation },
+					{ label: 'Embeddings', r: testResult.embedding }
+				]
+			: []
+	);
+
+	async function testConnection() {
+		testing = true;
+		testResult = null;
+		detectedModels = [];
+		try {
+			testResult = await apiFetch<TestConnResult>('/api/settings/test-connection', {
+				method: 'POST'
+			});
+			// Best-effort: list models the configured local endpoint advertises.
+			try {
+				const m = await apiFetch<{ models: string[] }>('/api/settings/models?role=llm');
+				detectedModels = m.models ?? [];
+			} catch {
+				//
+			}
+		} catch (e: any) {
+			error = e.message ?? 'Connection test failed';
+		} finally {
+			testing = false;
+		}
+	}
 
 	async function loadSources() {
 		sourcesLoading = true;
@@ -141,7 +187,7 @@
 					</div>
 				</div>
 
-				<!-- Gemini -->
+				<!-- LLM provider -->
 				<div class="p-5 bg-card/40 border border-border/50 rounded-xl shadow-sm relative overflow-hidden group hover:border-border transition-colors">
 					<div class="absolute top-0 right-0 w-32 h-32 bg-accent/5 rounded-full blur-2xl -mr-10 -mt-10 group-hover:bg-accent/10 transition-colors"></div>
 					<div class="relative flex flex-col h-full">
@@ -151,11 +197,11 @@
 									<Cpu size={18} class="text-accent-foreground" />
 								</div>
 								<div>
-									<h3 class="text-base font-semibold">Google Gemini</h3>
+									<h3 class="text-base font-semibold">LLM Provider</h3>
 									<p class="text-xs text-muted-foreground">LLM Engine</p>
 								</div>
 							</div>
-							{#if sources?.gemini?.configured}
+							{#if sources?.llm?.configured}
 								<span class="flex items-center gap-1 text-[10px] uppercase tracking-wider font-bold text-green-400 bg-green-500/10 border border-green-500/20 px-2 py-1 rounded-md">
 									<CheckCircle2 size={12} /> Configured
 								</span>
@@ -168,8 +214,41 @@
 						
 						<div class="mt-auto pt-2">
 							<p class="text-xs text-muted-foreground/80 leading-relaxed mt-2">
-								Configure <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">GOOGLE_API_KEY</code> in your environment. Used for CV tailoring.
+								Configure <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">LLM_API_KEY</code> (or <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">LLM_BASE_URL</code> for a local model) in your environment. Used for CV tailoring.
 							</p>
+
+							<button type="button" onclick={testConnection} disabled={testing}
+								class="mt-3 inline-flex items-center gap-2 text-xs font-medium px-3 py-2 rounded-lg bg-secondary text-secondary-foreground hover:bg-secondary/80 border border-border transition-all shadow-sm disabled:opacity-50">
+								{#if testing}<Loader2 size={14} class="animate-spin" />{:else}<Zap size={14} />{/if}
+								{testing ? 'Testing…' : 'Test connection'}
+							</button>
+
+							{#if testResult}
+								<div class="mt-3 space-y-1.5 text-xs">
+									{#each testRows as { label, r }}
+										<div class="flex items-start gap-2 p-2 bg-background/50 rounded border border-border/40">
+											{#if r.ok}
+												<CheckCircle2 size={14} class="text-green-400 mt-0.5 flex-shrink-0" />
+											{:else}
+												<XCircle size={14} class="text-red-400 mt-0.5 flex-shrink-0" />
+											{/if}
+											<div class="min-w-0">
+												<span class="font-medium text-foreground">{label}</span>
+												{#if r.ok}
+													<span class="text-muted-foreground"> — {r.detail}{#if r.latency_ms != null} ({r.latency_ms} ms){/if}</span>
+												{:else}
+													<span class="text-red-400/90 break-words"> — {r.error}</span>
+												{/if}
+											</div>
+										</div>
+									{/each}
+									{#if detectedModels.length > 0}
+										<p class="text-muted-foreground/80 pt-1">
+											Models at endpoint: <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">{detectedModels.slice(0, 6).join(', ')}</code>
+										</p>
+									{/if}
+								</div>
+							{/if}
 						</div>
 					</div>
 				</div>

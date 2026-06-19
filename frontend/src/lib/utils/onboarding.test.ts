@@ -14,7 +14,7 @@ import { firstIncompleteStep, shouldAutoRedirect } from './onboarding';
 
 function makeStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
 	return {
-		gemini_key_set: false,
+		llm_key_set: false,
 		adzuna_key_set: false,
 		tectonic_found: false,
 		base_cv_uploaded: false,
@@ -24,14 +24,14 @@ function makeStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
 }
 
 describe('firstIncompleteStep', () => {
-	it('returns step 1 when the Gemini key is missing', () => {
-		expect(firstIncompleteStep(makeStatus({ gemini_key_set: false, tectonic_found: true }))).toBe(
+	it('returns step 1 when the LLM key is missing', () => {
+		expect(firstIncompleteStep(makeStatus({ llm_key_set: false, tectonic_found: true }))).toBe(
 			1
 		);
 	});
 
 	it('returns step 1 when tectonic is not found', () => {
-		expect(firstIncompleteStep(makeStatus({ gemini_key_set: true, tectonic_found: false }))).toBe(
+		expect(firstIncompleteStep(makeStatus({ llm_key_set: true, tectonic_found: false }))).toBe(
 			1
 		);
 	});
@@ -39,7 +39,7 @@ describe('firstIncompleteStep', () => {
 	it('returns step 2 when keys are set but the CV is not uploaded', () => {
 		expect(
 			firstIncompleteStep(
-				makeStatus({ gemini_key_set: true, tectonic_found: true, base_cv_uploaded: false })
+				makeStatus({ llm_key_set: true, tectonic_found: true, base_cv_uploaded: false })
 			)
 		).toBe(2);
 	});
@@ -47,7 +47,7 @@ describe('firstIncompleteStep', () => {
 	it('falls through to step 3 once all status-backed prerequisites are met', () => {
 		expect(
 			firstIncompleteStep(
-				makeStatus({ gemini_key_set: true, tectonic_found: true, base_cv_uploaded: true })
+				makeStatus({ llm_key_set: true, tectonic_found: true, base_cv_uploaded: true })
 			)
 		).toBe(3);
 	});

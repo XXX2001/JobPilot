@@ -2,15 +2,27 @@
 
 ## Purpose
 
-The `backend/llm/` module is JobPilot's interface to Google Gemini. It wraps the `google-genai` SDK to provide three coordinated capabilities: job description analysis (extracting structured skill and keyword data from raw postings), CV tailoring (producing surgical LaTeX text replacements to improve job fit without fabricating content), and motivation-letter customization (adapting a single customizable paragraph to the target role). The module exists to isolate all LLM concerns — API key management, rate limiting, model fallback, prompt templating, JSON parsing, and output validation — behind clean, typed Python interfaces. The rest of JobPilot (the scheduler, the apply engine, and the CV pipeline) calls into this module without knowing anything about Gemini internals.
+The `backend/llm/` module is JobPilot's provider-agnostic interface to the configured LLM provider. A small factory (`factory.py`) selects a concrete provider adapter at runtime — `openai` (the default, via `OpenAICompatClient`/`OpenAICompatEmbeddingClient`) or `anthropic` (via `AnthropicClient`) — and exposes it behind the `LLMClient` and `EmbeddingClient` protocols defined in `base.py`. On top of this it provides three coordinated capabilities: job description analysis (extracting structured skill and keyword data from raw postings), CV tailoring (producing surgical LaTeX text replacements to improve job fit without fabricating content), and motivation-letter customization (adapting a single customizable paragraph to the target role). The module exists to isolate all LLM concerns — API key management, prompt templating, JSON parsing, and output validation — behind clean, typed Python interfaces. The rest of JobPilot (the scheduler, the apply engine, and the CV pipeline) calls into this module through those protocols without knowing which provider is configured.
 
 ---
 
 ## Key Components
 
-### `gemini_client.py`
+### `base.py`
 
-Core async HTTP wrapper around the `google-genai` SDK. Implements a sliding-window rate limiter capped at 15 requests per minute, a primary-plus-fallback model chain, exponential back-off on HTTP 429 responses, and a self-healing JSON retry (if the model returns markdown-fenced output, a second prompt asks it to re-emit plain JSON). All network I/O runs via `asyncio.get_event_loop().run_in_executor` so the sync `genai` SDK does not block the async event loop. Two custom exceptions signal failures to callers: `GeminiRateLimitError` (all retries and model candidates exhausted) and `GeminiJSONError` (JSON cannot be parsed even after a retry).
+Defines the shared, provider-neutral contract for the whole module: the `LLMClient` and `EmbeddingClient` protocols (the typed interfaces every adapter implements) and the provider-neutral exceptions `LLMRateLimitError`, `LLMCallFailed`, and `LLMJSONError`. Nothing in `base.py` is tied to a specific vendor SDK; callers depend only on these protocols and exceptions.
+
+### `factory.py`
+
+Selects and constructs the concrete provider adapter based on configuration. The default generation provider is `openai` (valid generation providers: `openai | anthropic`); embeddings always use the `openai` provider. The factory returns objects typed as `LLMClient` / `EmbeddingClient`, so call sites never reference a concrete provider class.
+
+### `providers/openai_compat.py`
+
+The default adapter. `OpenAICompatClient` wraps the OpenAI-compatible SDK for text and JSON generation, and `OpenAICompatEmbeddingClient` wraps it for embeddings. Because it speaks the OpenAI-compatible wire protocol, it can target the OpenAI API directly or any compatible endpoint reachable via a custom `LLM_BASE_URL` (a local model server, or any other deployment exposed through an OpenAI-compatible base URL). The adapter maps HTTP 429 responses to `LLMRateLimitError` and any other failure to `LLMCallFailed`. `generate_json` retries a malformed parse once, then raises `LLMJSONError`.
+
+### `providers/anthropic_client.py`
+
+`AnthropicClient` is the Anthropic adapter for text and JSON generation. Like the OpenAI-compatible adapter it maps 429 responses to `LLMRateLimitError`, other failures to `LLMCallFailed`, and retries a malformed JSON parse once before raising `LLMJSONError`.
 
 ### `job_context.py`
 
@@ -18,15 +30,15 @@ Pydantic data model (`JobContext`) that is the structured output of a job-analys
 
 ### `job_analyzer.py`
 
-Single-responsibility class (`JobAnalyzer`) that takes a `JobDetails` object, sanitizes its fields against prompt injection, formats the `JOB_ANALYZER_PROMPT` template, calls `GeminiClient.generate_json`, and returns a validated `JobContext`. This is always the first LLM call in a CV-tailoring pipeline run.
+Single-responsibility class (`JobAnalyzer`) that takes a `JobDetails` object, sanitizes its fields against prompt injection, formats the `JOB_ANALYZER_PROMPT` template, calls the LLM client's `generate_json`, and returns a validated `JobContext`. This is always the first LLM call in a CV-tailoring pipeline run.
 
 ### `cv_modifier.py`
 
-Single-responsibility class (`CVModifier`) that accepts a `JobDetails`, the full CV LaTeX source, and a pre-built `JobContext`. It serializes the context to markdown via `JobContext.to_markdown()`, formats the `CV_MODIFIER_SKILL` prompt with both the context and the raw LaTeX, calls `GeminiClient.generate_json`, and enforces the cap of at most three high-confidence replacements by calling `CVModifierOutput.top_three()` before returning. If the CV text exceeds 50,000 characters it is silently truncated with a warning log before the prompt is built.
+Single-responsibility class (`CVModifier`) that accepts a `JobDetails`, the full CV LaTeX source, and a pre-built `JobContext`. It serializes the context to markdown via `JobContext.to_markdown()`, formats the `CV_MODIFIER_SKILL` prompt with both the context and the raw LaTeX, calls the LLM client's `generate_json`, and enforces the cap of at most three high-confidence replacements by calling `CVModifierOutput.top_three()` before returning. If the CV text exceeds 50,000 characters it is silently truncated with a warning log before the prompt is built.
 
 ### `cv_editor.py`
 
-Higher-level editor class (`CVEditor`) that handles the motivation-letter side of tailoring. It inspects a `LaTeXSections` object for a marker-delimited customizable paragraph, formats the `MOTIVATION_LETTER_PROMPT` template, calls `GeminiClient.generate_json`, and applies a post-generation safety check: if the returned text introduces any LaTeX commands not already present in the original paragraph, the edit is discarded and the original paragraph is returned unchanged. Job description input is capped at 500 characters before prompt formatting.
+Higher-level editor class (`CVEditor`) that handles the motivation-letter side of tailoring. It inspects a `LaTeXSections` object for a marker-delimited customizable paragraph, formats the `MOTIVATION_LETTER_PROMPT` template, calls the LLM client's `generate_json`, and applies a post-generation safety check: if the returned text introduces any LaTeX commands not already present in the original paragraph, the edit is discarded and the original paragraph is returned unchanged. Job description input is capped at 500 characters before prompt formatting.
 
 ### `prompts.py`
 
@@ -47,13 +59,12 @@ Empty marker file; exports nothing. Callers import directly from submodules.
 
 ## Public Interface
 
-### `GeminiClient` (`gemini_client.py`)
+### `LLMClient` protocol (`base.py`)
+
+The interface every generation adapter implements (`OpenAICompatClient`, `AnthropicClient`). Obtain a concrete instance from `factory.py`; never instantiate a provider class directly.
 
 ```python
-class GeminiClient:
-    RPM_LIMIT: int = 15
-
-    def __init__(self) -> None
+class LLMClient(Protocol):
     async def generate_text(self, prompt: str) -> str
     async def generate_json(self, prompt: str, schema: Type[T]) -> T
 ```
@@ -61,12 +72,12 @@ class GeminiClient:
 **`generate_text(prompt)`**
 - Parameters: `prompt` — plain string sent directly to the model.
 - Returns: raw text string from the model response.
-- Raises: `GeminiRateLimitError` if all model candidates and retries are exhausted.
+- Raises: `LLMRateLimitError` on a 429 from the provider; `LLMCallFailed` on any other failure.
 
 **`generate_json(prompt, schema)`**
 - Parameters: `prompt` — string; `schema` — a Pydantic `BaseModel` subclass used for validation.
 - Returns: a validated instance of `schema`.
-- Raises: `GeminiJSONError` after one self-healing retry if the response cannot be parsed; `GeminiRateLimitError` if the underlying `generate_text` call fails.
+- Raises: `LLMJSONError` after one retry if the response cannot be parsed; `LLMRateLimitError` / `LLMCallFailed` if the underlying generation call fails.
 
 ---
 
@@ -74,7 +85,7 @@ class GeminiClient:
 
 ```python
 class JobAnalyzer:
-    def __init__(self, client: GeminiClient | None = None) -> None
+    def __init__(self, client: LLMClient | None = None) -> None
     async def analyze(self, job: JobDetails) -> JobContext
 ```
 
@@ -89,7 +100,7 @@ class JobAnalyzer:
 
 ```python
 class CVModifier:
-    def __init__(self, client: GeminiClient | None = None) -> None
+    def __init__(self, client: LLMClient | None = None) -> None
     async def modify(
         self,
         job: JobDetails,
@@ -111,7 +122,7 @@ class CVModifier:
 class CVEditor:
     MAX_DESCRIPTION_CHARS: int = 500
 
-    def __init__(self, client: GeminiClient | None = None) -> None
+    def __init__(self, client: LLMClient | None = None) -> None
     async def edit_letter(
         self,
         job: JobDetails,
@@ -175,7 +186,7 @@ class CVModifierOutput(BaseModel):
 ### Prompt Templates (`prompts.py`)
 
 **`MOTIVATION_LETTER_PROMPT`**
-- Purpose: instruct Gemini to edit only the marker-delimited customizable paragraph of a motivation letter, replacing the `{{company_name}}` placeholder with the real company and referencing 1–2 specific aspects of the role.
+- Purpose: instruct the LLM to edit only the marker-delimited customizable paragraph of a motivation letter, replacing the `{{company_name}}` placeholder with the real company and referencing 1–2 specific aspects of the role.
 - Key inputs: `{job_title}`, `{company}`, `{job_description_excerpt}` (max 500 chars, wrapped in `<untrusted_data>`), `{letter_content}` (the full letter skeleton with markers).
 - Output shape: `{"edited_paragraph": "...", "company_name": "..."}` — maps to `LetterEdit`.
 
@@ -200,7 +211,7 @@ JobDetails (title, company, description)
   JobAnalyzer.analyze()
     └─ sanitize fields
     └─ format JOB_ANALYZER_PROMPT
-    └─ GeminiClient.generate_json(prompt, JobContext)
+    └─ the LLM client's generate_json(prompt, JobContext)
         │
         ▼
   JobContext (skills, keywords, matches, gaps, hints)
@@ -209,8 +220,8 @@ JobDetails (title, company, description)
         ▼                                              ▼
   CVModifier.modify(job, cv_tex, context)        CVEditor.edit_letter(job, sections)
     └─ JobContext.to_markdown()                    └─ format MOTIVATION_LETTER_PROMPT
-    └─ format CV_MODIFIER_SKILL                    └─ GeminiClient.generate_json(prompt, LetterEdit)
-    └─ GeminiClient.generate_json(...)             └─ safety check (no new LaTeX commands)
+    └─ format CV_MODIFIER_SKILL                    └─ the LLM client's generate_json(prompt, LetterEdit)
+    └─ the LLM client's generate_json(...)         └─ safety check (no new LaTeX commands)
     └─ CVModifierOutput.top_three()                     │
         │                                              ▼
         ▼                                        LetterEdit (edited_paragraph, company_name)
@@ -229,15 +240,16 @@ All configuration is sourced from environment variables or a `.env` file, loaded
 
 | Variable | Type | Default | Description |
 |---|---|---|---|
-| `GOOGLE_API_KEY` | `str` | _(required, no default)_ | Google AI Studio / Vertex API key. Passed to `genai.Client`. |
-| `GOOGLE_MODEL` | `str` | `"gemini-3-flash-preview"` | Primary model name sent on every inference call. |
-| `GOOGLE_MODEL_FALLBACKS` | `str` | `""` | Comma-separated list of fallback model names tried in order when the primary returns a 404/NOT_FOUND error. Empty string disables fallbacks. |
+| `LLM_PROVIDER` | `str` | `"openai"` | Generation provider selected by `factory.py`. Valid values: `openai`, `anthropic`. |
+| `LLM_API_KEY` | `str` | _(required, no default)_ | API key for the configured provider. Provider-specific keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are also honoured. Not required when `LLM_BASE_URL` points at an endpoint that needs no key. |
+| `LLM_BASE_URL` | `str` | `""` | Optional override for the OpenAI-compatible base URL. Lets the `openai` adapter target a local model server or any OpenAI-compatible endpoint (including a third-party model fronted by an OpenAI-compatible gateway). |
+| `LLM_MODEL` | `str` | _(provider default)_ | Model name sent on every generation call. |
+| `EMBEDDING_MODEL` | `str` | `"text-embedding-3-small"` | Embedding model used by `OpenAICompatEmbeddingClient`. Embeddings always use the `openai` provider. |
+| `LLM_TIMEOUT_SECONDS` | `int` | _(adapter default)_ | Per-call request timeout applied by the provider adapters. |
 
-**Rate limiting:** `GeminiClient` enforces a 15 RPM sliding window in-process using a `collections.deque(maxlen=15)` of call timestamps. The window is 60 seconds. If the window is full, the client sleeps for the remaining window time, capped at 120 seconds per sleep to avoid unbounded blocking. The limit is hardcoded as `GeminiClient.RPM_LIMIT = 15` and matches the free-tier quota for Gemini Flash models.
+**Error mapping:** the provider adapters translate transport failures into the module's neutral exceptions. An HTTP 429 from the provider becomes `LLMRateLimitError`; any other failure becomes `LLMCallFailed`. There is no in-process request-per-minute limiter and no multi-model fallback chain — both were provider-specific features that no longer exist.
 
-**Retry behaviour:** On HTTP 429 (rate limit from the API itself), `generate_text` retries up to 2 additional times with exponential back-off: 5 s, then 10 s. On 404/NOT_FOUND the current model candidate is skipped immediately and the next fallback is tried. Other exceptions are wrapped in `GeminiRateLimitError` and re-raised without retry.
-
-**JSON self-healing:** `generate_json` attempts one automatic retry if the initial response is not valid JSON, asking the model to reformat its previous output as plain JSON. Failure after the retry raises `GeminiJSONError`.
+**JSON retry:** `generate_json` attempts one automatic retry if the initial response is not valid JSON, asking the model to reformat its previous output as plain JSON. Failure after the retry raises `LLMJSONError`.
 
 ---
 
@@ -249,12 +261,10 @@ All configuration is sourced from environment variables or a `.env` file, loaded
 
 **Job description truncation in `CVEditor`.** `CVEditor._excerpt` hard-caps the job description at 500 characters before it reaches the letter prompt. Very long or detail-rich job descriptions are silently truncated; there is no smarter summarization step.
 
-**In-process rate limiter is per-process only.** The 15 RPM window is tracked in memory on a single `GeminiClient` instance. If multiple worker processes or multiple `GeminiClient` instances coexist, they do not share the counter and can collectively exceed the API quota.
-
-**Model name mismatch between client and config default.** `config.py` defaults `GOOGLE_MODEL` to `"gemini-3-flash-preview"` while `GeminiClient.__init__` falls back to `"gemini-3.0-flash"` if the settings value is falsy. These two strings refer to different model slugs; the discrepancy means the actual model used can differ from what the config documents if the env var is unset or empty.
+**No cross-process rate limiting.** The adapters rely on the provider's own server-side quota and surface 429s as `LLMRateLimitError`; there is no application-level request budget shared across worker processes.
 
 **No token-count tracking.** There is no accounting for prompt or response token usage. Costs and quota consumption against the API are invisible at the application level.
 
-**`CVReplacement.section` enum is partially checked.** The `Literal` type in `validators.py` restricts section names to four allowed values, but the prompt (`CV_MODIFIER_SKILL`) does not explicitly enumerate those same four values. A model response using a different section label will fail Pydantic validation and surface as a `GeminiJSONError` rather than a more informative error.
+**`CVReplacement.section` enum is partially checked.** The `Literal` type in `validators.py` restricts section names to four allowed values, but the prompt (`CV_MODIFIER_SKILL`) does not explicitly enumerate those same four values. A model response using a different section label will fail Pydantic validation and surface as a `LLMJSONError` rather than a more informative error.
 
-**No persistent retry queue.** All retries are in-memory and within a single request lifecycle. A Gemini outage during a scheduled batch run will cause the entire batch item to fail with no deferred-retry mechanism.
+**No persistent retry queue.** All retries are in-memory and within a single request lifecycle. An LLM provider outage during a scheduled batch run will cause the entire batch item to fail with no deferred-retry mechanism.

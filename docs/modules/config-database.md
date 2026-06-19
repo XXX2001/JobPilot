@@ -12,7 +12,7 @@ These three files form the foundational layer of the JobPilot backend. `config.p
 
 Defines a single `Settings` class (inherits `pydantic_settings.BaseSettings`) that reads from environment variables and a `.env` file. Configuration is **case-insensitive** (`case_sensitive=False`). A module-level `settings = Settings()` instance is created at import time and used as a shared singleton by all other modules.
 
-Three fields (`GOOGLE_API_KEY`, `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`) have no defaults and will raise a `ValidationError` at startup if absent.
+Three fields (`LLM_API_KEY`, `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`) have no defaults and will raise a `ValidationError` at startup if absent.
 
 ### `database.py`
 
@@ -37,7 +37,7 @@ All fields belong to the `Settings` class and are accessed via the `settings` si
 
 | Field | Type | Default | Env Var | Description |
 |---|---|---|---|---|
-| `GOOGLE_API_KEY` | `str` | *(required)* | `GOOGLE_API_KEY` | Google Gemini API key; no default — startup fails if missing. |
+| `LLM_API_KEY` | `str` | *(required)* | `LLM_API_KEY` | LLM provider API key; no default — startup fails if missing. Provider-specific `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are also honoured. |
 | `ADZUNA_APP_ID` | `str` | *(required)* | `ADZUNA_APP_ID` | Adzuna job-search API application ID; required. |
 | `ADZUNA_APP_KEY` | `str` | *(required)* | `ADZUNA_APP_KEY` | Adzuna API key; required. |
 | `SERPAPI_KEY` | `str` | `""` | `SERPAPI_KEY` | SerpAPI key; optional, not currently wired to active code paths. |
@@ -47,8 +47,9 @@ All fields belong to the `Settings` class and are accessed via the `settings` si
 | `jobpilot_log_level` | `str` | `"info"` | `JOBPILOT_LOG_LEVEL` | Uvicorn/Python log level (`debug`, `info`, `warning`, `error`). |
 | `jobpilot_scraper_headless` | `bool` | `True` | `JOBPILOT_SCRAPER_HEADLESS` | Run Playwright browsers in headless mode when `True`. |
 | `jobpilot_data_dir` | `str` | `"./data"` | `JOBPILOT_DATA_DIR` | Root directory for all persistent data (DB, CVs, letters, browser sessions, logs). |
-| `GOOGLE_MODEL` | `str` | `"gemini-3-flash-preview"` | `GOOGLE_MODEL` | Primary Gemini model name sent to the Google AI API. |
-| `GOOGLE_MODEL_FALLBACKS` | `str` | `""` | `GOOGLE_MODEL_FALLBACKS` | Comma-separated list of fallback model names tried if the primary model fails. Empty string means no fallbacks. |
+| `LLM_PROVIDER` | `str` | `"openai"` | `LLM_PROVIDER` | Generation provider selected by the LLM factory. Valid values: `openai`, `anthropic`. |
+| `LLM_MODEL` | `str` | _(provider default)_ | `LLM_MODEL` | Model name sent to the configured LLM provider. |
+| `LLM_BASE_URL` | `str` | `""` | `LLM_BASE_URL` | Optional OpenAI-compatible base URL override (local model server or any OpenAI-compatible endpoint). |
 | `SCRAPLING_ENABLED` | `bool` | `True` | `SCRAPLING_ENABLED` | Feature flag: enables the Tier 1 Scrapling HTTP fetcher (faster, cheaper path before Playwright). |
 | `APPLY_TIER1_ENABLED` | `bool` | `True` | `APPLY_TIER1_ENABLED` | Feature flag: enables the Tier 1 Playwright direct-fill application strategy. |
 
@@ -95,7 +96,7 @@ All router inclusions are wrapped in a `try/except` — missing modules produce 
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Returns `{"status": "ok", "version": "0.1.0", "db": "connected", "tectonic": bool, "gemini_key_set": bool}`. Includes a `tectonic_hint` key when Tectonic is not found. |
+| `GET` | `/api/health` | Returns `{"status": "ok", "version": "0.1.0", "db": "connected", "tectonic": bool, "llm_key_set": bool}`. Includes a `tectonic_hint` key when Tectonic is not found. |
 
 **Static file serving**
 
@@ -106,8 +107,8 @@ All router inclusions are wrapped in a `try/except` — missing modules produce 
 | Exception class | HTTP status | Response body `code` |
 |---|---|---|
 | `LaTeXCompilationError` | 422 | `"latex_compile_error"` |
-| `GeminiJSONError` | 500 | `"gemini_json_error"` |
-| `GeminiRateLimitError` | 429 | `"rate_limit"` |
+| `LLMJSONError` | 500 | `"llm_json_error"` |
+| `LLMRateLimitError` | 429 | `"rate_limit"` |
 | `Exception` (catch-all) | 500 | `"internal_error"` |
 
 All handlers are registered conditionally — if the respective module cannot be imported, the handler is silently skipped.
@@ -116,7 +117,7 @@ All handlers are registered conditionally — if the respective module cannot be
 
 | Attribute | Type | Description |
 |---|---|---|
-| `app.state.gemini` | `GeminiClient` | Shared LLM client. |
+| `app.state.llm` | `LLMClient` | Shared LLM client (concrete provider chosen by the factory). |
 | `app.state.cv_pipeline` | `CVPipeline` | LaTeX CV tailoring pipeline. |
 | `app.state.letter_pipeline` | `LetterPipeline` | Cover-letter generation pipeline. |
 | `app.state.adzuna` | `AdzunaClient` | Adzuna REST API client. |
@@ -172,7 +173,7 @@ Master reference for all environment variables read by the application.
 
 | Env Var | Type | Default | Required | Description |
 |---|---|---|---|---|
-| `GOOGLE_API_KEY` | `str` | — | **Yes** | Google AI / Gemini API key. Used by `GeminiClient` and passed directly to `AdaptiveScraper` and `ApplicationEngine`. |
+| `LLM_API_KEY` | `str` | — | **Yes** | LLM provider API key. Used by the LLM client and passed directly to `AdaptiveScraper` and `ApplicationEngine`. Provider-specific `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are also honoured. |
 | `ADZUNA_APP_ID` | `str` | — | **Yes** | Adzuna job-search API application ID. |
 | `ADZUNA_APP_KEY` | `str` | — | **Yes** | Adzuna API secret key. |
 | `SERPAPI_KEY` | `str` | `""` | No | SerpAPI key; accepted by config but not actively consumed in current code paths. |
@@ -182,8 +183,9 @@ Master reference for all environment variables read by the application.
 | `JOBPILOT_LOG_LEVEL` | `str` | `"info"` | No | Log verbosity (`debug`, `info`, `warning`, `error`, `critical`). |
 | `JOBPILOT_SCRAPER_HEADLESS` | `bool` | `True` | No | Whether Playwright browsers run headless. Set to `false` during development to watch browser interactions. |
 | `JOBPILOT_DATA_DIR` | `str` | `"./data"` | No | Root path for all persistent data. Relative paths are resolved from the working directory at process start. |
-| `GOOGLE_MODEL` | `str` | `"gemini-3-flash-preview"` | No | Gemini model name for all LLM calls. |
-| `GOOGLE_MODEL_FALLBACKS` | `str` | `""` | No | Comma-separated ordered list of fallback model names. Example: `"gemini-1.5-flash,gemini-1.0-pro"`. |
+| `LLM_PROVIDER` | `str` | `"openai"` | No | Generation provider (`openai` or `anthropic`) selected by the LLM factory. |
+| `LLM_MODEL` | `str` | _(provider default)_ | No | Model name for all generation calls. |
+| `LLM_BASE_URL` | `str` | `""` | No | Optional OpenAI-compatible base URL override (e.g. a local model server). |
 | `SCRAPLING_ENABLED` | `bool` | `True` | No | Enables the Tier 1 Scrapling HTTP-first scraping path. Set to `false` to force Playwright for all scraping. |
 | `APPLY_TIER1_ENABLED` | `bool` | `True` | No | Enables the Tier 1 direct Playwright form-fill application strategy. Set to `false` to always use the assisted (browser-use) strategy. |
 
@@ -197,7 +199,7 @@ Master reference for all environment variables read by the application.
 
 - **`JOBPILOT_DATA_DIR` is relative by default** — The default `"./data"` is resolved relative to the process working directory, not the project root, which can cause the data directory to be created in unexpected locations depending on how Uvicorn is launched.
 
-- **No auto-scheduler** — The `BatchRunner` is on-demand only. Batch jobs run when `POST /api/queue/refresh` is called (which schedules `runner.run_batch()` in the background). The APScheduler scaffolding that previously lived in `morning_batch.py` was removed during the PR-1 honesty pass; reintroducing time-based scheduling would require wiring an `AsyncIOScheduler` from `lifespan`.
+- **No auto-scheduler** — The `BatchRunner` is on-demand only. Batch jobs run when `POST /api/queue/refresh` is called (which schedules `runner.run_batch()` in the background). There is no APScheduler/cron machinery wired up; time-based scheduling would require wiring an `AsyncIOScheduler` from `lifespan`.
 
 - **Seed data hardcodes `country: "fr"`** — In `_seed_default_sources()`, all seeded `JobSource` rows receive `config={"country": "fr"}` (line 93 of `database.py`). This is not driven by any configuration value.
 

@@ -15,14 +15,13 @@ Every install starts by writing a valid `.env`. Use the interactive setup script
 | Linux / macOS | `bash scripts/setup.sh` |
 | Windows (PowerShell) | `.\scripts\setup.ps1` |
 
-`scripts/setup.sh:53` copies `.env.example` to `.env`, then blanks the example's placeholder credentials so leftover strings like `your_gemini_api_key` are not read as real values (`scripts/setup.sh:58-62`). It then prompts for a provider:
+`scripts/setup.sh:53` copies `.env.example` to `.env`, then blanks the example's placeholder credentials so leftover placeholder strings are not read as real values (`scripts/setup.sh:58-62`). It then prompts for a provider:
 
 | Choice | Sets | Notes |
 | --- | --- | --- |
-| 1 — Local / self-hosted | `LLM_PROVIDER=openai` + `LLM_BASE_URL` (+ matching `BROWSER_LLM_*`) | OpenAI-compatible servers (Ollama, llama.cpp, LM Studio, vLLM). Defaults base URL to `http://host.docker.internal:11434/v1`. Embeddings can point at Gemini (free) or the same local server (`scripts/setup.sh:73-98`). |
-| 2 — Google Gemini | `LLM/EMBEDDING/BROWSER_LLM_PROVIDER=gemini`, `GOOGLE_API_KEY` | Free tier; one key covers all three roles. |
-| 3 — OpenAI | all three providers `=openai`, `OPENAI_API_KEY` | |
-| 4 — Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` | Generation only; embeddings + browser agent fall back to Gemini, so it also asks for a `GOOGLE_API_KEY` (`scripts/setup.sh:113-124`). |
+| 1 — Local / self-hosted | `LLM_PROVIDER=openai` + `LLM_BASE_URL` (+ matching `BROWSER_LLM_*`) | OpenAI-compatible servers (Ollama, llama.cpp, LM Studio, vLLM). Defaults base URL to `http://host.docker.internal:11434/v1`. Embeddings can point at a hosted OpenAI-compatible key or the same local server (`scripts/setup.sh:73-98`). |
+| 2 — OpenAI-compatible | all three providers `=openai`, `OPENAI_API_KEY` (+ optional `*_BASE_URL` for another OpenAI-compatible endpoint) | Hosted OpenAI, or any vendor exposing an OpenAI-compatible endpoint. |
+| 3 — Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` | Generation only; embeddings + browser agent fall back to an OpenAI-compatible endpoint, so it also asks for an OpenAI-compatible key (`scripts/setup.sh:113-124`). |
 
 It optionally prompts for Adzuna keys (the job-search source) and finally writes a Fernet `CREDENTIAL_KEY` (`scripts/setup.sh:140`). The PowerShell variant (`scripts/setup.ps1`) is functionally identical and is built for the Docker Desktop path — no Python/uv/Node required, only PowerShell.
 

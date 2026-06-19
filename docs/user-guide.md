@@ -12,7 +12,7 @@ The first time you open JobPilot at **http://localhost:8000**, the dashboard che
 
 The wizard has four steps, and it resumes on the first one that still needs attention:
 
-1. **API Keys** — Confirms that `GOOGLE_API_KEY`, `ADZUNA_APP_ID`, and `ADZUNA_APP_KEY` are present in your `.env`. The step shows the exact snippet to paste. These are read at startup, so if you add them here you may need to restart the app.
+1. **API Keys** — Confirms that your LLM API key (`LLM_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, or `LLM_BASE_URL`), `ADZUNA_APP_ID`, and `ADZUNA_APP_KEY` are present in your `.env`. The step shows the exact snippet to paste. These are read at startup, so if you add them here you may need to restart the app.
 2. **CV Template** — Upload your base LaTeX CV (a `.tex` file). This becomes the template that every tailored CV is derived from. See [Custom CV templates](custom-templates.md) for what makes a template compatible.
 3. **Keywords** — Add the search keywords that describe the roles you want. These feed both job discovery and relevance scoring.
 4. **First Batch** — Pick a job source and launch your first discovery batch.

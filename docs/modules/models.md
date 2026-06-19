@@ -148,7 +148,7 @@ Note: `countries` was added to the ORM model after the initial migration and is 
 | `apply_method` | `Optional[str]` | `String` | nullable |
 | `posted_at` | `Optional[datetime]` | `DateTime` | nullable |
 | `scraped_at` | `datetime` | `DateTime` | NOT NULL, default=utcnow |
-| `dedup_hash` | `str` | `String` | NOT NULL, UNIQUE (`t2b3`) |
+| `dedup_hash` | `str` | `String` | NOT NULL, UNIQUE |
 | `raw_data` | `Optional[dict]` | `JSON` | nullable |
 
 #### `JobMatch` — table `job_matches`
@@ -168,8 +168,8 @@ Note: `countries` was added to the ORM model after the initial migration and is 
 | Column | Python Type | SQLAlchemy Type | Constraints |
 |---|---|---|---|
 | `id` | `int` | `Integer` | PK, autoincrement |
-| `job_match_id` | `int` | `Integer` | NOT NULL, FK to `job_matches.id` (`t2b3`) |
-| `doc_type` | `str` | `String` | NOT NULL, CHECK IN (`"cv"`, `"letter"`) (`t2b1`) |
+| `job_match_id` | `int` | `Integer` | NOT NULL, FK to `job_matches.id` |
+| `doc_type` | `str` | `String` | NOT NULL, CHECK IN (`"cv"`, `"letter"`) |
 | `tex_path` | `Optional[str]` | `String` | nullable |
 | `pdf_path` | `Optional[str]` | `String` | nullable |
 | `diff_json` | `Optional[dict]` | `JSON` | nullable |
@@ -310,12 +310,12 @@ No database-level `ON DELETE CASCADE` constraints exist anywhere in the schema. 
 | Table | Column(s) | Purpose |
 |---|---|---|
 | `jobs` | `dedup_hash` | Prevent duplicate job ingestion across scrape runs |
-| `job_sources` | `name` | One source record per name (`uq_job_sources_name`, `t2b2`) |
-| `job_matches` | `job_id`, `batch_date` | One match per job per batch day (`uq_job_matches_job_id_batch_date`, `t2b2`) |
+| `job_sources` | `name` | One source record per name (`uq_job_sources_name`) |
+| `job_matches` | `job_id`, `batch_date` | One match per job per batch day (`uq_job_matches_job_id_batch_date`) |
 | `browser_sessions` | `site_name` | One session record per site |
 | `site_credentials` | `site_name` | One credential record per site |
 
-### CHECK Constraints (`t2b1`, `t2b3`)
+### CHECK Constraints
 
 Enum-like string columns are constrained to their live vocabularies via named CHECK constraints:
 `applications.status` / `applications.method`, `job_matches.status`, `tailored_documents.doc_type`,
@@ -324,7 +324,7 @@ Enum-like string columns are constrained to their live vocabularies via named CH
 CHECK `ck_applications_job_match_required` = `method = 'manual' OR job_match_id IS NOT NULL` so any
 auto/assisted application must reference a match.
 
-### Covering Indexes (`t2b4`)
+### Covering Indexes
 
 Composite indexes back the hot read paths: `job_matches (status, batch_date, score)` (queue listing),
 `tailored_documents (job_match_id, doc_type, created_at)` (document lookups), and
@@ -425,4 +425,4 @@ Alembic is configured in `alembic.ini` with `sqlalchemy.url = sqlite+aiosqlite:/
 
 7. **`Job.source_id` is nullable with no FK constraint.** Jobs scraped from sources that were later deleted retain a dangling `source_id` value with no referential integrity check.
 
-8. ~~**`TailoredDocument.job_match_id` is nullable.**~~ Resolved in `t2b3`: the column is now `NOT NULL` with a DB-level FK to `job_matches.id`, so a document can no longer be created unlinked from a match.
+8. **`TailoredDocument.job_match_id` is non-nullable.** The column is `NOT NULL` with a DB-level FK to `job_matches.id`, so a document cannot be created unlinked from a match.

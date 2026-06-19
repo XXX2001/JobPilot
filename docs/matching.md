@@ -78,8 +78,7 @@ The `EmbeddingClient` protocol exposes a `dimension` property (`backend/llm/base
 
 | `EMBEDDING_PROVIDER` | Model | `dimension` | Source |
 | --- | --- | --- | --- |
-| `gemini` (default) | `text-embedding-004` | **768** | `backend/llm/gemini_client.py:105` |
-| `openai` | `text-embedding-3-small` | **1536** | `openai_compat.py:19,87` |
+| `openai` (default) | `text-embedding-3-small` | **1536** | `openai_compat.py:19,87` |
 | `openai` | `text-embedding-3-large` | **3072** | `openai_compat.py:19` |
 | `anthropic` | — | n/a (rejected) | `factory.py:35` |
 
@@ -100,7 +99,7 @@ if len(a) != len(b) or not a:
     return 0.0
 ```
 
-Mismatched-length vectors (e.g. a 768-dim Gemini CV vs a 1536-dim OpenAI job, or an un-embedded empty list) return `0.0` instead of raising. Zero-norm vectors also short-circuit to `0.0`. This makes provider mismatches fail safe (everything looks like a gap) rather than throwing.
+Mismatched-length vectors (e.g. a 768-dim CV vs a 1536-dim OpenAI job from different providers, or an un-embedded empty list) return `0.0` instead of raising. Zero-norm vectors also short-circuit to `0.0`. This makes provider mismatches fail safe (everything looks like a gap) rather than throwing.
 
 ### `FitEngine.assess`
 
@@ -134,7 +133,7 @@ Orchestration lives in `backend/scheduler/batch_runner.py`:
    - `JobSkillExtractor.extract(jd.description)` → `JobProfile`.
    - If `len(skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE` (2, `defaults.py:30`), it returns `None` (too little signal; caller records a fallback).
    - Otherwise `Embedder.embed_job_profile` embeds the job skills, then `FitEngine.assess(job_profile, cv_profile, sensitivity)` produces the `FitAssessment`.
-3. **Concurrency** — assessments run under an `asyncio.Semaphore(CONCURRENCY_GEMINI)` (`batch_runner.py:279`, default 3). DB writes and WebSocket broadcasts happen sequentially *after* the `gather`, because the `AsyncSession` is not concurrency-safe.
+3. **Concurrency** — assessments run under an `asyncio.Semaphore(CONCURRENCY_LLM)` (`batch_runner.py:279`, default 3). DB writes and WebSocket broadcasts happen sequentially *after* the `gather`, because the `AsyncSession` is not concurrency-safe.
 
 So the relevance score (`JobMatcher`) gates *which* jobs proceed, and the fit score (`FitEngine`) decides *whether each surviving job warrants a tailored CV*.
 

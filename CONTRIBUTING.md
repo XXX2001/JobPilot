@@ -56,26 +56,14 @@ Look at the recent history for the exact convention:
 git log --oneline -20
 ```
 
-Commits use **Conventional-Commits-style prefixes with a milestone/task tag**, for example:
+Commits use **Conventional-Commits-style prefixes**, for example:
 
-- `feat(M2-T6): add batch dry-run preview (...)`
-- `fix(M4-T1): add missing SERPAPI_KEY to .env.example`
-- `refactor(M3-T1): split Settings god-page into per-tab components`
-- `docs(M4): implementation plan for packaging, docs, CI`
 - `feat(onboarding): add /onboarding first-run stepper with redirect gate`
+- `fix(scraping): add missing SERPAPI_KEY to .env.example`
+- `refactor(settings): split the Settings page into per-tab components`
+- `docs(api): document the WebSocket protocol`
 
-Format: `type(scope): short imperative summary`. Common types are `feat`, `fix`, `refactor`, `docs`, `ci`. The scope is usually the milestone/task identifier (e.g. `M4-T2`) or a feature area (e.g. `onboarding`, `applier`). Keep the summary concise and in the imperative mood.
-
----
-
-## Spec / plan workflow
-
-Larger pieces of work are specified and planned before implementation. Those documents live under [`docs/superpowers/`](docs/superpowers/):
-
-- `docs/superpowers/specs/` — design specs (the "what" and "why").
-- `docs/superpowers/plans/` — implementation plans broken into milestones/tasks (the "how"), which is where the `M<n>-T<n>` tags in commit messages come from.
-
-Before starting non-trivial work, check for (or write) a spec/plan there so changes stay scoped and reviewable.
+Format: `type(scope): short imperative summary`. Common types are `feat`, `fix`, `refactor`, `docs`, `ci`. The scope is a feature area (e.g. `onboarding`, `applier`, `scraping`). Keep the summary concise and in the imperative mood.
 
 ---
 

@@ -105,10 +105,10 @@ Any failure at any step returns `[]`, signaling the orchestrator to fall back to
 
 ## Provider-agnostic LLM
 
-Both tiers used to be hardwired to Gemini; they are now routed through the LLM factory (`backend/llm/factory.py`), selected by config and applied on restart.
+Both tiers route their LLM calls through the LLM factory (`backend/llm/factory.py`), selected by config and applied on restart.
 
-- **Tier 1** gets an `LLMClient` injected at construction. `backend/main.py:141,153` builds it with `make_llm_client()` (driven by `LLM_PROVIDER` = `gemini` | `openai` | `anthropic`) and passes it to `ScraplingFetcher(llm_client=gen_client)`. The fetcher only calls `self._llm.generate_text(...)`, so it is agnostic to the underlying provider.
-- **Tier 2** builds its model lazily in `AdaptiveScraper._make_llm()` (`adaptive_scraper.py:34`), which calls `make_browser_llm()`. That factory returns a browser-use `Chat*` for `BROWSER_LLM_PROVIDER`: `ChatGoogle` for Gemini, or `ChatOpenAI` (with `BROWSER_LLM_BASE_URL`) for OpenAI / OpenAI-compatible endpoints. Anthropic requires an OpenAI-compatible `base_url` because browser-use ships no `ChatAnthropic` (`factory.py:48-62`).
+- **Tier 1** gets an `LLMClient` injected at construction. `backend/main.py:141,153` builds it with `make_llm_client()` (driven by `LLM_PROVIDER` = `openai` | `anthropic`) and passes it to `ScraplingFetcher(llm_client=gen_client)`. The fetcher only calls `self._llm.generate_text(...)`, so it is agnostic to the underlying provider.
+- **Tier 2** builds its model lazily in `AdaptiveScraper._make_llm()` (`adaptive_scraper.py:34`), which calls `make_browser_llm()`. That factory returns a browser-use `Chat*` for `BROWSER_LLM_PROVIDER`: `ChatOpenAI` (with `BROWSER_LLM_BASE_URL`) for OpenAI / OpenAI-compatible endpoints (an OpenAI-compatible `base_url` also reaches other providers this way). Anthropic requires an OpenAI-compatible `base_url` because browser-use ships no `ChatAnthropic` (`factory.py:48-62`).
 
 If `browser_use` isn't importable, `_make_llm()` returns `None` and Tier 2 becomes a no-op.
 
@@ -161,8 +161,8 @@ Single source of truth for site metadata:
 | Setting | Default | Effect |
 |---------|---------|--------|
 | `SCRAPLING_ENABLED` | `True` | Master switch for Tier 1. |
-| `LLM_PROVIDER` | `gemini` | Provider for Tier 1 generation (`gemini`/`openai`/`anthropic`). |
-| `BROWSER_LLM_PROVIDER` | `gemini` | Provider for the Tier 2 browser agent. |
+| `LLM_PROVIDER` | `openai` | Provider for Tier 1 generation (`openai`/`anthropic`). |
+| `BROWSER_LLM_PROVIDER` | `openai` | Provider for the Tier 2 browser agent. |
 | `BROWSER_LLM_BASE_URL` | `""` | Required when the browser provider is Anthropic / OpenAI-compatible. |
 | `JOBPILOT_SCRAPER_HEADLESS` | — | Browser visibility for both Scrapling and browser-use. |
 | `ADZUNA_APP_ID` / `ADZUNA_APP_KEY` | — | Adzuna credentials (250 free calls/day). |

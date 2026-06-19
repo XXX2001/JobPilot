@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The `applier` module is responsible for executing job applications on behalf of the user. It sits at the end of the JobPilot pipeline — after jobs have been scraped, ranked, and tailored documents generated — and drives a real browser to fill out and submit application forms. The module implements a two-tier automation strategy: **Tier 1** uses `PlaywrightFormFiller`, a direct Playwright DOM manipulator that extracts the form structure, makes a single Gemini LLM call to map applicant data to CSS selectors, then fills and submits the form programmatically. **Tier 2** falls back to the `browser-use` LLM agent loop, which reasons over the live browser autonomously step-by-step. This tiered design mirrors the scraping architecture: fast and deterministic when possible, powerful and flexible when necessary. Three apply modes are supported — `auto` (fully automated with a mandatory pre-submit user review gate), `assisted` (form pre-filled, user clicks Submit), and `manual` (URL opened in system browser, no automation). The module enforces a configurable daily application cap and persists every outcome to the database as an `Application` record with lifecycle events.
+The `applier` module is responsible for executing job applications on behalf of the user. It sits at the end of the JobPilot pipeline — after jobs have been scraped, ranked, and tailored documents generated — and drives a real browser to fill out and submit application forms. The module implements a two-tier automation strategy: **Tier 1** uses `PlaywrightFormFiller`, a direct Playwright DOM manipulator that extracts the form structure, makes a single LLM call to map applicant data to CSS selectors, then fills and submits the form programmatically. **Tier 2** falls back to the `browser-use` LLM agent loop, which reasons over the live browser autonomously step-by-step. This tiered design mirrors the scraping architecture: fast and deterministic when possible, powerful and flexible when necessary. Three apply modes are supported — `auto` (fully automated with a mandatory pre-submit user review gate), `assisted` (form pre-filled, user clicks Submit), and `manual` (URL opened in system browser, no automation). The module enforces a configurable daily application cap and persists every outcome to the database as an `Application` record with lifecycle events.
 
 ---
 
@@ -26,7 +26,7 @@ Implements `ManualApplyStrategy`, the zero-automation fallback. It opens the job
 
 ### `form_filler.py`
 
-Implements `PlaywrightFormFiller`, the Tier 1 browser automation engine. It launches a persistent Chromium context (with saved cookies/auth per domain), optionally applies `playwright-stealth` patches, navigates to the apply URL, runs an inline CAPTCHA check, extracts and compresses the page HTML to a form-focused skeleton (`_clean_form_html`), builds a structured prompt (`_build_fill_prompt`), calls Gemini once to get a JSON field mapping, then fills each field via `page.fill` and handles file uploads via `page.set_input_files`. For `fill_and_submit` it then broadcasts the review event, waits for confirmation, and clicks the submit selector returned by Gemini. For `fill_only` it sets `context = None` in the finally block to intentionally leave the browser open.
+Implements `PlaywrightFormFiller`, the Tier 1 browser automation engine. It launches a persistent Chromium context (with saved cookies/auth per domain), optionally applies `playwright-stealth` patches, navigates to the apply URL, runs an inline CAPTCHA check, extracts and compresses the page HTML to a form-focused skeleton (`_clean_form_html`), builds a structured prompt (`_build_fill_prompt`), calls the LLM once to get a JSON field mapping, then fills each field via `page.fill` and handles file uploads via `page.set_input_files`. For `fill_and_submit` it then broadcasts the review event, waits for confirmation, and clicks the submit selector returned by the LLM. For `fill_only` it sets `context = None` in the finally block to intentionally leave the browser open.
 
 ### `captcha_handler.py`
 
@@ -92,7 +92,7 @@ class ApplicationEngine:
     def __init__(
         self,
         api_key: str,
-        model: str = None,       # defaults to settings.GOOGLE_MODEL
+        model: str = None,       # defaults to settings.LLM_MODEL
         daily_limit: int = 10,
     ) -> None: ...
 ```
@@ -210,7 +210,7 @@ Opens `apply_url` in the system default browser and returns `status="manual"`. T
 
 ```python
 class PlaywrightFormFiller:
-    def __init__(self, gemini_client: GeminiClient) -> None: ...
+    def __init__(self, llm_client: LLMClient) -> None: ...
 ```
 
 #### `fill_and_submit`
@@ -232,7 +232,7 @@ async def fill_and_submit(
 ) -> dict:
 ```
 
-Eight-phase pipeline: navigate → CAPTCHA check → clean HTML → Gemini call → fill fields → file uploads → screenshot + broadcast review → wait confirm/cancel → click submit. Returns `{"status": "applied"|"cancelled", "filled_fields": {...}, "screenshot_b64": str|None}`. **Raises** on unrecoverable error so the caller can fall back to Tier 2.
+Eight-phase pipeline: navigate → CAPTCHA check → clean HTML → LLM call → fill fields → file uploads → screenshot + broadcast review → wait confirm/cancel → click submit. Returns `{"status": "applied"|"cancelled", "filled_fields": {...}, "screenshot_b64": str|None}`. **Raises** on unrecoverable error so the caller can fall back to Tier 2.
 
 #### `fill_only`
 
@@ -275,12 +275,12 @@ def _build_fill_prompt(
 ) -> str:
 ```
 
-Builds the single Gemini prompt requesting a JSON object with three keys: `fields` (list of `{selector, value}`), `file_inputs` (list of `{selector, file}`), and `submit_selector`.
+Builds the single LLM prompt requesting a JSON object with three keys: `fields` (list of `{selector, value}`), `file_inputs` (list of `{selector, file}`), and `submit_selector`.
 
-#### `_parse_gemini_response` (internal)
+#### `_parse_llm_response` (internal)
 
 ```python
-def _parse_gemini_response(self, raw: str) -> dict:
+def _parse_llm_response(self, raw: str) -> dict:
 ```
 
 Strips markdown code fences, extracts the first JSON object via regex, and parses it. Returns a safe default (`{"fields": [], "file_inputs": [], "submit_selector": "button[type=submit]"}`) on any parse failure.
@@ -448,8 +448,8 @@ ApplicationEngine._dispatch(mode, ...)
   │               │          └─ if blocked: broadcast CaptchaDetected WS, poll until clear,
   │               │               save_session(), broadcast CaptchaResolved WS
   │               │     5. _clean_form_html() → form skeleton ≤15 KB
-  │               │     6. _build_fill_prompt() → structured Gemini prompt
-  │               │     7. GeminiClient.generate_text() → JSON field mapping
+  │               │     6. _build_fill_prompt() → structured LLM prompt
+  │               │     7. LLM client generate_text() → JSON field mapping
   │               │     8. page.fill() for each field; page.set_input_files() for CV/letter
   │               │     9. page.screenshot() → base64
   │               │    10. broadcast apply_review WS (filled_fields + screenshot)
@@ -461,7 +461,7 @@ ApplicationEngine._dispatch(mode, ...)
   │               │
   │               └─ [Tier 2] _browser_use_apply(...)
   │                     1. Build fill_task prompt string
-  │                     2. Browser(headless=False) + ChatGoogleGenerativeAI
+  │                     2. Browser(headless=False) + configured LLM provider
   │                     3. Agent(task=fill_task).run() → pauses before submit
   │                     4. Parse filled_fields from agent final_result()
   │                     5. broadcast apply_review WS
@@ -510,9 +510,8 @@ All settings are loaded from environment variables (or `.env` file) via `backend
 | Variable | Type | Default | Description |
 |---|---|---|---|
 | `APPLY_TIER1_ENABLED` | `bool` | `True` | Feature flag for `PlaywrightFormFiller`. When `False`, both `AutoApplyStrategy` and `AssistedApplyStrategy` skip Tier 1 and go directly to the browser-use agent. |
-| `GOOGLE_API_KEY` | `str` | — (required) | Gemini API key passed to both `GeminiClient` (Tier 1) and `ChatGoogleGenerativeAI` (Tier 2). |
-| `GOOGLE_MODEL` | `str` | `"gemini-3-flash-preview"` | Primary model used for both the Tier 1 Gemini form-analysis call and the Tier 2 browser-use agent. |
-| `GOOGLE_MODEL_FALLBACKS` | `str` | `""` | Comma-separated fallback model names for `GeminiClient`. Not directly used by the applier but affects LLM reliability. |
+| `LLM_API_KEY` | `str` | — (required) | LLM provider API key passed to both the LLM client (Tier 1) and the browser-use agent (Tier 2). Provider-specific `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are also honoured. |
+| `LLM_MODEL` | `str` | _(provider default)_ | Model used for both the Tier 1 form-analysis call and the Tier 2 browser-use agent. |
 | `JOBPILOT_DATA_DIR` | `str` | `"./data"` | Root data directory. Browser profiles are stored at `{data_dir}/browser_profiles/{domain_key}/`, legacy sessions at `{data_dir}/browser_sessions/`. |
 
 **Database-stored settings** (in `UserSettings` / `SiteSettings` model):
@@ -525,7 +524,7 @@ All settings are loaded from environment variables (or `.env` file) via `backend
 
 | Constant | Location | Value | Description |
 |---|---|---|---|
-| `_MAX_FORM_CHARS` | `form_filler.py` | `15_000` | Maximum characters of cleaned form HTML sent to Gemini. |
+| `_MAX_FORM_CHARS` | `form_filler.py` | `15_000` | Maximum characters of cleaned form HTML sent to the LLM. |
 | confirm/cancel timeout | `form_filler.py`, `auto_apply.py` | `1800` seconds | How long the review gate waits before auto-cancelling. |
 | CAPTCHA poll interval | `captcha_handler.py` | `2.0` seconds | Frequency of block-resolution polling. |
 | CAPTCHA timeout | `captcha_handler.py` | `300.0` seconds | Maximum wait time for user to solve a CAPTCHA. |
@@ -539,8 +538,8 @@ All settings are loaded from environment variables (or `.env` file) via `backend
 - The daily limit defaults to `10` in three separate places: `ApplicationEngine.__init__`, `main.py`, and `batch_runner.py` line 264 (batch scheduler). These are not coordinated from a single source of truth.
 - The confirm/cancel review timeout is hardcoded at 1800 seconds (30 minutes) in both `form_filler.py` and `auto_apply.py`. There is no setting to adjust it.
 - The CAPTCHA polling interval (2 s) and timeout (300 s) in `captcha_handler.py` are module-level constants with no env var override.
-- `_MAX_FORM_CHARS` (15,000) in `form_filler.py` is a fixed limit. Large forms may be truncated, causing Gemini to miss fields.
-- The submit selector fallback in `_parse_gemini_response` defaults to `"button[type=submit]"`, which may not match all job board submit patterns.
+- `_MAX_FORM_CHARS` (15,000) in `form_filler.py` is a fixed limit. Large forms may be truncated, causing the LLM to miss fields.
+- The submit selector fallback in `_parse_llm_response` defaults to `"button[type=submit]"`, which may not match all job board submit patterns.
 
 **Missing features:**
 
@@ -551,5 +550,5 @@ All settings are loaded from environment variables (or `.env` file) via `backend
 - There is no retry logic at either tier. A transient network error during `page.goto` or a partial form fill will immediately trigger the Tier 2 fallback (or fail outright in Tier 2).
 - Browser profiles accumulate on disk indefinitely; there is no cleanup or rotation mechanism.
 - The `browser-use` agent in both AUTO and ASSISTED Tier 2 paths does not load the persisted storage state (cookies saved by `captcha_handler`). Only `PlaywrightFormFiller` uses `launch_persistent_context` with the profile directory.
-- Multi-page application forms (wizards with multiple steps) are not explicitly handled by Tier 1; Gemini only sees the first page's form HTML.
+- Multi-page application forms (wizards with multiple steps) are not explicitly handled by Tier 1; the LLM only sees the first page's form HTML.
 - No mechanism to surface which specific fields failed to fill — only successful fills are included in `filled_fields`.

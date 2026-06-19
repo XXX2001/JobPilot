@@ -10,10 +10,10 @@ persistence. The module implements a **two-tier scraping system** to balance
 cost, speed, and coverage. **Tier 1** uses the Scrapling HTTP fetcher
 (`ScraplingFetcher`): it fetches the page's HTML over a regular (or stealthy
 Patchright-based) HTTP request, cleans the HTML down to ~5–15 KB of
-LLM-friendly markdown, and calls Gemini once for structured extraction — total
-cost is roughly 1 Gemini API call and 10–30 seconds per site/keyword pair.
+LLM-friendly markdown, and calls the LLM once for structured extraction — total
+cost is roughly 1 LLM API call and 10–30 seconds per site/keyword pair.
 **Tier 2** uses the `browser-use` LLM agent (`AdaptiveScraper`): it opens a
-full Playwright browser, lets Gemini drive it step-by-step (up to 20 steps),
+full Playwright browser, lets the LLM drive it step-by-step (up to 20 steps),
 and is used as a fallback when Tier 1 returns zero results or when the site is
 unknown. Tier 1 handles five known job boards (LinkedIn, Indeed, Google Jobs,
 Welcome to the Jungle, Glassdoor); every other source — including user-supplied
@@ -46,7 +46,7 @@ messages are broadcast at each phase boundary.
 ### `adaptive_scraper.py`
 
 Tier 2 implementation. `AdaptiveScraper` creates a `browser-use` `Agent` with
-a Gemini LLM backend, navigates to the target URL, and returns a structured
+the configured LLM provider as its backend, navigates to the target URL, and returns a structured
 JSON list of jobs. It retries once on failure with exponential backoff (2 s,
 then 4 s). Agent steps are capped at 20 for listing pages and 8 for detail
 pages. The browser is always stopped in a `finally` block to prevent leaks.
@@ -60,8 +60,8 @@ library in `asyncio.get_event_loop().run_in_executor()` to avoid blocking.
 It builds a keyword-aware search URL per site, fetches HTML via
 `StealthyFetcher` (Patchright, for LinkedIn/Indeed/Glassdoor) or plain
 `Fetcher`, cleans the HTML into markdown using lxml + markdownify + cssselect,
-and calls `GeminiClient.generate_text()` once with a compact extraction prompt.
-Cleaned content is capped at 30,000 characters before being sent to Gemini.
+and calls the LLM client's `generate_text()` once with a compact extraction prompt.
+Cleaned content is capped at 30,000 characters before being sent to the LLM.
 
 ### `session_manager.py`
 
@@ -85,7 +85,7 @@ Central configuration store. Contains four exported dictionaries:
   login URL.
 - `SITE_CONTENT_SELECTORS` — CSS selectors used by `ScraplingFetcher._clean_html()`
   to scope the HTML tree to the job-results container before noise removal.
-- `EXTRACTION_PROMPTS` — Tier 1 Gemini prompts (navigation-free, parse-only)
+- `EXTRACTION_PROMPTS` — Tier 1 LLM prompts (navigation-free, parse-only)
   with site-specific variants for LinkedIn and Glassdoor.
 
 Also exports `format_prompt(site, **kwargs)` which performs safe template
@@ -130,7 +130,7 @@ Empty package marker (no re-exports).
 
 ```python
 class ScraplingFetcher:
-    def __init__(self, gemini_client: GeminiClient) -> None
+    def __init__(self, llm_client: LLMClient) -> None
 ```
 
 **`scrape_job_listings`**
@@ -149,7 +149,7 @@ async def scrape_job_listings(
 
 Fetches and extracts job listings for a known job board. Builds a
 keyword-aware search URL, fetches HTML (stealthy or plain), cleans to
-markdown, calls Gemini once. Returns `[]` on any failure so the caller can
+markdown, calls the LLM once. Returns `[]` on any failure so the caller can
 fall back to Tier 2.
 
 **`fetch_page`**
@@ -175,7 +175,7 @@ string.
 
 ```python
 class AdaptiveScraper:
-    def __init__(self, gemini_api_key: str | None = None) -> None
+    def __init__(self, llm_api_key: str | None = None) -> None
 ```
 
 **`scrape_job_listings`**
@@ -434,7 +434,7 @@ Morning batch trigger
 │  │    _build_search_url()  → keyword-aware URL         │ │
 │  │    fetch_page()         → raw HTML (Scrapling)      │ │
 │  │    _clean_html()        → markdown ≤30 000 chars    │ │
-│  │    _extract_jobs()      → GeminiClient.generate_text│ │
+│  │    _extract_jobs()      → LLM client generate_text │ │
 │  │    extract_json_from_text() + parse_jobs_from_json()│ │
 │  │    → list[RawJob] (source_name="scrapling")         │ │
 │  └─────────────────────────────────────────────────────┘ │
@@ -492,8 +492,8 @@ Free tier: 250 API calls/day. Country must be a 2-letter ISO code.
 | Setting | Source | Default | Description |
 |---|---|---|---|
 | `JOBPILOT_SCRAPER_HEADLESS` | env / settings | `True` | Headless mode for Scrapling StealthyFetcher and browser-use Agent |
-| `GOOGLE_API_KEY` | env / settings | — | Gemini API key used by both AdaptiveScraper and ScraplingFetcher |
-| `GOOGLE_MODEL` | env / settings | `"gemini-2.0-flash"` | Gemini model identifier for browser-use ChatGoogle |
+| `LLM_API_KEY` | env / settings | — | LLM provider API key used by both AdaptiveScraper and ScraplingFetcher (provider-specific `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` also honoured) |
+| `LLM_MODEL` | env / settings | _(provider default)_ | Model identifier for the browser-use agent and Tier 1 extraction |
 | `jobpilot_data_dir` | env / settings | — | Base directory for browser profiles and session files |
 | `CREDENTIAL_KEY` | env / settings | — | Fernet symmetric key for decrypting stored site credentials |
 
@@ -532,7 +532,7 @@ removal:
 ### Tier 1 Content Limit
 
 `_MAX_CONTENT_CHARS = 30_000` — markdown content is truncated to this length
-before being sent to Gemini.
+before being sent to the LLM.
 
 ### browser-use Agent Limits
 
@@ -559,7 +559,7 @@ default fallback is `"fr"` (France).
 
 ---
 
-## Known Limitations / TODOs
+## Known Limitations
 
 ### Hardcoded Values and Defaults
 
@@ -591,7 +591,7 @@ default fallback is `"fr"` (France).
   Indeed. Auto-login for any other `requires_login` site silently falls back to
   manual flow.
 
-### Missing Features
+### Unsupported / Out of Scope
 
 - No retry or pagination for Adzuna (single page, 20 results per keyword).
 - No Tier 1 implementation for `lab_website` sources — all lab URLs go

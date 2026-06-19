@@ -61,7 +61,7 @@ Performs a deeper, embedding-based assessment of how well the user's CV matches 
 ### Flow
 
 1. Parse the user's CV into `SkillEntry` list via `CVParser.build_profile()`.
-2. Embed all skill texts in batch via `GeminiClient.embed()` (using `text-embedding-004`).
+2. Embed all skill texts in batch via the embedding client's `embed()` (using `text-embedding-3-small`).
 3. Embed the job's `required_skills` and `nice_to_have_skills` from `JobContext`.
 4. Compute cosine similarity between each job requirement and all CV skills.
 5. For each requirement, take the max cosine similarity across all CV skills.
@@ -153,9 +153,9 @@ class CVProfile:
 Post-processes a `CVProfile` by populating the `embedding` field of each `SkillEntry`. Called lazily by `FitEngine` before cosine-similarity computation.
 
 ```python
-async def embed_profile(profile: CVProfile, gemini_client: GeminiClient) -> CVProfile:
+async def embed_profile(profile: CVProfile, embedding_client: EmbeddingClient) -> CVProfile:
     texts = [s.text for s in profile.skills]
-    vectors = await gemini_client.embed(texts)
+    vectors = await embedding_client.embed(texts)
     for skill, vector in zip(profile.skills, vectors):
         skill.embedding = vector
     return profile

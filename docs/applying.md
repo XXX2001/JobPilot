@@ -23,7 +23,7 @@ All of the apply machinery lives in `backend/applier/`.
 The flow inside `apply()`:
 
 1. **Daily-limit reservation** (non-`manual` only, `engine.py:160`). Calls `DailyLimitGuard.reserve_slot`. On `DailyLimitExceeded` it returns early with `status="cancelled"`.
-2. **Concurrency guard** (`engine.py:177`). Under `self._registry_lock` (an `asyncio.Lock`), it checks whether `job_match_id` already has an in-flight `confirm_event`; if so it releases the just-reserved slot and returns `cancelled`. This closes the read-then-write race (T4a) where two concurrent requests for the same job could both pass the membership check.
+2. **Concurrency guard** (`engine.py:177`). Under `self._registry_lock` (an `asyncio.Lock`), it checks whether `job_match_id` already has an in-flight `confirm_event`; if so it releases the just-reserved slot and returns `cancelled`. This closes the read-then-write race where two concurrent requests for the same job could both pass the membership check.
 3. **Build `ApplyContext`** (`engine.py:202`) — all mutable lifecycle state, including `confirm_event` / `cancel_event` and an `extras` dict carrying the mode, `ApplicantInfo`, and PDF paths.
 4. **Build the per-mode transition table** and run the FSM (`engine.py:222`).
 5. **Cleanup `finally`** (`engine.py:241`) — pops the confirm/cancel events, cached review snapshot, and pending patches for the job. A `BaseException` (incl. `asyncio.CancelledError`, which the FSM's `except Exception` does not catch) also force-stops any live browser before propagating (`engine.py:228`).
@@ -47,13 +47,13 @@ Reserved → CaptchaCheck → Filling → AwaitingConfirm → Submitting → Rec
 
 ### What each state actually does
 
-Most middle states (`CaptchaCheck`, `Filling`, `AwaitingConfirm`, `Submitting`) are **pass-through observability hooks** — they only log and advance. The real work happens in `RECORDING.on_enter` (`recording_on_enter`, `engine.py:320`), which calls `self._dispatch(ctx)` to run the chosen strategy. The middle states exist so the lifecycle is visible to tests/monitoring and provide future hook points (e.g. a human captcha-solver pause).
+Most middle states (`CaptchaCheck`, `Filling`, `AwaitingConfirm`, `Submitting`) are **pass-through observability hooks** — they only log and advance. The real work happens in `RECORDING.on_enter` (`recording_on_enter`, `engine.py:320`), which calls `self._dispatch(ctx)` to run the chosen strategy. The middle states exist so the lifecycle is visible to tests/monitoring and provide hook points (e.g. a human captcha-solver pause).
 
 `recording_next` (`engine.py:328`) maps the strategy result to a terminal:
 
 - `RESULT_CANCELLED` → `CANCELLED`
 - `RESULT_FAILED` → `FAILED`
-- success → call `ApplicationRecorder.record`; on success → `APPLIED`, on any record exception → `REMOTE_SUBMITTED_LOCAL_FAILED` (EH-03: the remote submit may have succeeded while the local DB write failed).
+- success → call `ApplicationRecorder.record`; on success → `APPLIED`, on any record exception → `REMOTE_SUBMITTED_LOCAL_FAILED` (the remote submit may have succeeded while the local DB write failed).
 
 Terminal `on_enter` handlers (`engine.py:380`–`435`) perform compensation:
 
@@ -67,7 +67,7 @@ Terminal `on_enter` handlers (`engine.py:380`–`435`) perform compensation:
 
 ## Auto and assisted: two tiers
 
-Both Tier-2 strategies are **provider-agnostic** — they get their LLM via the factory, never importing a vendor SDK directly. `make_llm_client()` (Tier-1 form filler) and `make_browser_llm()` (Tier-2 browser-use agent) in `backend/llm/factory.py` switch on `LLM_PROVIDER` / `BROWSER_LLM_PROVIDER` (`gemini` | `openai` | `anthropic`), so the apply code works with any configured provider.
+Both Tier-2 strategies are **provider-agnostic** — they get their LLM via the factory, never importing a vendor SDK directly. `make_llm_client()` (Tier-1 form filler) and `make_browser_llm()` (Tier-2 browser-use agent) in `backend/llm/factory.py` switch on `LLM_PROVIDER` / `BROWSER_LLM_PROVIDER` (`openai` | `anthropic`), so the apply code works with any configured provider.
 
 ### Tier 1 — `PlaywrightFormFiller` (`form_filler.py`)
 
@@ -76,7 +76,7 @@ Direct Playwright DOM manipulation plus a **single** LLM call. Tried first, but 
 1. Launch a persistent Chromium context under `data/browser_profiles/{site_profile_key}/` (reuses saved cookies/auth), applying `playwright_stealth` if available.
 2. Inline CAPTCHA check via `check_and_handle_captcha` (passing the `cancel_event` so the user can bail out of a captcha wait).
 3. `_clean_form_html` (`form_filler.py:395`) strips the page to a ~15 KB form skeleton.
-4. `_build_fill_prompt` (`form_filler.py:446`) → one `llm.generate_text` call → `_parse_gemini_response` (`form_filler.py:504`) returns `{fields, file_inputs, submit_selector}`.
+4. `_build_fill_prompt` (`form_filler.py:446`) → one `llm.generate_text` call → `_parse_llm_response` (`form_filler.py:504`) returns `{fields, file_inputs, submit_selector}`.
 5. `page.fill` each field; `page.set_input_files` for CV/cover-letter uploads.
 6. Screenshot, broadcast `apply_review` over WS, cache the snapshot via `on_review`.
 7. Wait on confirm/cancel (30-min timeout).
@@ -122,7 +122,7 @@ The only safe gate is `reserve_slot` (`daily_limit.py:98`), which is **atomic**:
 2. Re-`COUNT` the day's countable rows. If over the limit → `rollback()` and raise `DailyLimitExceeded`.
 3. Otherwise `commit()` so a concurrent reservation on another connection sees it, and return the placeholder id.
 
-This closes the TOCTOU race (audit PC-04 / DB-06) between the old non-atomic `can_apply` check and the subsequent insert. The read-only helpers `remaining_today`, `can_apply`, `assert_can_apply` remain for informational use (e.g. the batch runner pre-computing how many CVs to generate) and must **not** be used as the submit gate.
+This closes the TOCTOU race between a non-atomic `can_apply` check and the subsequent insert. The read-only helpers `remaining_today`, `can_apply`, `assert_can_apply` remain for informational use (e.g. the batch runner pre-computing how many CVs to generate) and must **not** be used as the submit gate.
 
 The reserved placeholder is later updated in place by the recorder, or released (status → `cancelled`, `applied_at` cleared) by `ApplicationRecorder.release_reserved_slot` on cancel/fail.
 
@@ -134,7 +134,7 @@ The reserved placeholder is later updated in place by the recorder, or released 
 
 `captcha_handler.py` detects CAPTCHAs (selector-based, `_CAPTCHA_SELECTORS`) and Cloudflare/bot block pages (title/body text, `_BLOCK_TITLE_FRAGMENTS`). Key functions:
 
-- `site_profile_key(url)` (`captcha_handler.py:66`) — the **canonical** profile-dir key (lowercase host, `www.` stripped, dots → underscores, e.g. `linkedin_com`). It is the single source of truth shared by both tiers and the form filler, fixing the T4a bug where Tier-2's old `_site_key` looked in the wrong directory and silently ran as a guest.
+- `site_profile_key(url)` (`captcha_handler.py:66`) — the **canonical** profile-dir key (lowercase host, `www.` stripped, dots → underscores, e.g. `linkedin_com`). It is the single source of truth shared by both tiers and the form filler, so Tier 2 looks in the same profile directory as Tier 1 rather than silently running as a guest.
 - `check_and_handle_captcha` / `wait_for_captcha_resolution` (`captcha_handler.py:176`) — broadcast a `CaptchaDetected` WS message, poll until the user solves it in the visible browser (or the `cancel_event` fires), then `save_session` persists the storage state so future visits skip the challenge.
 - `preflight_check_url` (`captcha_handler.py:270`) — a standalone headless probe that, on detecting a block, relaunches visibly for the user to solve and saves the session.
 

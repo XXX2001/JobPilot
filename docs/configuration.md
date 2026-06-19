@@ -24,16 +24,17 @@ defaults   ─┘    (config.py)     (friendly errors)     (provider-aware, fail
 
 ## AI provider selection
 
-JobPilot has three independent LLM roles — generation, embeddings, and the browser agent — each with its own provider/model/base-URL/key. You can mix providers (e.g. local generation + Gemini embeddings).
+JobPilot has three independent LLM roles — generation, embeddings, and the browser agent — each with its own provider/model/base-URL/key. You can mix providers (e.g. local generation + a hosted embedding provider). `openai` here means **any** OpenAI-compatible endpoint — hosted OpenAI, a local server (Ollama, LM Studio, vLLM, llama.cpp), or another vendor's OpenAI-compatible endpoint — selected with `*_BASE_URL`.
 
 ### Generation (`LLM_*`)
 
 | Env var | Field | Default | Required? |
 |---|---|---|---|
-| `LLM_PROVIDER` | `LLM_PROVIDER` | `gemini` | One of `gemini` \| `openai` \| `anthropic` |
+| `LLM_PROVIDER` | `LLM_PROVIDER` | `openai` | One of `openai` \| `anthropic` |
 | `LLM_MODEL` | `LLM_MODEL` | `""` (provider default) | Optional |
 | `LLM_BASE_URL` | `LLM_BASE_URL` | `""` | For OpenAI-compatible / local servers, e.g. `http://localhost:11434/v1` |
 | `LLM_API_KEY` | `LLM_API_KEY` (secret) | `""` | See validation rules |
+| `LLM_DISABLE_THINKING` | `LLM_DISABLE_THINKING` | `false` | For local reasoning models (Qwen3, DeepSeek-R1): when true, asks the server to skip chain-of-thought via `chat_template_kwargs.enable_thinking=false` — typically a large latency win (measured ~124s → ~16s on a CV-tailoring call). Ignored by servers that don't support the flag |
 
 `config.py:49-52`. Provider-default and base-URL details are wired through `backend/llm/factory.py` (`make_llm_client`, used at `backend/main.py:141`).
 
@@ -41,18 +42,18 @@ JobPilot has three independent LLM roles — generation, embeddings, and the bro
 
 | Env var | Field | Default | Required? |
 |---|---|---|---|
-| `EMBEDDING_PROVIDER` | `EMBEDDING_PROVIDER` | `gemini` | One of `gemini` \| `openai` (anthropic has no embeddings API) |
-| `EMBEDDING_MODEL` | `EMBEDDING_MODEL` | `text-embedding-004` | Optional |
+| `EMBEDDING_PROVIDER` | `EMBEDDING_PROVIDER` | `openai` | `openai` only (anthropic has no embeddings API) |
+| `EMBEDDING_MODEL` | `EMBEDDING_MODEL` | `text-embedding-3-small` | Optional |
 | `EMBEDDING_BASE_URL` | `EMBEDDING_BASE_URL` | `""` | OpenAI-compatible endpoint |
 | `EMBEDDING_API_KEY` | `EMBEDDING_API_KEY` (secret) | `""` | See validation rules |
 
-`config.py:54-57`. Note: many local builds (e.g. llama.cpp Qwen) do **not** serve `/v1/embeddings` (HTTP 501). Keep embeddings on a backend that does — Gemini, or an OpenAI endpoint with an embedding model — or fit-scoring breaks (`.env.example:69-72`).
+`config.py:54-57`. Note: many local builds (e.g. llama.cpp Qwen) do **not** serve `/v1/embeddings` (HTTP 501). Keep embeddings on an OpenAI-compatible endpoint that serves an embedding model — or fit-scoring breaks (`.env.example:69-72`).
 
 ### Browser agent (`BROWSER_LLM_*`)
 
 | Env var | Field | Default | Required? |
 |---|---|---|---|
-| `BROWSER_LLM_PROVIDER` | `BROWSER_LLM_PROVIDER` | `gemini` | One of `gemini` \| `openai` (anthropic only via OpenAI-compatible `base_url`) |
+| `BROWSER_LLM_PROVIDER` | `BROWSER_LLM_PROVIDER` | `openai` | `openai` only (anthropic only via OpenAI-compatible `base_url`) |
 | `BROWSER_LLM_MODEL` | `BROWSER_LLM_MODEL` | `""` | Optional |
 | `BROWSER_LLM_BASE_URL` | `BROWSER_LLM_BASE_URL` | `""` | OpenAI-compatible endpoint |
 | `BROWSER_LLM_API_KEY` | `BROWSER_LLM_API_KEY` (secret) | `""` | See validation rules |
@@ -78,7 +79,6 @@ LLM_MODEL=Qwen3.6-27B-MTP                  # must match the served model id
 
 | Env var | Field | Default | Required? |
 |---|---|---|---|
-| `GOOGLE_API_KEY` | `GOOGLE_API_KEY` (secret) | `""` | Required only if any role uses `gemini` |
 | `OPENAI_API_KEY` | `OPENAI_API_KEY` (secret) | `""` | Fallback key for `openai`-provider roles when the generic `*_API_KEY` is empty |
 | `ANTHROPIC_API_KEY` | `ANTHROPIC_API_KEY` (secret) | `""` | Required if generation provider is `anthropic` (or set `LLM_API_KEY`) |
 | `ADZUNA_APP_ID` | `ADZUNA_APP_ID` | `""` | Optional — enables the Adzuna job source |
@@ -108,6 +108,7 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 | `JOBPILOT_PORT` | `jobpilot_port` | `8000` | Bind port |
 | `JOBPILOT_LOG_LEVEL` | `jobpilot_log_level` | `info` | Log level |
 | `JOBPILOT_SCRAPER_HEADLESS` | `jobpilot_scraper_headless` | `true` | Run the browser scraper headless |
+| `JOBPILOT_APPLY_HEADLESS` | `jobpilot_apply_headless` | `false` | Tier-2 apply uses a *visible* browser by default so you can watch and intervene on logins and captchas. Set true for headless/server/Docker runs with no display. The apply browser always launches with container-safe Chromium flags (`--no-sandbox` / `--disable-dev-shm-usage`), so headless works in Docker |
 | `JOBPILOT_DATA_DIR` | `jobpilot_data_dir` | `./data` | Resolved to absolute path under project root if relative (`config.py:222`) |
 | `JOBPILOT_ALLOWED_ORIGINS` | `jobpilot_allowed_origins` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000` | Comma-separated CORS origins |
 
@@ -117,12 +118,7 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 
 ## Models
 
-| Env var | Field | Default | Notes |
-|---|---|---|---|
-| `GOOGLE_MODEL` | `GOOGLE_MODEL` | `gemini-3-flash-preview` | Primary Gemini model name |
-| `GOOGLE_MODEL_FALLBACKS` | `GOOGLE_MODEL_FALLBACKS` | `""` | Comma-separated fallback model names; empty means no fallbacks |
-
-`config.py:42-46`. Role-specific overrides are `LLM_MODEL` / `EMBEDDING_MODEL` / `BROWSER_LLM_MODEL` (above).
+Model names are configured per role via `LLM_MODEL` / `EMBEDDING_MODEL` / `BROWSER_LLM_MODEL` (see the provider tables above). Each is optional; when empty the provider adapter falls back to a sensible default (e.g. `text-embedding-3-small` for OpenAI-compatible embeddings).
 
 ---
 
@@ -142,7 +138,7 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 | Env var | Field | Default | Notes |
 |---|---|---|---|
 | `TECTONIC_TIMEOUT_SECONDS` | `TECTONIC_TIMEOUT_SECONDS` | `60.0` | LaTeX (Tectonic) compile timeout — fail loudly instead of hanging |
-| `GEMINI_TIMEOUT_SECONDS` | `GEMINI_TIMEOUT_SECONDS` | `45.0` | Gemini request timeout |
+| `LLM_TIMEOUT_SECONDS` | `LLM_TIMEOUT_SECONDS` | `180.0` | LLM request timeout. Defaults to 180 because local reasoning models can take 100s+ on a single CV-tailoring call |
 
 `config.py:73-74`.
 
@@ -166,7 +162,7 @@ All optional — leave empty to disable. Obtain client credentials at `console.c
 
 ## Startup validation rules (`validate_runtime_config`)
 
-`Settings.validate_runtime_config()` (`backend/config.py:105`) returns a list of human-readable problems; an empty list means ready to run. The lifespan calls it and **refuses to start** if non-empty (`backend/main.py:99-108`). Each role independently checks only the credentials *its* provider needs — so a local-model user is never asked for a Google key.
+`Settings.validate_runtime_config()` (`backend/config.py:105`) returns a list of human-readable problems; an empty list means ready to run. The lifespan calls it and **refuses to start** if non-empty (`backend/main.py:99-108`). Each role independently checks only the credentials *its* provider needs — so a local-model user is never asked for a hosted key.
 
 The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and the literal `"placeholder"` as not-configured, and transparently unwraps `SecretStr`.
 
@@ -174,8 +170,7 @@ The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and
 
 | Provider | Requirement |
 |---|---|
-| invalid value | Must be one of `gemini` \| `openai` \| `anthropic` |
-| `gemini` | `GOOGLE_API_KEY` must be set |
+| invalid value | Must be one of `openai` \| `anthropic` |
 | `openai` | `LLM_BASE_URL` (local/self-hosted) **or** `LLM_API_KEY` **or** `OPENAI_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` (or `LLM_API_KEY`) |
 
@@ -183,16 +178,14 @@ The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and
 
 | Provider | Requirement |
 |---|---|
-| invalid value | Must be `gemini` \| `openai` (anthropic has no embeddings API) |
-| `gemini` | `GOOGLE_API_KEY` must be set |
+| invalid value | Must be `openai` (anthropic has no embeddings API) |
 | `openai` | `EMBEDDING_BASE_URL` **or** `EMBEDDING_API_KEY` **or** `OPENAI_API_KEY` |
 
 ### Browser agent (`BROWSER_LLM_PROVIDER`)
 
 | Provider | Requirement |
 |---|---|
-| invalid value | Must be `gemini` \| `openai` |
-| `gemini` | `GOOGLE_API_KEY` must be set |
+| invalid value | Must be `openai` |
 | `openai` | `BROWSER_LLM_BASE_URL` **or** `BROWSER_LLM_API_KEY` **or** `OPENAI_API_KEY` |
 
 For `openai`-type roles, a configured `*_BASE_URL` (a local/self-hosted server, where the key is usually ignored) satisfies the requirement on its own; otherwise a hosted-OpenAI key is required (`_openai_compatible_ok`, `backend/config.py:117`).

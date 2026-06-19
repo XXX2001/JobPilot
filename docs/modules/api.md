@@ -116,8 +116,8 @@ Router prefix: `/api/settings`. Manages the single-user profile, search preferen
 | `ProfileUpdate` | All `ProfileOut` fields except `id`/timestamps, all `Optional` |
 | `SearchSettingsOut` | `id`, `keywords: dict`, `excluded_keywords`, `locations`, `salary_min`, `experience_min`, `experience_max`, `remote_only: bool`, `job_types`, `languages`, `excluded_companies`, `daily_limit: int`, `batch_time: str`, `min_match_score: float`, `countries` |
 | `SearchSettingsUpdate` | Same fields as `SearchSettingsOut` minus `id`, all `Optional` |
-| `SourcesUpdate` | `adzuna_app_id`, `adzuna_app_key`, `google_api_key` (all `Optional[str]`) |
-| `SetupStatus` | `gemini_key_set: bool`, `adzuna_key_set: bool`, `tectonic_found: bool`, `base_cv_uploaded: bool`, `setup_complete: bool` |
+| `SourcesUpdate` | `adzuna_app_id`, `adzuna_app_key`, `llm_api_key` (all `Optional[str]`) |
+| `SetupStatus` | `llm_key_set: bool`, `adzuna_key_set: bool`, `tectonic_found: bool`, `base_cv_uploaded: bool`, `setup_complete: bool` |
 | `SiteOut` | `name`, `display_name`, `type`, `requires_login: bool`, `base_url`, `enabled: bool`, `has_session: bool` |
 | `SiteToggle` | `enabled: bool` |
 | `CredentialOut` | `site_name`, `display_name`, `masked_email: Optional[str]`, `has_session: bool` |
@@ -748,7 +748,7 @@ Return which external API sources are configured (keys masked, never returned in
     "configured": true,
     "app_id_hint": "a1b2****"
   },
-  "gemini": {
+  "llm": {
     "configured": true
   }
 }
@@ -768,7 +768,7 @@ Placeholder route — returns guidance rather than accepting keys, because API k
 
 ```json
 {
-  "message": "API keys must be set in the .env file at the project root. Edit ADZUNA_APP_ID, ADZUNA_APP_KEY, and GOOGLE_API_KEY then restart the server.",
+  "message": "API keys must be set in the .env file at the project root. Edit ADZUNA_APP_ID, ADZUNA_APP_KEY, and LLM_API_KEY then restart the server.",
   "env_file": ".env"
 }
 ```
@@ -784,7 +784,7 @@ Return setup completeness flags, used by the frontend onboarding flow.
 
 ```json
 {
-  "gemini_key_set": true,
+  "llm_key_set": true,
   "adzuna_key_set": true,
   "tectonic_found": true,
   "base_cv_uploaded": true,
@@ -792,7 +792,7 @@ Return setup completeness flags, used by the frontend onboarding flow.
 }
 ```
 
-`tectonic_found` checks for `bin/tectonic` relative to CWD or `tectonic` on `PATH`. `base_cv_uploaded` checks `UserProfile.base_cv_path` on disk, falling back to any `*.tex` file in `{JOBPILOT_DATA_DIR}/templates/`. `setup_complete` is `gemini_key_set AND adzuna_key_set AND base_cv_uploaded` (tectonic is not required).
+`tectonic_found` checks for `bin/tectonic` relative to CWD or `tectonic` on `PATH`. `base_cv_uploaded` checks `UserProfile.base_cv_path` on disk, falling back to any `*.tex` file in `{JOBPILOT_DATA_DIR}/templates/`. `setup_complete` is `llm_key_set AND adzuna_key_set AND base_cv_uploaded` (tectonic is not required).
 
 ---
 
@@ -1006,7 +1006,7 @@ All settings are loaded from `.env` (or environment variables) via `backend.conf
 
 | Variable | Type | Default | Used by |
 |---|---|---|---|
-| `GOOGLE_API_KEY` | `str` | — (required) | `settings.py` — `gemini_key_set` check |
+| `LLM_API_KEY` | `str` | — (required) | `settings.py` — `llm_key_set` check |
 | `ADZUNA_APP_ID` | `str` | — (required) | `settings.py` — `adzuna_key_set` check; `jobs.py` (via `AdzunaClient`) |
 | `ADZUNA_APP_KEY` | `str` | — (required) | `settings.py` — `adzuna_key_set` check; `jobs.py` (via `AdzunaClient`) |
 | `CREDENTIAL_KEY` | `str` | `""` | `settings.py` — Fernet key for encrypting/decrypting site credentials |
@@ -1024,7 +1024,7 @@ Values of `None`, `""`, or `"placeholder"` are treated as "not configured" by th
 
 3. **`avg_match_score` silently swallowed.** In `GET /api/analytics/summary`, the `JobMatch.score` average is wrapped in a bare `except Exception: pass`, so any model import error or DB problem returns `null` without logging a warning.
 
-4. **`POST /api/documents/{match_id}/regenerate` is a stub.** The comment in `documents.py` (line 193) reads: `"Queue background regeneration (actual pipeline call deferred to Wave 3 scheduler)"`. No CV pipeline is actually invoked; the endpoint only optionally deletes existing rows and returns `"status": "queued"`.
+4. **`POST /api/documents/{match_id}/regenerate` is a stub.** No CV pipeline is actually invoked; the endpoint only optionally deletes existing rows (when `force=true`) and returns `"status": "queued"`.
 
 5. **`PUT /api/settings/sources` is a no-op.** The endpoint accepts the request body but ignores it entirely, returning only a guidance message. There is no mechanism to write API keys at runtime.
 

@@ -89,7 +89,7 @@ The realtime channel is a singleton WebSocket store (`frontend/src/lib/stores/we
 - **Message handling** (`websocket.ts:73-111`): each frame is JSON-parsed and validated by `asWSMessage` (`types/ws.ts:188`), which narrows by the string `type` discriminator and drops unknown messages. Valid messages are pushed into the `messages` store (capped at the last 200). `login_required` populates the `loginPrompt` store; `gmail_message_received` raises a deep-linked toast (`/tracker` if matched, else `/inbox`).
 - **`send(data: ClientMessage)`** serializes client→server frames (`confirm_submit`, `cancel_apply`, `patch_fields`, `login_done`, `login_cancel`).
 
-The full protocol is mirrored from the backend's Pydantic union in `backend/api/ws_models.py` into the discriminated-union types in `frontend/src/lib/types/ws.ts` (server→client: `status`, `job_progress`, `apply_review`, `apply_result`, `login_required`, `captcha_detected`, `gmail_sync_status`, etc.). There is no codegen — the two files must be kept in lockstep (noted in the file header as open item FE-02).
+The full protocol is mirrored from the backend's Pydantic union in `backend/api/ws_models.py` into the discriminated-union types in `frontend/src/lib/types/ws.ts` (server→client: `status`, `job_progress`, `apply_review`, `apply_result`, `login_required`, `captcha_detected`, `gmail_sync_status`, etc.). There is no codegen — the two files must be kept in lockstep by hand.
 
 Pages consume the stream reactively. For example, `queue/+page.svelte:52-73` runs an `$effect` over `$messages`: an `apply_review` frame opens the confirm modal (and persists the pending job id via `pendingReview` utils so a review survives reload), and a terminal `status` frame (`progress >= 1.0` or `< 0`) ends the refreshing spinner and reloads the queue.
 
@@ -127,7 +127,7 @@ First-run gating lives in two places, coordinated through `sessionStorage` key `
 1. **The gate** — `routes/+page.svelte:27-51` calls `maybeRedirectToOnboarding()` on mount: it fetches `GET /api/settings/status` and, if `shouldAutoRedirect(status, dismissed)` (i.e. `!setup_complete` and not yet dismissed), sets the session flag and `goto('/onboarding')`. The flag guarantees **at most one** auto-redirect per session, avoiding a loop.
 
 2. **The wizard** — `routes/onboarding/+page.svelte` is a 4-step stepper:
-   1. **API keys** (instructional) — shows whether `gemini_key_set`, `adzuna_key_set`, `tectonic_found` are satisfied and how to set them in `.env`; keys are not editable from the UI.
+   1. **API keys** (instructional) — shows whether `llm_key_set`, `adzuna_key_set`, `tectonic_found` are satisfied and how to set them in `.env`; keys are not editable from the UI.
    2. **CV upload** — `POST /api/settings/profile/cv-upload` (multipart, `.tex`/`.cls`).
    3. **Keywords** — chip input saved via `PUT /api/settings/search` (`{ keywords: { include: [...] } }`).
    4. **First batch** — enables a source (`PUT /api/settings/sites/{name}`) then kicks off `POST /api/queue/refresh`; a `409` is treated as success.

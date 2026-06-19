@@ -1,6 +1,6 @@
 # Gmail integration
 
-JobPilot links one Gmail inbox over OAuth, syncs message metadata on a poll cron, and heuristically classifies each message (ATS-ack, rejection, interview, offer) so application activity can be tracked from email. This is the "Phase 1" implementation: read-only scope, metadata-only storage, deterministic classifier.
+JobPilot links one Gmail inbox over OAuth, syncs message metadata on a poll cron, and heuristically classifies each message (ATS-ack, rejection, interview, offer) so application activity can be tracked from email. The integration uses a read-only scope, stores metadata only, and classifies with a deterministic heuristic.
 
 All code lives under `backend/gmail/` plus two API routers (`backend/api/gmail_auth.py`, `backend/api/gmail.py`), the models in `backend/models/gmail.py`, and the cron wiring in `backend/main.py`.
 
@@ -55,7 +55,7 @@ The three-leg flow is read-only (`PHASE_1_SCOPES = ["https://www.googleapis.com/
 
 ### `GmailCredential` model
 
-`backend/models/gmail.py:24` — one row per linked inbox. Phase 1 ships single-account but keys on `email_address` (unique) so multi-account needs no migration. Notable columns:
+`backend/models/gmail.py:24` — one row per linked inbox. The integration is single-account but keys on `email_address` (unique) so multi-account would need no migration. Notable columns:
 
 | Column | Notes |
 | --- | --- |
@@ -68,7 +68,7 @@ The three-leg flow is read-only (`PHASE_1_SCOPES = ["https://www.googleapis.com/
 
 ### `GmailMessage` model
 
-`backend/models/gmail.py:46` — cached **metadata only**, body is never stored. `gmail_message_id` is unique (the dedup key). A `CheckConstraint` (`ck_gmail_messages_category`) restricts `category` to `noise | rejection | offer | interview_invite | ats_ack | unknown`. Phase 2 enrichment columns (`extracted_company`, `extracted_role`, `extracted_interview_at`, `extracted_salary_text`, `extracted_questions_json`) are declared now but stay `NULL` in Phase 1.
+`backend/models/gmail.py:46` — cached **metadata only**, body is never stored. `gmail_message_id` is unique (the dedup key). A `CheckConstraint` (`ck_gmail_messages_category`) restricts `category` to `noise | rejection | offer | interview_invite | ats_ack | unknown`. The enrichment columns (`extracted_company`, `extracted_role`, `extracted_interview_at`, `extracted_salary_text`, `extracted_questions_json`) are declared on the model but are not populated by the current heuristic sync — they stay `NULL`.
 
 `ApplicationCorrespondence` (`backend/models/gmail.py:88`) links an `Application` to a `GmailMessage` with `direction`, `link_confidence`, and `link_method` — the join table for attributing email to a tracked application.
 
@@ -108,7 +108,7 @@ WebSocket broadcasts (`broadcast_gmail_sync_status`, `broadcast_gmail_message_re
 
 ## Email classifier
 
-`backend/gmail/classifier_heuristics.py` is a zero-cost, deterministic classifier. `classify(from_address, subject, snippet)` (`classifier_heuristics.py:81`) returns `(category, confidence, ats_vendor)` with confidence capped at `_MAX_HEURISTIC_CONFIDENCE = 0.85` so a future Phase 2 LLM tier can override.
+`backend/gmail/classifier_heuristics.py` is a zero-cost, deterministic classifier. `classify(from_address, subject, snippet)` (`classifier_heuristics.py:81`) returns `(category, confidence, ats_vendor)` with confidence capped at `_MAX_HEURISTIC_CONFIDENCE = 0.85` so a higher-confidence classifier (e.g. an LLM tier) could override it.
 
 Order of precedence:
 

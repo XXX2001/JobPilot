@@ -2,9 +2,9 @@
 
 ## System Overview
 
-JobPilot is an AI-powered local job application assistant that automates the full cycle of job hunting: discovery, relevance scoring, CV tailoring, and application submission. The user configures their profile and search preferences once, then triggers a morning batch that scrapes enabled job boards, scores raw listings against their criteria using a weighted keyword and recency model, tailors their LaTeX CV for each top match using Gemini 2.0 Flash, and queues the results for the user to review and apply with one click. The entire system runs as a single local process — a FastAPI backend serving both the REST API and the compiled SvelteKit frontend — backed by a SQLite database and the Tectonic LaTeX compiler.
+JobPilot is an AI-powered local job application assistant that automates the full cycle of job hunting: discovery, relevance scoring, CV tailoring, and application submission. The user configures their profile and search preferences once, then triggers a morning batch that scrapes enabled job boards, scores raw listings against their criteria using a weighted keyword and recency model, tailors their LaTeX CV for each top match using the configured LLM, and queues the results for the user to review and apply with one click. The entire system runs as a single local process — a FastAPI backend serving both the REST API and the compiled SvelteKit frontend — backed by a SQLite database and the Tectonic LaTeX compiler.
 
-The backend is structured around a lifespan-managed set of singleton services stored on `app.state`. There is no service mesh, no message broker, and no background worker process separate from the main event loop. Async SQLAlchemy with WAL-mode SQLite handles all persistence; real-time push notifications to the browser use a single persistent WebSocket connection managed by a `ConnectionManager`. The design philosophy optimises for local, single-user simplicity: no authentication layer, no container orchestration, no cloud services beyond the Gemini and Adzuna APIs.
+The backend is structured around a lifespan-managed set of singleton services stored on `app.state`. There is no service mesh, no message broker, and no background worker process separate from the main event loop. Async SQLAlchemy with WAL-mode SQLite handles all persistence; real-time push notifications to the browser use a single persistent WebSocket connection managed by a `ConnectionManager`. The design philosophy optimises for local, single-user simplicity: no authentication layer, no container orchestration, no cloud services beyond the configured LLM provider and Adzuna APIs.
 
 The two most structurally significant design choices are the two-tier scraping and the two-tier apply architectures, both of which follow the same pattern: a fast, deterministic Tier 1 path (Scrapling HTTP fetcher for scraping; Playwright direct form-fill for applying) is attempted first, and the system falls back to a powerful but slower Tier 2 path (browser-use LLM agent) when Tier 1 returns empty results or raises an exception. This makes the system both economical under normal conditions and robust against bot-detection and unusual page structures.
 
@@ -52,7 +52,7 @@ graph TD
         end
 
         subgraph LLM ["LLM (backend/llm/)"]
-            GEMINI["GeminiClient\n(15 RPM limiter, fallback models)"]
+            LLM_CLIENT["LLM client\n(OpenAI-compatible / Anthropic adapter)"]
             ANALYZER["JobAnalyzer"]
             MODIFIER["CVModifier"]
             EDITOR["CVEditor (letter)"]
@@ -78,7 +78,7 @@ graph TD
     end
 
     subgraph External ["External Services"]
-        GEMINI_API["Google Gemini API"]
+        LLM_API["LLM provider API"]
         ADZUNA_API["Adzuna Jobs API"]
         JOB_BOARDS["Job Boards\n(LinkedIn, Indeed, etc.)"]
         TECTONIC_BIN["Tectonic Binary\n(LaTeX compiler)"]
@@ -106,9 +106,9 @@ graph TD
     ADAPTIVE -->|browser-use agent| JOB_BOARDS
     ADZUNA_CLIENT -->|REST| ADZUNA_API
 
-    SCRAPLING --> GEMINI
-    ADAPTIVE --> GEMINI_API
-    GEMINI --> GEMINI_API
+    SCRAPLING --> LLM_CLIENT
+    ADAPTIVE --> LLM_API
+    LLM_CLIENT --> LLM_API
 
     CV_PIPELINE --> ANALYZER
     CV_PIPELINE --> MODIFIER
@@ -119,9 +119,9 @@ graph TD
     LETTER_PIPELINE --> INJECTOR
     LETTER_PIPELINE --> COMPILER
 
-    ANALYZER --> GEMINI
-    MODIFIER --> GEMINI
-    EDITOR --> GEMINI
+    ANALYZER --> LLM_CLIENT
+    MODIFIER --> LLM_CLIENT
+    EDITOR --> LLM_CLIENT
 
     COMPILER -->|subprocess| TECTONIC_BIN
 
@@ -129,7 +129,7 @@ graph TD
     AUTO --> FORM_FILLER
     AUTO --> CAPTCHA
     ASSISTED --> FORM_FILLER
-    FORM_FILLER --> GEMINI
+    FORM_FILLER --> LLM_CLIENT
     APPLY_ENGINE --> DAILY_LIMIT
 
     WS_SERVER -->|broadcast| WS_CLIENT
@@ -149,7 +149,7 @@ graph TD
 
 3. **Scraping — Phase 1 (API sources)** — `ScrapingOrchestrator.scrape_batch()` runs all `type="api"` sources (currently only Adzuna) in parallel via `asyncio.gather`. `AdzunaClient.search()` calls the Adzuna REST API, maps results to `RawJob` objects, and returns them.
 
-4. **Scraping — Phase 2 (browser sources)** — For each `type="browser"` source (LinkedIn, Indeed, Google Jobs, Welcome to the Jungle, Glassdoor), and for each keyword, the orchestrator attempts Tier 1 first: `ScraplingFetcher.scrape_job_listings()` fetches the page HTML via Scrapling's stealthy HTTP client, cleans it to ≤30,000 characters of markdown, and calls `GeminiClient.generate_text()` once to extract structured JSON. If Tier 1 returns zero results or raises, the orchestrator falls back to Tier 2: `AdaptiveScraper.scrape_job_listings()` launches a browser-use agent backed by Gemini, navigates the board autonomously (up to 20 steps, 180 s), and returns parsed `RawJob` objects. WebSocket progress messages are broadcast between sources (35%–60%).
+4. **Scraping — Phase 2 (browser sources)** — For each `type="browser"` source (LinkedIn, Indeed, Google Jobs, Welcome to the Jungle, Glassdoor), and for each keyword, the orchestrator attempts Tier 1 first: `ScraplingFetcher.scrape_job_listings()` fetches the page HTML via Scrapling's stealthy HTTP client, cleans it to ≤30,000 characters of markdown, and calls the LLM client's `generate_text()` once to extract structured JSON. If Tier 1 returns zero results or raises, the orchestrator falls back to Tier 2: `AdaptiveScraper.scrape_job_listings()` launches a browser-use agent backed by the configured LLM, navigates the board autonomously (up to 20 steps, 180 s), and returns parsed `RawJob` objects. WebSocket progress messages are broadcast between sources (35%–60%).
 
 5. **Scraping — Phase 3 (lab URL sources)** — All `type="lab_url"` sources (custom company/research-lab URLs added by the user) are scraped in parallel using Tier 2 only (AdaptiveScraper). WebSocket progress reaches 75% after this phase.
 
@@ -159,7 +159,7 @@ graph TD
 
 8. **DB persistence** — `_store_matches()` upserts each `Job` row by its dedup hash (updating description and apply_url if the new data is richer), then creates or updates a `JobMatch` row with `status="new"`, `score`, and `batch_date=today`. Commit is issued after all rows are written. WebSocket progress reaches 55%.
 
-9. **CV pre-generation** — `DailyLimitGuard.remaining_today()` determines how many CV slots remain for the day. The top N matches (N = remaining slots) receive pre-generated CVs: `CVPipeline.generate_tailored_cv()` is called for each, with up to 3 concurrent Gemini calls (controlled by `asyncio.Semaphore(3)`). Inside the pipeline, `JobAnalyzer.analyze()` calls Gemini to extract a `JobContext`, `CVModifier.modify()` calls Gemini to suggest ≤3 surgical LaTeX replacements, `CVApplicator.apply()` validates and applies them, and Tectonic compiles the resulting `.tex` to PDF. The resulting paths and diff are stored as `TailoredDocument` rows. WebSocket progress climbs from 65% to 95%.
+9. **CV pre-generation** — `DailyLimitGuard.remaining_today()` determines how many CV slots remain for the day. The top N matches (N = remaining slots) receive pre-generated CVs: `CVPipeline.generate_tailored_cv()` is called for each, with up to 3 concurrent LLM calls (controlled by `asyncio.Semaphore(3)`). Inside the pipeline, `JobAnalyzer.analyze()` calls the LLM to extract a `JobContext`, `CVModifier.modify()` calls the LLM to suggest ≤3 surgical LaTeX replacements, `CVApplicator.apply()` validates and applies them, and Tectonic compiles the resulting `.tex` to PDF. The resulting paths and diff are stored as `TailoredDocument` rows. WebSocket progress climbs from 65% to 95%.
 
 10. **Dashboard notification** — A final WebSocket broadcast (`progress=1.0`, message "N applications ready for review") signals the frontend to reload the queue. The UI's queue page re-fetches `GET /api/queue` and displays the new matches.
 
@@ -177,7 +177,7 @@ graph TD
 
 5. **Strategy selection** — Based on `ApplyMode`, the engine dispatches to one of three strategies:
 
-   - **AUTO (`AutoApplyStrategy`)**: If `APPLY_TIER1_ENABLED`, attempts `PlaywrightFormFiller.fill_and_submit()` (Tier 1). The form filler launches a persistent Chromium context (with per-domain saved cookies), optionally applies stealth patches, navigates to the apply URL, checks for CAPTCHA, cleans the page HTML to a ≤15,000-character form skeleton, calls Gemini once to get a JSON field mapping (selectors → values), fills all fields, takes a screenshot, and broadcasts an `apply_review` WebSocket message. Execution then blocks waiting for the user to send `confirm_submit` or `cancel_apply` over the WebSocket (30-minute timeout). If confirmed, the submit button is clicked. If Tier 1 raises at any point, execution falls through to the Tier 2 browser-use agent path, which similarly pauses for review before submitting.
+   - **AUTO (`AutoApplyStrategy`)**: If `APPLY_TIER1_ENABLED`, attempts `PlaywrightFormFiller.fill_and_submit()` (Tier 1). The form filler launches a persistent Chromium context (with per-domain saved cookies), optionally applies stealth patches, navigates to the apply URL, checks for CAPTCHA, cleans the page HTML to a ≤15,000-character form skeleton, calls the LLM once to get a JSON field mapping (selectors → values), fills all fields, takes a screenshot, and broadcasts an `apply_review` WebSocket message. Execution then blocks waiting for the user to send `confirm_submit` or `cancel_apply` over the WebSocket (30-minute timeout). If confirmed, the submit button is clicked. If Tier 1 raises at any point, execution falls through to the Tier 2 browser-use agent path, which similarly pauses for review before submitting.
 
    - **ASSISTED (`AssistedApplyStrategy`)**: Tier 1 calls `PlaywrightFormFiller.fill_only()`, which fills all fields but intentionally leaves the browser open (context is set to `None` before cleanup). Tier 2 runs a browser-use agent with explicit instructions not to submit. The browser remains visible for the user to review and submit manually.
 
@@ -195,13 +195,13 @@ graph TD
 
 2. **File staging** — `CVPipeline.generate_tailored_cv()` copies the base `.tex` file and all sibling support files (`.cls`, `.sty`, image files) into a job-scoped output directory under `{data_dir}/cvs/{match_id}/`.
 
-3. **Job analysis (LLM call 1)** — `JobAnalyzer.analyze()` sanitizes the job title (≤300 chars), company (≤200 chars), and description (≤2,000 chars), formats the `JOB_ANALYZER_PROMPT` template with those values, and calls `GeminiClient.generate_json()` with the `JobContext` Pydantic schema. Gemini returns a structured JSON object with required skills, nice-to-have skills, domain keywords, candidate matches, candidate gaps, locked fields, and suggested edit targets. The result is cached per `job.id` (1-hour TTL, 100-entry cap) to avoid redundant LLM calls.
+3. **Job analysis (LLM call 1)** — `JobAnalyzer.analyze()` sanitizes the job title (≤300 chars), company (≤200 chars), and description (≤2,000 chars), formats the `JOB_ANALYZER_PROMPT` template with those values, and calls the LLM client's `generate_json()` with the `JobContext` Pydantic schema. The LLM returns a structured JSON object with required skills, nice-to-have skills, domain keywords, candidate matches, candidate gaps, locked fields, and suggested edit targets. The result is cached per `job.id` (1-hour TTL, 100-entry cap) to avoid redundant LLM calls.
 
-4. **CV modification (LLM call 2)** — `CVModifier.modify()` serializes the `JobContext` to markdown via `JobContext.to_markdown()` and formats the `CV_MODIFIER_SKILL` prompt with both the context and the full LaTeX source (truncated at 50,000 chars). `GeminiClient.generate_json()` is called with the `CVModifierOutput` schema. Gemini returns a list of `CVReplacement` objects — each specifying a section, the exact original substring, the replacement text, a rationale, the job requirement matched, and a confidence score (0–1).
+4. **CV modification (LLM call 2)** — `CVModifier.modify()` serializes the `JobContext` to markdown via `JobContext.to_markdown()` and formats the `CV_MODIFIER_SKILL` prompt with both the context and the full LaTeX source (truncated at 50,000 chars). The LLM client's `generate_json()` is called with the `CVModifierOutput` schema. The LLM returns a list of `CVReplacement` objects — each specifying a section, the exact original substring, the replacement text, a rationale, the job requirement matched, and a confidence score (0–1).
 
 5. **Safety-gated application** — `CVApplicator.apply()` filters the replacements: only those with confidence ≥ 0.7 whose `original_text` is a verbatim substring of the current LaTeX source and whose `replacement_text` introduces no new LaTeX commands pass the gate. At most 3 replacements (highest confidence) are applied using `str.replace(..., 1)`.
 
-6. **LaTeX injection (letters)** — For the cover letter, `LetterPipeline.generate_tailored_letter()` follows a parallel path: `LaTeXParser.extract_sections()` finds JOBPILOT marker-delimited regions in the `.tex` file, `CVEditor.edit_letter()` calls Gemini to produce a customized paragraph (with a post-edit safety check that rejects any output introducing new LaTeX commands), and `LaTeXInjector.inject_letter_edit()` replaces the content between the `LETTER:PARA` markers.
+6. **LaTeX injection (letters)** — For the cover letter, `LetterPipeline.generate_tailored_letter()` follows a parallel path: `LaTeXParser.extract_sections()` finds JOBPILOT marker-delimited regions in the `.tex` file, `CVEditor.edit_letter()` calls the LLM to produce a customized paragraph (with a post-edit safety check that rejects any output introducing new LaTeX commands), and `LaTeXInjector.inject_letter_edit()` replaces the content between the `LETTER:PARA` markers.
 
 7. **Tectonic compilation** — `LaTeXCompiler.compile()` runs the Tectonic binary as an async subprocess (`asyncio.create_subprocess_exec`) with `--outdir <output_dir>`. Tectonic handles all package downloads automatically. A `LaTeXCompilationError` is raised if the binary is not found or exits non-zero.
 
@@ -211,7 +211,7 @@ graph TD
 
 ## Module Responsibilities
 
-**Config and startup (`backend/config.py`, `backend/main.py`)** — `config.py` defines the `Settings` pydantic-settings class and exposes a single `settings` singleton consumed everywhere. Three fields (`GOOGLE_API_KEY`, `ADZUNA_APP_ID`, `ADZUNA_APP_KEY`) have no defaults and cause a fatal `ValidationError` at startup if absent. `main.py` constructs the FastAPI application, registers middleware and all API routers, implements the `lifespan` async context manager that sequences startup (data directory creation → DB init → singleton construction → WebSocket handler wiring), and mounts the compiled SvelteKit frontend as a SPA static-files handler with correct cache-control headers.
+**Config and startup (`backend/config.py`, `backend/main.py`)** — `config.py` defines the `Settings` pydantic-settings class and exposes a single `settings` singleton consumed everywhere. Every credential field defaults to empty so the app can boot with a local model and no cloud keys; what each *configured* provider actually needs is enforced at startup by `Settings.validate_runtime_config()` (a fail-fast, provider-aware check in the lifespan). `main.py` constructs the FastAPI application, registers middleware and all API routers, implements the `lifespan` async context manager that sequences startup (data directory creation → DB init → singleton construction → WebSocket handler wiring), and mounts the compiled SvelteKit frontend as a SPA static-files handler with correct cache-control headers.
 
 **Database (`backend/database.py`)** — Builds the async SQLAlchemy infrastructure: an async engine backed by `sqlite+aiosqlite` in WAL mode, an `AsyncSessionLocal` session factory, and two session access patterns (`db_session()` for service code with auto-commit/rollback, `get_db()` for FastAPI `Depends` injection). Provides `init_db()` which runs `Base.metadata.create_all` and seeds the `job_sources` table from `SITE_CONFIGS` on first run.
 
@@ -219,9 +219,9 @@ graph TD
 
 **API (`backend/api/`)** — Thin FastAPI routers organized by domain vertical. Each router validates input, calls into domain services, reads from and writes to the database via injected `AsyncSession`, and serialises results with Pydantic response models. No business logic lives in the API layer that belongs elsewhere. The WebSocket module (`ws.py`) manages all real-time connections via a `ConnectionManager` with an `asyncio.Lock`-protected connection dict, dispatches inbound messages to registered handlers, and exposes the `broadcast_status` helper used by scraping and scheduling modules.
 
-**Scraping (`backend/scraping/`)** — The job-discovery engine. `ScrapingOrchestrator` coordinates three phases of scraping (API → browser → lab URLs) and deduplication. `ScraplingFetcher` (Tier 1) fetches pages via Scrapling's HTTP client, converts HTML to clean markdown, and calls Gemini once per site/keyword to extract structured job data. `AdaptiveScraper` (Tier 2) uses the browser-use LLM agent loop to navigate pages autonomously. `BrowserSessionManager` maintains persistent Playwright browser sessions per job board, supporting both auto-login (LinkedIn, Indeed) and manual login flows via the WebSocket UI. `AdzunaClient` wraps the Adzuna REST API. `JobDeduplicator` deduplicates in-memory by MD5 hash.
+**Scraping (`backend/scraping/`)** — The job-discovery engine. `ScrapingOrchestrator` coordinates three phases of scraping (API → browser → lab URLs) and deduplication. `ScraplingFetcher` (Tier 1) fetches pages via Scrapling's HTTP client, converts HTML to clean markdown, and calls the LLM once per site/keyword to extract structured job data. `AdaptiveScraper` (Tier 2) uses the browser-use LLM agent loop to navigate pages autonomously. `BrowserSessionManager` maintains persistent Playwright browser sessions per job board, supporting both auto-login (LinkedIn, Indeed) and manual login flows via the WebSocket UI. `AdzunaClient` wraps the Adzuna REST API. `JobDeduplicator` deduplicates in-memory by MD5 hash.
 
-**LLM (`backend/llm/`)** — JobPilot's interface to Google Gemini. `GeminiClient` wraps the `google-genai` SDK with a 15 RPM sliding-window rate limiter, primary-plus-fallback model chain, exponential back-off on 429 responses, and self-healing JSON retry. `JobAnalyzer` extracts structured skill and keyword data from job descriptions. `CVModifier` produces surgical LaTeX text replacements guided by the `JobContext`. `CVEditor` customizes the marker-delimited motivation-letter paragraph. All prompts wrap untrusted external data in `<untrusted_data>` XML tags.
+**LLM (`backend/llm/`)** — JobPilot's provider-agnostic LLM layer. `backend/llm/factory.py` selects a provider per role (`LLM_PROVIDER` / `EMBEDDING_PROVIDER` / `BROWSER_LLM_PROVIDER`, default `openai`) and returns an adapter behind the `LLMClient` / `EmbeddingClient` protocols in `base.py`. The adapters — `OpenAICompatClient` (any OpenAI-compatible endpoint, hosted or local) and `AnthropicClient` — map provider errors onto the neutral `LLMRateLimitError` / `LLMCallFailed` / `LLMJSONError` exceptions and self-heal a malformed JSON parse with one retry. `JobAnalyzer` extracts structured skill and keyword data from job descriptions. `CVModifier` produces surgical LaTeX text replacements guided by the `JobContext`. `CVEditor` customizes the marker-delimited motivation-letter paragraph. All prompts wrap untrusted external data in `<untrusted_data>` XML tags.
 
 **LaTeX (`backend/latex/`)** — The CV tailoring pipeline. `CVPipeline` orchestrates `JobAnalyzer` → `CVModifier` → `CVApplicator` → Tectonic for CV documents. `LetterPipeline` uses `LaTeXParser` → `CVEditor` → `LaTeXInjector` → Tectonic for cover letters. `CVApplicator` is the safety gate that validates each LLM-proposed replacement (confidence ≥ 0.7, verbatim match, no new LaTeX commands) and caps applied replacements at three. `LaTeXCompiler` wraps Tectonic as an async subprocess. `LaTeXParser` extracts JOBPILOT marker-delimited sections from `.tex` files.
 
@@ -342,8 +342,8 @@ graph TD
 | `tex_path` | STRING | nullable | Absolute path to the generated `.tex` file |
 | `pdf_path` | STRING | nullable | Absolute path to the compiled `.pdf` file |
 | `diff_json` | JSON | nullable | List of `DiffEntry` records (section, original, edited, description) |
-| `llm_prompt` | TEXT | nullable | The prompt sent to Gemini (for auditability) |
-| `llm_response` | TEXT | nullable | The raw Gemini response (for auditability) |
+| `llm_prompt` | TEXT | nullable | The prompt sent to the LLM (for auditability) |
+| `llm_response` | TEXT | nullable | The raw LLM response (for auditability) |
 | `created_at` | DATETIME | NOT NULL, default=utcnow | — |
 
 ### `applications`
@@ -397,11 +397,11 @@ graph TD
 
 - **No database-level foreign key constraints**: SQLite FK enforcement (`PRAGMA foreign_keys=ON`) is not enabled. This was likely an oversight rather than a deliberate decision; the consequence is that orphaned rows accumulate silently when parent records are deleted. All relational integrity is maintained solely by application logic.
 
-- **Gemini 2.0 Flash on the free tier**: The entire LLM workload — job analysis, CV modification, letter editing, Tier 1 scraping extraction, Tier 1 form-fill field mapping, and Tier 2 browser-use navigation — runs through a single Gemini model. The 15 RPM free-tier rate limit is enforced in-process by `GeminiClient` using a sliding-window deque. A primary-plus-fallback model chain allows the system to survive model deprecations without code changes.
+- **Provider-agnostic LLM layer**: The entire LLM workload — job analysis, CV modification, letter editing, Tier 1 scraping extraction, Tier 1 form-fill field mapping, and Tier 2 browser-use navigation — runs through one configured provider, selected per role via env vars and constructed once at startup by the factory. Generation can be any OpenAI-compatible endpoint (hosted or local) or Anthropic; embeddings and the browser agent use an OpenAI-compatible endpoint. Nothing hard-binds to a specific vendor, so switching providers (or pointing at a local model) is a pure config change.
 
-- **Two-tier scraping architecture**: Tier 1 (Scrapling HTTP + one Gemini call) handles known job boards that can be scraped without a full browser, making each site/keyword pair cost roughly one API call and 10–30 seconds. Tier 2 (browser-use LLM agent, up to 20 steps) handles arbitrary URLs and serves as a fallback for Tier 1 failures. This mirrors a common pattern in web automation: fast path for known structures, agentic path for unknown ones.
+- **Two-tier scraping architecture**: Tier 1 (Scrapling HTTP + one LLM call) handles known job boards that can be scraped without a full browser, making each site/keyword pair cost roughly one API call and 10–30 seconds. Tier 2 (browser-use LLM agent, up to 20 steps) handles arbitrary URLs and serves as a fallback for Tier 1 failures. This mirrors a common pattern in web automation: fast path for known structures, agentic path for unknown ones.
 
-- **Two-tier apply architecture**: The same Tier 1 / Tier 2 pattern is applied to form submission. Tier 1 (`PlaywrightFormFiller`) makes one Gemini call to map applicant data to CSS selectors, then fills fields programmatically — fast and deterministic. Tier 2 (browser-use agent) reasons over the live DOM step-by-step — slower but adaptable to unusual or multi-step forms.
+- **Two-tier apply architecture**: The same Tier 1 / Tier 2 pattern is applied to form submission. Tier 1 (`PlaywrightFormFiller`) makes one LLM call to map applicant data to CSS selectors, then fills fields programmatically — fast and deterministic. Tier 2 (browser-use agent) reasons over the live DOM step-by-step — slower but adaptable to unusual or multi-step forms.
 
 - **browser-use for agentic browser control**: Rather than building a custom browser automation framework, JobPilot delegates complex multi-step web interactions to the `browser-use` library, which pairs Playwright with an LLM agent loop. This dramatically reduces the code needed to handle varied page structures at the cost of higher latency and LLM call consumption.
 
@@ -411,7 +411,7 @@ graph TD
 
 - **Marker-based LaTeX editing**: Rather than parsing LaTeX ASTs, CV tailoring uses two complementary approaches: `CVApplicator` applies verbatim substring replacements (safe because it checks that the exact text exists and introduces no new LaTeX commands), while `LaTeXInjector` uses `% --- JOBPILOT:<MARKER>:START/END ---` comment pairs to delimit sections. This avoids the complexity and fragility of a full LaTeX parser while remaining safe enough for automated edits.
 
-- **On-demand batch runs only**: The `BatchRunner` pipeline runs when `POST /api/queue/refresh` is called (which schedules `runner.run_batch()` on the event loop). APScheduler scaffolding was removed in the honesty pass — there is no cron-based scheduling today. Re-introducing time-based batches would mean wiring an `AsyncIOScheduler` from the lifespan and reading `SearchSettings.batch_time`.
+- **On-demand batch runs only**: The `BatchRunner` pipeline runs when `POST /api/queue/refresh` is called (which schedules `runner.run_batch()` on the event loop). There is no cron-based scheduling; the `batch_time` setting is stored but not consulted at runtime.
 
 - **Fernet symmetric encryption for site credentials**: Login credentials (email + password) for job boards are encrypted at rest using Fernet (AES-128 CBC with HMAC-SHA256) keyed by `CREDENTIAL_KEY`. The encryption key is stored in the `.env` file, meaning local filesystem access is the security boundary for both the key and the database.
 
@@ -430,10 +430,12 @@ graph TD
 
 ### Required Environment Variables
 
-Create a `.env` file at the project root with at minimum:
+Create a `.env` file at the project root. There are no hard-required keys — the
+app boots against a local model with none — but a typical hosted setup sets an
+LLM provider key plus the Adzuna job-source keys:
 
 ```
-GOOGLE_API_KEY=<your Gemini API key from Google AI Studio>
+LLM_API_KEY=<your LLM provider key>   # or OPENAI_API_KEY / ANTHROPIC_API_KEY; or set LLM_BASE_URL for a local model
 ADZUNA_APP_ID=<your Adzuna application ID>
 ADZUNA_APP_KEY=<your Adzuna API key>
 ```
@@ -448,8 +450,9 @@ ADZUNA_APP_KEY=<your Adzuna API key>
 | `JOBPILOT_LOG_LEVEL` | `info` | Log verbosity: `debug`, `info`, `warning`, `error` |
 | `JOBPILOT_SCRAPER_HEADLESS` | `true` | Set to `false` to watch browser interactions during development |
 | `JOBPILOT_DATA_DIR` | `./data` | Root directory for all persistent data (DB, CVs, letters, browser profiles, logs). Resolved relative to the working directory at process start. |
-| `GOOGLE_MODEL` | `gemini-3-flash-preview` | Primary Gemini model name |
-| `GOOGLE_MODEL_FALLBACKS` | `""` | Comma-separated fallback model names |
+| `LLM_PROVIDER` | `openai` | Generation provider: `openai` (any OpenAI-compatible endpoint) or `anthropic` |
+| `LLM_MODEL` | `""` | Generation model name; empty uses the adapter's default |
+| `LLM_BASE_URL` | `""` | OpenAI-compatible base URL for a hosted/local server (e.g. `http://localhost:11434/v1`) |
 | `SCRAPLING_ENABLED` | `true` | Set to `false` to disable Tier 1 HTTP scraping and always use the browser-use agent |
 | `APPLY_TIER1_ENABLED` | `true` | Set to `false` to skip the Playwright form-filler and always use the browser-use agent for applies |
 
@@ -542,18 +545,10 @@ key must be backed up separately.
 
 ### Rotation procedure
 
-There is currently no production-grade rotation script. The right shape is
-a re-encrypt-on-read pass:
-
-1. Read every encrypted column with the **old** key.
-2. Re-encrypt with the **new** key.
-3. Update the rows in a transaction.
-4. Write the new key to `.env`.
-
-When implemented (slated for a follow-up sprint) the script will live at
-`scripts/rotate_credential_key.py` and take `--old-key` / `--new-key`
-options. Until then, rotation is a "disconnect, delete, reconnect" exercise
-done from the UI.
+There is no dedicated rotation script. To change `CREDENTIAL_KEY`, rotate
+secrets by hand from the UI: disconnect Gmail and delete the stored site
+credentials, set the new key in `.env`, then reconnect Gmail and re-enter
+the site credentials so they are re-encrypted under the new key.
 
 ### Backup recommendation
 

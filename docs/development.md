@@ -1,6 +1,6 @@
 # Development & contributing
 
-> Developer workflow for JobPilot: repo layout, local setup, the test suite, quality tooling, and the spec/plan process. For the full contributor guide see [CONTRIBUTING.md](../CONTRIBUTING.md).
+> Developer workflow for JobPilot: repo layout, local setup, the test suite, and quality tooling. For the full contributor guide see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 JobPilot is a single-user, self-hosted app: a **FastAPI** backend (Python 3.12) that also serves a compiled **SvelteKit** frontend (Node 20), backed by **SQLite** and the **Tectonic** LaTeX compiler. The launcher (`start.py`) runs both halves from one process.
 
@@ -17,7 +17,7 @@ JobPilot is a single-user, self-hosted app: a **FastAPI** backend (Python 3.12) 
 | `scripts/` | Operational scripts: `download_tectonic.py`, `backup_db.py`, `migrate_legacy_applied.py`, plus `install.sh`/`install.ps1` and `setup.sh`/`setup.ps1`. |
 | `bin/` | Bundled native binaries (the downloaded `tectonic` engine). |
 | `data/` | Runtime data — `jobpilot.db`, generated CVs/letters, browser sessions, logs. Created on first run. |
-| `docs/` | Documentation, including `superpowers/` (specs + plans) and `reports/` (audits). |
+| `docs/` | Architecture, subsystem, and reference documentation. |
 | `start.py` | Launcher: prerequisite checks, port handling, `uvicorn` boot. |
 | `pyproject.toml` | Python deps, dev tools, pytest/coverage/ruff config. |
 | `Dockerfile`, `docker-compose.yml` | Container build (pins the same Tectonic version as `download_tectonic.py`). |
@@ -39,7 +39,7 @@ uv run python scripts/download_tectonic.py
 cd frontend && npm ci && npm run build && cd ..
 
 # 4. Environment
-cp .env.example .env   # then fill GOOGLE_API_KEY, ADZUNA_APP_ID, ADZUNA_APP_KEY
+cp .env.example .env   # then fill LLM_API_KEY, ADZUNA_APP_ID, ADZUNA_APP_KEY
 ```
 
 `download_tectonic.py` fetches the platform-correct Tectonic binary into `bin/tectonic` (or `bin/tectonic.exe` on Windows) and skips if a working binary already exists. Its version pin must stay aligned with the `TECTONIC_VERSION` ARG in `Dockerfile` so local dev and the container install the same engine.
@@ -81,7 +81,7 @@ Pytest config lives in `pyproject.toml` (`[tool.pytest.ini_options]`):
 - **One SQLite file per pytest worker.** Under `pytest-xdist -n auto`, each worker (`gw0`, `gw1`, …) gets its own `tempfile.mkdtemp` data dir, keyed off `PYTEST_XDIST_WORKER`; single-process runs fall back to `main`. Workers never share a file.
 - **Schema bootstrap once per worker.** A session-scoped autouse fixture (`_bootstrap_test_db`, `tests/conftest.py:72`) runs `init_db()` — deliberately using the Alembic `upgrade head` path rather than `Base.metadata.create_all`, so migrations are exercised against every test DB.
 - **Per-test wipe.** A function-scoped autouse fixture (`_reset_db_between_tests`, `tests/conftest.py:127`) `DELETE`s every table *before* each test (failed rows survive for post-mortem inspection via `sqlite3`). It uses `PRAGMA defer_foreign_keys = ON` so the wipe order isn't load-bearing.
-- Dummy `GOOGLE_API_KEY` / `ADZUNA_*` values are seeded so `Settings()` loads on a fresh checkout or CI machine with no real `.env`.
+- Dummy `LLM_API_KEY` / `ADZUNA_*` values are seeded so `Settings()` loads on a fresh checkout or CI machine with no real `.env`.
 
 Shared fixtures: `test_app` (a Starlette `TestClient` over `backend.main:app`) and `test_settings` (a deterministic `Settings` instance).
 
@@ -137,18 +137,7 @@ It aborts the commit on a match. For a genuine false positive, bypass with `git 
 
 ### Commit style
 
-Conventional-Commits with a milestone/task tag — `type(scope): summary`, e.g. `feat(M2-T6): add batch dry-run preview` or `fix(M4-T1): add missing SERPAPI_KEY to .env.example`. The `M<n>-T<n>` scope ties back to the plan documents (below). Run `git log --oneline -20` for the live convention.
-
----
-
-## Spec / plan workflow
-
-Non-trivial work is specified and planned before implementation, under [`docs/superpowers/`](superpowers/):
-
-- **`docs/superpowers/specs/`** — design specs (the *what* and *why*), e.g. `2026-06-01-multi-provider-llm-design.md`.
-- **`docs/superpowers/plans/`** — implementation plans broken into milestones/tasks (the *how*), e.g. `2026-06-01-multi-provider-llm.md`. The `M<n>-T<n>` tags in commit messages come from here.
-
-Before starting, check for (or write) a matching spec/plan so changes stay scoped and reviewable.
+Conventional-Commits — `type(scope): summary`, e.g. `feat(scraping): add batch dry-run preview` or `fix(config): add missing SERPAPI_KEY to .env.example`. Run `git log --oneline -20` for the live convention.
 
 ---
 

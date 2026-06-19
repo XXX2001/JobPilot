@@ -25,7 +25,7 @@ Generated files (`.svelte-kit/`, `node_modules/`) and config files (`app.html`, 
 
 | File | Responsibility | Depends on (internal) | Uses |
 |------|---------------|----------------------|------|
-| `components/StatusBar.svelte` | Bottom status bar: last WS message, batch-progress narration | `stores/websocket`, `utils/easterEggs` | WS `status` / `scraping_status` messages (note: FE-01 — reads some legacy type names) |
+| `components/StatusBar.svelte` | Bottom status bar: last WS message, batch-progress narration | `stores/websocket`, `utils/easterEggs` | WS `status` / `scraping_status` messages (reads some legacy type names) |
 | `components/LoginRequiredModal.svelte` | Modal prompted by `login_required` WS message; sends `login_done` / `login_cancel` back | `stores/websocket` | WS `login_required`; sends `login_done` / `login_cancel` |
 | `components/HotkeyHelp.svelte` | `?`-triggered modal listing active keybindings grouped by route | `utils/hotkeys` (`helpOpen`, `activeBindings`) | — |
 | `components/BatchPipelineTracker.svelte` | Animated step-progress display shown while a batch scan is running | `stores/websocket` | WS `status` messages (`progress` field drives step states) |

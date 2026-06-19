@@ -14,8 +14,8 @@ The engine, session factory, and startup hook live in
 [`backend/database.py`](../backend/database.py). Timestamps default to `naive_utc_now`
 (from `backend.utils.time`), so all `DateTime` columns store naive UTC.
 
-The runtime database is **SQLite** (`aiosqlite` async driver). Postgres is a documented
-future path only — see [Postgres path](#postgres-path).
+The runtime database is **SQLite** (`aiosqlite` async driver). There is no Postgres code
+path — see [Postgres path](#postgres-path).
 
 ## Engine, sessions & startup
 
@@ -44,7 +44,7 @@ using a short-lived **sync** engine for inspection:
 
 1. **Fresh DB** (no app tables) — `upgrade head` builds the whole schema from base.
 2. **Legacy `create_all` DB** (tables exist but no `alembic_version`) — Alembic is `stamp`ed at
-   `e3a1f2b8c9d7` so only the idempotent T2a catch-up migration runs, avoiding
+   `e3a1f2b8c9d7` so only the idempotent catch-up migration (`e5a65a3427cf`) onward runs, avoiding
    `table ... already exists`.
 3. **Already-managed DB** — a normal forward `upgrade head`.
 
@@ -71,7 +71,7 @@ All entities and their tables:
 | `Application` | `applications` | FK `job_match_id → job_matches.id` (SET NULL); `method` (CHECK), `status` (CHECK), `applied_at`, `notes`, `error_log`, `last_correspondence_at` | [`application.py:21`](../backend/models/application.py) |
 | `ApplicationEvent` | `application_events` | FK `application_id → applications.id` (CASCADE); `event_type`, `details`, `event_date` | [`application.py:61`](../backend/models/application.py) |
 | `GmailCredential` | `gmail_credentials` | `email_address` unique; Fernet-encrypted refresh token; `history_id` sync cursor; access tokens never persisted | [`gmail.py:24`](../backend/models/gmail.py) |
-| `GmailMessage` | `gmail_messages` | `gmail_message_id` unique; cached metadata (no body); `category` (CHECK), `category_confidence`, ATS/extraction fields (Phase 2, NULL in Phase 1) | [`gmail.py:46`](../backend/models/gmail.py) |
+| `GmailMessage` | `gmail_messages` | `gmail_message_id` unique; cached metadata (no body); `category` (CHECK), `category_confidence`; ATS/extraction fields are nullable and currently unpopulated | [`gmail.py:46`](../backend/models/gmail.py) |
 | `ApplicationCorrespondence` | `application_correspondence` | Association: FK `application_id → applications.id` (CASCADE) + `message_id → gmail_messages.id` (CASCADE); `direction` (CHECK), `link_confidence`, `link_method`, `confirmed_by_user` | [`gmail.py:88`](../backend/models/gmail.py) |
 | `BrowserSession` | `browser_sessions` | `site_name` unique; `storage_state_path`, `expires_at` (Playwright auth state) | [`session.py:12`](../backend/models/session.py) |
 
@@ -137,7 +137,7 @@ async engine (`async_engine_from_config` + `NullPool`,
 | `df6eea4756c3` | Add `site_credentials` table | `071b973b48b2` |
 | `41441908fc29` | Add initial indexes | `df6eea4756c3` |
 | `e3a1f2b8c9d7` | Add `last_dashboard_seen_at` to `user_profile` (legacy-stamp point) | `41441908fc29` |
-| `e5a65a3427cf` | **T2a** schema catch-up + FKs; creates the Gmail tables (`gmail_credentials`, `gmail_messages`, `application_correspondence`) | `e3a1f2b8c9d7` |
+| `e5a65a3427cf` | Schema catch-up + FKs; creates the Gmail tables (`gmail_credentials`, `gmail_messages`, `application_correspondence`) | `e3a1f2b8c9d7` |
 | `t2b1_enum_checks` | Enum CHECK constraints + legacy `status` migration | `e5a65a3427cf` |
 | `t2b2_unique_keys` | Unique constraints on natural keys + duplicate collapse | `t2b1_enum_checks` |
 | `t2b3_not_null` | NOT NULL + conditional CHECK on always-set columns | `t2b2_unique_keys` |
@@ -145,20 +145,20 @@ async engine (`async_engine_from_config` + `NullPool`,
 
 `t2b4_indexes` is the current **head**. `e3a1f2b8c9d7` is significant: it is the stamp point used
 by `_alembic_upgrade_head()` for legacy `create_all` databases, so they only run the idempotent
-T2a catch-up onward.
+catch-up migration (`e5a65a3427cf`) onward.
 
 > Note: `alembic/env.py` does not enable `render_as_batch`, so destructive table alterations in
-> the T2a/T2b migrations rely on explicit batch operations within each migration file rather than
-> Alembic auto-batching.
+> the catch-up and constraint migrations (`e5a65a3427cf` through `t2b4_indexes`) rely on explicit
+> batch operations within each migration file rather than Alembic auto-batching.
 
 ## Postgres path
 
-There is **no Postgres code path today** — both [`backend/database.py:23`](../backend/database.py)
-and `alembic.ini`'s URL are SQLite (`sqlite+aiosqlite`). Postgres is only sketched as a future
-option in [`docker-compose.yml`](../docker-compose.yml) (a commented-out `postgres:16-alpine`
-service plus a `DATABASE_URL` env var to point at it). Migrating would require swapping the engine
-URL, the Alembic URL, and reviewing SQLite-specific behaviours (WAL pragma, NULL-distinct unique
-keys, the daily-limit write-lock assumptions, and JSON columns that would become `JSONB`).
+There is **no Postgres code path** — both [`backend/database.py:23`](../backend/database.py)
+and `alembic.ini`'s URL are SQLite (`sqlite+aiosqlite`). The only Postgres reference is a
+commented-out `postgres:16-alpine` service (plus a `DATABASE_URL` env var to point at it) in
+[`docker-compose.yml`](../docker-compose.yml). Switching to Postgres would require swapping the
+engine URL, the Alembic URL, and reviewing SQLite-specific behaviours (WAL pragma, NULL-distinct
+unique keys, the daily-limit write-lock assumptions, and JSON columns that would become `JSONB`).
 
 ## Related
 

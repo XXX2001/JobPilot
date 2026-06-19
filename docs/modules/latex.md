@@ -111,7 +111,7 @@ async def generate_tailored_cv(
 - Compiles the resulting `.tex` with Tectonic.
 - Returns a `TailoredCV`.
 
-On `GeminiRateLimitError`, `GeminiJSONError`, or any unexpected exception from the LLM step, logs a warning/error and falls back to compiling the unmodified base CV.
+On `LLMRateLimitError`, `LLMJSONError`, or any unexpected exception from the LLM step, logs a warning/error and falls back to compiling the unmodified base CV.
 
 #### `class LetterPipeline`
 
@@ -348,7 +348,7 @@ base_cv.tex  ──copy──►  output_dir/cv.tex
                                 │
                     ┌───────────▼───────────┐
                     │  CVModifier.modify    │  → CVModifierOutput
-                    │  (LLM: Gemini)        │    .replacements: list[CVReplacement]
+                    │  (LLM provider)       │    .replacements: list[CVReplacement]
                     └───────────┬───────────┘
                                 │
                     ┌───────────▼───────────┐
@@ -380,7 +380,7 @@ base_cv.tex  ──copy──►  output_dir/cv.tex
 
 The letter pipeline follows a parallel but simpler path using the marker-based `LaTeXParser` + `LaTeXInjector` pair (instead of `CVApplicator`), and returns a `TailoredLetter`.
 
-On any LLM failure (`GeminiRateLimitError`, `GeminiJSONError`, or unexpected exception) at the analyze/modify/apply steps, the pipeline logs the error and falls back to compiling the unmodified base file. `cv_tailored` is set to `False` in the returned `TailoredCV`.
+On any LLM failure (`LLMRateLimitError`, `LLMJSONError`, or unexpected exception) at the analyze/modify/apply steps, the pipeline logs the error and falls back to compiling the unmodified base file. `cv_tailored` is set to `False` in the returned `TailoredCV`.
 
 `LaTeXValidator` is not called inline by the pipeline classes; it is available as a standalone utility for pre-flight checks.
 

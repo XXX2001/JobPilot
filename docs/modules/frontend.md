@@ -32,8 +32,8 @@ A multi-tab settings hub with six tabs:
 - **Search** — chip-based keyword/location/excluded-keywords/excluded-companies inputs plus numeric controls for minimum salary, daily apply limit, batch schedule time, minimum match score (slider), and remote-only toggle. Saves via `PUT /api/settings/search`.
 - **Sites** — card grid listing all configured scraping sites with enable/disable toggles. Each toggle fires `PUT /api/settings/sites/{name}`. Session status badges are shown inline.
 - **Credentials** — expand-in-place forms for per-site email/password credentials stored encrypted on the backend. Supports adding, updating, and clearing browser sessions via `PUT /api/settings/credentials/{site}` and `DELETE /api/settings/credentials/{site}/session`.
-- **Sources** — read-only status cards for Adzuna API and Google Gemini showing configured/missing state. Also contains the Custom Target URLs sub-section for adding/deleting arbitrary scraping targets via `/api/settings/custom-sites`.
-- **System** — checklist of four prerequisites (Gemini API key, Adzuna API keys, Tectonic LaTeX engine, base CV uploaded) with ready/action-required badges, fetched from `/api/settings/status`.
+- **Sources** — read-only status cards for Adzuna API and the LLM Provider showing configured/missing state. Also contains the Custom Target URLs sub-section for adding/deleting arbitrary scraping targets via `/api/settings/custom-sites`.
+- **System** — checklist of four prerequisites (LLM API key, Adzuna API keys, Tectonic LaTeX engine, base CV uploaded) with ready/action-required badges, fetched from `/api/settings/status`.
 
 ### `routes/tracker/+page.svelte`
 
@@ -162,7 +162,7 @@ The WebSocket URL is derived from `VITE_API_BASE_URL` by replacing `http` with `
 
 Dark/light mode is powered by `mode-watcher` with `defaultMode="dark"`. Preference is persisted in `localStorage` by the library.
 
-The Settings > Sources tab instructs users to set `GOOGLE_API_KEY`, `ADZUNA_APP_ID`, and `ADZUNA_APP_KEY` in the backend `.env` file; these are never read or sent by the frontend itself.
+The Settings > Sources tab instructs users to set their LLM API key (`LLM_API_KEY`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, or `LLM_BASE_URL`), `ADZUNA_APP_ID`, and `ADZUNA_APP_KEY` in the backend `.env` file; these are never read or sent by the frontend itself.
 
 ---
 

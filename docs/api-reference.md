@@ -58,7 +58,7 @@ Wired during the lifespan startup (`backend/main.py:179-188`, `:259`):
 
 | Attribute | Purpose |
 |---|---|
-| `app.state.gemini` | LLM generation client |
+| `app.state.llm` | LLM generation client |
 | `app.state.cv_pipeline` | CV tailoring pipeline |
 | `app.state.letter_pipeline` | Cover-letter pipeline |
 | `app.state.adzuna` | Adzuna API client |
@@ -147,7 +147,9 @@ Profile, search config, sources, credentials, custom sites, and the onboarding/s
 | PUT | `/api/settings/search` | `SearchSettingsOut` | Update search settings |
 | GET | `/api/settings/sources` | `SourcesOut` | Read enabled job sources |
 | PUT | `/api/settings/sources` | `SourcesUpdateResponse` | Update sources |
-| GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness |
+| GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness (config presence only) |
+| POST | `/api/settings/test-connection` | _(dict)_ | Live-probe the configured generation + embedding endpoints (actually calls them) |
+| GET | `/api/settings/models` | _(dict)_ | List model ids advertised by the configured endpoint's `/models` route (`?role=llm\|embedding`) |
 | POST | `/api/settings/profile/cv-upload` | `CvUploadResponse` | Upload base CV (multipart `UploadFile`) |
 | GET | `/api/settings/sites` | `list[SiteOut]` | List configured sites |
 | PUT | `/api/settings/sites/{site_name}` | `SiteToggleResponse` | Enable/disable a site |
@@ -157,6 +159,29 @@ Profile, search config, sources, credentials, custom sites, and the onboarding/s
 | GET | `/api/settings/custom-sites` | `list[CustomSiteOut]` | List custom (lab-website) sources |
 | POST | `/api/settings/custom-sites` | `CustomSiteOut` | Add a custom source |
 | DELETE | `/api/settings/custom-sites/{site_id}` | `CustomSiteDeleteResponse` | Delete a custom source |
+
+### `POST /api/settings/test-connection`
+
+Unlike `GET /api/settings/status` (which only checks that config is *present*), this route actually calls the configured generation and embedding endpoints and reports whether each responded. It takes no request body. Each probe is bounded to ~45s. The response is two probe objects:
+
+```json
+{
+  "generation": {"ok": true, "latency_ms": 634, "detail": "model responded (2 chars)", "error": null},
+  "embedding":  {"ok": true, "latency_ms": 168, "detail": "dimension=1024", "error": null}
+}
+```
+
+Each probe is `{ok: bool, latency_ms: int|null, detail: string|null, error: string|null}`. On failure `ok=false` and `error` carries an actionable message — a timeout suggests raising `LLM_TIMEOUT_SECONDS` or setting `LLM_DISABLE_THINKING`; a chat-only server that can't embed reports that the endpoint doesn't serve `/v1/embeddings`.
+
+### `GET /api/settings/models`
+
+Lists the model ids advertised by the configured endpoint's `/models` route — useful for prefilling the model field for a local server. The `role` query parameter selects which endpoint to query: `role=llm` (default) or `role=embedding`. Parsing is tolerant of both OpenAI-shaped (`data[].id`) and Ollama-shaped (`models[].id` / `model` / `name`) responses.
+
+```json
+{"base_url": "http://localhost:8080/v1", "models": ["Qwen3.6-27B-MTP"], "error": null}
+```
+
+If no base URL is configured for that role, `models` is `[]` and `error` explains why.
 
 ## Analytics — `/api/analytics`
 
@@ -195,7 +220,7 @@ Links inbound Gmail threads to applications.
 
 ## Health — `GET /api/health`
 
-Defined inline at `backend/main.py:335`. It actively pings the DB (`SELECT 1` through `AsyncSessionLocal`), checks for a `tectonic` binary, and checks whether `GOOGLE_API_KEY` is configured. On DB failure it returns **HTTP 503** with `status="degraded"` so k8s/Docker probes can react; exception text is never leaked — only a short `db_error_code` is surfaced and the traceback is logged.
+Defined inline at `backend/main.py:335`. It actively pings the DB (`SELECT 1` through `AsyncSessionLocal`), checks for a `tectonic` binary, and checks whether the LLM API key is configured. On DB failure it returns **HTTP 503** with `status="degraded"` so k8s/Docker probes can react; exception text is never leaked — only a short `db_error_code` is surfaced and the traceback is logged.
 
 `HealthOut` schema (`backend/main.py:30`):
 
@@ -206,11 +231,11 @@ Defined inline at `backend/main.py:335`. It actively pings the DB (`SELECT 1` th
 | `timestamp` | `datetime` | UTC |
 | `db` | `"ok" \| "error"` | DB ping result |
 | `tectonic` | `bool` | LaTeX engine present |
-| `gemini_key_set` | `bool` | `GOOGLE_API_KEY` configured |
+| `llm_key_set` | `bool` | LLM API key configured |
 | `tectonic_hint` | `str \| null` | install hint when tectonic missing |
 | `db_error_code` | `str \| null` | e.g. `"db_unreachable"` |
 
-`tectonic` and `gemini_key_set` are advisory only — their absence does **not** flip overall status.
+`tectonic` and `llm_key_set` are advisory only — their absence does **not** flip overall status.
 
 ## Global error handlers
 
@@ -219,11 +244,11 @@ Registered in `backend/main.py:400-464`. They normalize internal exceptions into
 | Exception | Status | `code` |
 |---|---|---|
 | `LaTeXCompilationError` | 422 | `latex_compile_error` |
-| `GeminiJSONError` (LLM JSON validation) | 500 | `gemini_json_error` |
-| `GeminiRateLimitError` | 429 | `rate_limit` |
+| `LLMJSONError` (LLM JSON validation) | 500 | `llm_json_error` |
+| `LLMRateLimitError` | 429 | `rate_limit` |
 | any unhandled `Exception` | 500 | `internal_error` |
 
-The Gemini exception aliases now map to provider-neutral `LLM*` exceptions (`backend/llm/base.py`), so the handlers cover any LLM provider. Non-API paths fall through to the SPA fallback (`SPAStaticFiles`, `backend/main.py:468`) which serves `index.html`.
+The exception aliases map to provider-neutral `LLM*` exceptions (`backend/llm/base.py`), so the handlers cover any LLM provider. Non-API paths fall through to the SPA fallback (`SPAStaticFiles`, `backend/main.py:468`) which serves `index.html`.
 
 ---
 

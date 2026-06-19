@@ -15,7 +15,7 @@ Contains the `BatchRunner` class and two private helper functions. The class own
 1. **Six-step pipeline** (`_run_batch_inner`) — load settings → scrape → rank → store → fit-assess → CV generation → WebSocket broadcast.
 2. **Deduplication** — jobs are fingerprinted by `MD5(company|title|location)` so repeated runs do not duplicate rows. Existing `Job` rows are updated with richer data (longer description, missing `apply_url`) rather than re-inserted.
 3. **Daily limit enforcement** — only the top N matches receive pre-generated CVs, where N = remaining application slots for today (queried via `DailyLimitGuard`).
-4. **Concurrency control** — fit assessment and CV generation are parallelised with `asyncio.gather`, capped by a `asyncio.Semaphore` (default `CONCURRENCY_GEMINI = 3`).
+4. **Concurrency control** — fit assessment and CV generation are parallelised with `asyncio.gather`, capped by a `asyncio.Semaphore` (default `CONCURRENCY_LLM = 3`).
 5. **Graceful degradation** — the WebSocket broadcast is wrapped so a disconnected/missing client never crashes the pipeline.
 
 ### `__init__.py`
@@ -73,7 +73,7 @@ class BatchRunner:
 | `matcher` | `JobMatcher` | Scores `JobDetails` objects against `JobFilters`. |
 | `cv_pipeline` | `CVPipeline` | Generates tailored LaTeX/PDF CVs. |
 | `db_factory` | `Callable[[], AsyncSession]` | Factory that returns a new async DB session per call. In production this is `AsyncSessionLocal` from `backend.database`. |
-| `embedder` | `Embedder \| None` | Optional Gemini-backed embedder; populated in production wiring (`backend.main.lifespan`). When present, enables the fit-assessment skill-gap path. |
+| `embedder` | `Embedder \| None` | Optional embedder backed by the configured LLM provider; populated in production wiring (`backend.main.lifespan`). When present, enables the fit-assessment skill-gap path. |
 | `fit_engine` | `FitEngine \| None` | Optional skill-gap fit engine; paired with `embedder`. When present, `_assess_one` runs cosine-similarity-based gap assessment for each ranked match. |
 
 ---
@@ -140,7 +140,7 @@ Step 3 — STORE MATCHES
         ▼
 Step 4 — FIT ASSESS  (only when embedder + fit_engine are wired)
   Embedder.embed_cv_profile(cv_profile) — one batched call
-  For each (match_id, JobDetails) — up to CONCURRENCY_GEMINI concurrently:
+  For each (match_id, JobDetails) — up to CONCURRENCY_LLM concurrently:
     _assess_one() → FitAssessment | None
   Persist ats_score / gap_severity / fit_assessment_json on JobMatch rows
   Broadcast per-job assessment via WebSocket (job_progress payload)
@@ -151,7 +151,7 @@ Step 4 — FIT ASSESS  (only when embedder + fit_engine are wired)
 Step 5 — PRE-GENERATE TAILORED CVs
   DailyLimitGuard(db, limit=daily_limit).remaining_today() → int remaining
   top_ids = match_ids[:remaining]
-  For each (match_id, JobDetails) — up to CONCURRENCY_GEMINI concurrently:
+  For each (match_id, JobDetails) — up to CONCURRENCY_LLM concurrently:
     CVPipeline.generate_tailored_cv(base_cv_path, job, output_dir,
                                     fit_assessment=fit_assessment_or_none)
     Output dir: <jobpilot_data_dir>/cvs/<match_id>/
@@ -196,7 +196,7 @@ All filtering parameters are read from the `search_settings` database table (`Se
 | Excluded keywords | `excluded_keywords` | JSON | `null` | Keywords whose presence disqualifies a job. |
 | Excluded companies | `excluded_companies` | JSON | `null` | Company names to skip entirely. |
 
-**Concurrency** for both fit assessment and CV generation is governed by `CONCURRENCY_GEMINI` in `backend/defaults.py` (default `3`) — bounded by an `asyncio.Semaphore` to respect the Gemini rate limit.
+**Concurrency** for both fit assessment and CV generation is governed by `CONCURRENCY_LLM` in `backend/defaults.py` (default `3`) — bounded by an `asyncio.Semaphore` to respect the LLM provider rate limit.
 
 **No auto-start.** The batch runs only when explicitly triggered (the common path is `POST /api/queue/refresh`, which schedules `runner.run_batch()` on the event loop in the background). The `SearchSettings.batch_time` column is persisted and surfaced in the settings API but is currently unused at runtime.
 
@@ -204,7 +204,7 @@ All filtering parameters are read from the `search_settings` database table (`Se
 
 ## Known Limitations / TODOs
 
-1. **No auto-scheduler.** APScheduler scaffolding was removed in the honesty pass. `SearchSettings.batch_time` is persisted but unused — re-enabling a cron would require wiring an `AsyncIOScheduler` (or equivalent) inside `backend.main.lifespan` and reading the column. Track this with the Gmail-integration spec which proposes a unified background-task layer.
+1. **No auto-scheduler.** There is no APScheduler/cron machinery wired up. `SearchSettings.batch_time` is persisted but unused at runtime — time-based scheduling would require wiring an `AsyncIOScheduler` (or equivalent) inside `backend.main.lifespan` and reading the column.
 2. **Hardcoded fallback defaults in `_load_settings`.** When no `SearchSettings` row exists the method fabricates a row with `keywords=["python", "machine learning"]`, `daily_limit=10`, `min_match_score=30.0`. These defaults are not written to the DB, so they reappear on every call rather than being seeded once.
 3. **Single-user assumption.** All DB queries use `.limit(1)` for both `UserProfile` and `SearchSettings`. The scheduler has no concept of multiple users; adding multi-tenancy would require a significant redesign.
 4. **Only `doc_type="cv"` is pre-generated.** Cover letters (`doc_type="letter"`) are never pre-generated by the batch job; they must be generated on demand.

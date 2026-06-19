@@ -96,19 +96,38 @@ def test_cv_upload_filename_sanitized(test_app: TestClient):
 # Rejection cases
 # ---------------------------------------------------------------------------
 
-def test_cv_upload_rejects_pdf(test_app: TestClient):
-    """Uploading a .pdf file should return 415 Unsupported Media Type."""
-    content = b"%PDF-1.4 fake pdf"
-    resp = _upload(test_app, "cv.pdf", content)
-    assert resp.status_code == 415, resp.text
-    assert "detail" in resp.json()
+def test_cv_upload_pdf_converts_to_latex(test_app: TestClient, monkeypatch):
+    """A .pdf is text-extracted + LLM-converted, then stored as a .tex CV."""
+    from unittest.mock import AsyncMock
+
+    import backend.api.settings as settings_mod
+    import backend.latex.cv_import as cv_import
+
+    monkeypatch.setattr(cv_import, "extract_text", lambda data, ext: "Jane Doe\nPython developer")
+    tex = (
+        "\\documentclass{resume}\\begin{document}"
+        "\\begin{rSection}{Profile}Jane Doe\\end{rSection}\\end{document}"
+    )
+    monkeypatch.setattr(cv_import, "convert_to_latex", AsyncMock(return_value=tex))
+    monkeypatch.setattr(settings_mod, "_compile_check", AsyncMock(return_value=None))
+
+    resp = _upload(test_app, "cv.pdf", b"%PDF-1.4 ...", mimetype="application/pdf")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    # Persisted as the converted LaTeX, not the raw PDF.
+    assert data["filename"] == "cv.tex"
+    assert data["path"].endswith("cv.tex")
 
 
-def test_cv_upload_rejects_docx(test_app: TestClient):
-    """Uploading a .docx file should return 415."""
-    content = b"PK fake docx bytes"
-    resp = _upload(test_app, "cv.docx", content)
-    assert resp.status_code == 415, resp.text
+def test_cv_upload_docx_requires_llm(test_app: TestClient, monkeypatch):
+    """A .docx upload with no LLM configured returns 400 with actionable guidance."""
+    import backend.api.settings as settings_mod
+
+    # settings is a pydantic model — patch the method on the class, not the instance.
+    monkeypatch.setattr(type(settings_mod.settings), "llm_configured", lambda self: False)
+    resp = _upload(test_app, "cv.docx", b"PK fake docx bytes")
+    assert resp.status_code == 400, resp.text
+    assert "LLM" in resp.json()["detail"]
 
 
 def test_cv_upload_rejects_no_extension(test_app: TestClient):
@@ -119,9 +138,8 @@ def test_cv_upload_rejects_no_extension(test_app: TestClient):
 
 
 def test_cv_upload_rejects_oversized_file(test_app: TestClient):
-    """Files larger than 1 MB should return 413 Request Entity Too Large."""
-    # 1 MB + 1 byte
-    content = b"x" * (1024 * 1024 + 1)
+    """Files larger than the 5 MB cap should return 413 Request Entity Too Large."""
+    content = b"x" * (5 * 1024 * 1024 + 1)
     resp = _upload(test_app, "big.tex", content)
     assert resp.status_code == 413, resp.text
     assert "detail" in resp.json()

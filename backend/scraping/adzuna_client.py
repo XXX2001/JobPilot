@@ -102,6 +102,16 @@ class AdzunaClient:
             job.country = country
         return jobs
 
+    @staticmethod
+    def _coerce_salary(value: int | float | str | None) -> int | None:
+        """Adzuna returns salaries as floats (e.g. 67255.94); RawJob wants int."""
+        if value is None:
+            return None
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return None
+
     def _parse_job(self, data: dict) -> RawJob:
         return RawJob(
             external_id=str(data.get("id", "")),
@@ -109,8 +119,8 @@ class AdzunaClient:
             company=data.get("company", {}).get("display_name", ""),
             location=data.get("location", {}).get("display_name", ""),
             salary_text="",
-            salary_min=data.get("salary_min"),
-            salary_max=data.get("salary_max"),
+            salary_min=self._coerce_salary(data.get("salary_min")),
+            salary_max=self._coerce_salary(data.get("salary_max")),
             description=data.get("description", ""),
             url=data.get("redirect_url", ""),
             apply_url=data.get("redirect_url", ""),

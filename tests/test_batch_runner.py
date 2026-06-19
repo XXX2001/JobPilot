@@ -275,17 +275,17 @@ async def test_batch_stops_cv_generation_at_daily_limit():
     assert mock_doc.call_count <= 3
 
 
-# ── Dry-run preview: scrape + rank only, NO DB writes, NO Gemini ────────────
+# ── Dry-run preview: scrape + rank only, NO DB writes, NO LLM ───────────────
 
 
 @pytest.mark.asyncio
 async def test_dry_run_returns_preview_and_writes_nothing(sqlite_factory):
-    """Dry-run scrapes + ranks but writes NOTHING and never calls Gemini.
+    """Dry-run scrapes + ranks but writes NOTHING and never calls the LLM.
 
     This is the M2-T6 guarantee: previewing today's matches must not burn
-    Gemini quota or commit any rows. We assert (a) a preview list comes back,
+    LLM quota or commit any rows. We assert (a) a preview list comes back,
     (b) the ``job_matches`` and ``tailored_documents`` tables stay empty, and
-    (c) the embedder (Gemini) and CV pipeline are never touched.
+    (c) the embedder (LLM) and CV pipeline are never touched.
     """
     from backend.models.document import TailoredDocument
 
@@ -294,7 +294,7 @@ async def test_dry_run_returns_preview_and_writes_nothing(sqlite_factory):
     matcher = MockMatcher(score=80.0)
     cv_pipeline = MockCVPipeline()
 
-    # Wire an embedder spy to prove the fit-assessment / Gemini path is skipped.
+    # Wire an embedder spy to prove the fit-assessment / LLM path is skipped.
     embedder = MagicMock()
     embedder.embed_cv_profile = AsyncMock(side_effect=lambda p: p)
     embedder.embed_job_profile = AsyncMock(side_effect=lambda p: p)
@@ -318,7 +318,7 @@ async def test_dry_run_returns_preview_and_writes_nothing(sqlite_factory):
         assert item["company"] == "ACME"
         assert isinstance(item["score"], (int, float))
 
-    # No Gemini / CV-generation calls
+    # No LLM / CV-generation calls
     assert cv_pipeline.calls == []
     embedder.embed_cv_profile.assert_not_awaited()
     embedder.embed_job_profile.assert_not_awaited()
@@ -419,7 +419,7 @@ async def test_fit_assessments_run_concurrently():
     """PC-02: Per-match embed + FitEngine.assess must run concurrently.
 
     With 5 matches and a 100ms-per-call embedder, the serial baseline is ~500ms;
-    with the semaphore-gated gather (CONCURRENCY_GEMINI=3) it should land near
+    with the semaphore-gated gather (CONCURRENCY_LLM=3) it should land near
     ~200ms (two batches: ceil(5/3) * 100ms). We assert <350ms to stay
     deterministic on slow CI while still failing if someone reverts to serial.
     """
@@ -513,7 +513,7 @@ async def test_fit_assessments_run_concurrently():
         await runner.run_batch()
         elapsed = time.perf_counter() - start
 
-    # 5 embeddings × 100ms serial = 500ms. With CONCURRENCY_GEMINI=3 we expect
+    # 5 embeddings × 100ms serial = 500ms. With CONCURRENCY_LLM=3 we expect
     # ~200ms. We assert <350ms to leave plenty of slack for slow CI machines
     # while still catching a regression back to serial execution.
     assert fake_embedder.embed_job_profile.await_count == 5

@@ -17,6 +17,26 @@ def _has_new_latex_commands(original: str, edited: str) -> bool:
     return bool(edit_cmds - orig_cmds)
 
 
+def _locate(haystack: str, needle: str) -> str | None:
+    """Return the substring of *haystack* that matches *needle*, or None.
+
+    Tries an exact match first, then a whitespace-tolerant match: LLMs routinely
+    return ``original_text`` with the right words but different run-of-spaces or
+    line-wrapping than the source (e.g. a wrapped LaTeX table cell). Collapsing
+    every whitespace run in the needle to ``\\s+`` lets those near-misses still
+    anchor — returning the *actual* source span so the caller replaces and
+    LaTeX-validates against what's really in the document, not the LLM's guess.
+    """
+    if needle in haystack:
+        return needle
+    collapsed = needle.strip()
+    if not collapsed:
+        return None
+    pattern = re.compile(r"\s+".join(re.escape(tok) for tok in collapsed.split()))
+    m = pattern.search(haystack)
+    return m.group(0) if m else None
+
+
 class CVApplicator:
     """Applies a list of CVReplacement items to a LaTeX string with per-item validation.
 
@@ -55,20 +75,21 @@ class CVApplicator:
                 )
                 continue
 
-            if r.original_text not in result:
+            span = _locate(result, r.original_text)
+            if span is None:
                 logger.warning(
                     "original_text not found in CV — skipping: %r", r.original_text[:80]
                 )
                 continue
 
-            if _has_new_latex_commands(r.original_text, r.replacement_text):
+            if _has_new_latex_commands(span, r.replacement_text):
                 logger.warning(
                     "Replacement introduces new LaTeX commands — skipping: %r",
                     r.replacement_text[:80],
                 )
                 continue
 
-            result = result.replace(r.original_text, r.replacement_text, 1)
+            result = result.replace(span, r.replacement_text, 1)
             applied.append(r)
             logger.info(
                 "Applied replacement section=%s confidence=%.2f: %s",

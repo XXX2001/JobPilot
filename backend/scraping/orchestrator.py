@@ -80,7 +80,7 @@ class ScrapingOrchestrator:
     from the FastAPI app state (and mocked in tests).
     """
 
-    # Tier 1 sites handled by ScraplingFetcher (HTTP + single Gemini call)
+    # Tier 1 sites handled by ScraplingFetcher (HTTP + single LLM call)
     TIER1_SITES: frozenset[str] = frozenset(
         {"linkedin", "indeed", "google_jobs", "welcome_to_the_jungle", "glassdoor"}
     )
@@ -247,7 +247,7 @@ class ScrapingOrchestrator:
                         jobs: list[RawJob] = []
                         kw_failed = False
 
-                        # Tier 1: ScraplingFetcher (fast HTTP + single Gemini call)
+                        # Tier 1: ScraplingFetcher (fast HTTP + single LLM call)
                         tier1_attempted = False
                         if self.scrapling_fetcher and source.name in self.TIER1_SITES:
                             tier1_attempted = True
@@ -266,7 +266,7 @@ class ScrapingOrchestrator:
                                     )
                                     page_jobs_total.extend(page_jobs)
                                     # Stop early on partial / empty page —
-                                    # avoids spending Gemini calls on dead pages.
+                                    # avoids spending LLM calls on dead pages.
                                     if not page_jobs or len(page_jobs) < per_kw_max:
                                         break
                                 jobs = page_jobs_total

@@ -45,7 +45,7 @@ class AssistedApplyStrategy:
     """Pre-fill the form and leave the browser open for user to review and submit.
 
     Tries Tier 1 (PlaywrightFormFiller.fill_only) first for simple sites;
-    skips to Tier 2 (browser-use + Gemini) for multi-step sites like LinkedIn.
+    skips to Tier 2 (browser-use + LLM) for multi-step sites like LinkedIn.
     """
 
     def __init__(
@@ -127,7 +127,7 @@ class AssistedApplyStrategy:
                     apply_url, exc,
                 )
 
-        # ── Tier 2: browser-use agent (Gemini + Playwright) ───────────────
+        # ── Tier 2: browser-use agent (LLM + Playwright) ──────────────────
         if not _BROWSER_USE_AVAILABLE or Agent is None:
             logger.warning("browser-use not available — falling back to manual open")
             import webbrowser
@@ -163,7 +163,7 @@ class AssistedApplyStrategy:
         )
 
         browser_kwargs: dict = dict(
-            headless=False,
+            headless=settings.jobpilot_apply_headless,
             keep_alive=True,
             minimum_wait_page_load_time=3.0,
             wait_for_network_idle_page_load_time=15.0,
@@ -188,6 +188,9 @@ class AssistedApplyStrategy:
             agent = Agent(
                 task=task, llm=llm, browser=browser,
                 available_file_paths=file_paths or None,
+                # Retry malformed action-JSON (common with local reasoning
+                # models) on a fresh client instead of aborting the run.
+                fallback_llm=make_browser_llm(),
             )
             await agent.run()
             logger.info("[Tier 2 assisted] Agent completed for %s", apply_url)
@@ -214,7 +217,7 @@ class AssistedApplyStrategy:
             status=RESULT_ASSISTED,
             method="assisted",
             message=(
-                "Form pre-filled via Gemini agent. Please review the open browser "
+                "Form pre-filled via the LLM agent. Please review the open browser "
                 "window and submit manually when ready."
             ),
         )

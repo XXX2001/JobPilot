@@ -2,7 +2,7 @@
 
 These tests exercise multiple layers together (DB + API + business logic)
 using the real FastAPI TestClient with an in-memory SQLite database.
-All external calls (Gemini, Adzuna, browser-use) are mocked.
+All external calls (LLM, Adzuna, browser-use) are mocked.
 """
 
 from __future__ import annotations
@@ -251,7 +251,7 @@ def test_health_endpoint_structure(client: TestClient):
     data = resp.json()
     assert "status" in data
     assert "tectonic" in data
-    assert "gemini_key_set" in data
+    assert "llm_key_set" in data
     assert isinstance(data["tectonic"], bool)
 
 

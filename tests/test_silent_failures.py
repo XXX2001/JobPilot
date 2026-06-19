@@ -75,100 +75,69 @@ async def test_tectonic_timeout_raises_latex_compile_timeout(tmp_path, monkeypat
 
 
 # ---------------------------------------------------------------------------
-# Deliverable 2 — Gemini call timeout (HttpOptions wired through)
+# Deliverable 2 — LLM call timeout (wired through to the SDK transport)
 # ---------------------------------------------------------------------------
 
 
-def test_gemini_client_installs_timeout_http_options(monkeypatch):
-    """GeminiClient must hand a per-request timeout to the SDK transport."""
-    from pydantic import SecretStr
-
-    monkeypatch.setattr("backend.config.settings.GOOGLE_API_KEY", SecretStr("fake-key"))
-    monkeypatch.setattr("backend.config.settings.GOOGLE_MODEL", "gemini-3.0-flash")
-    monkeypatch.setattr("backend.config.settings.GOOGLE_MODEL_FALLBACKS", "")
-    monkeypatch.setattr("backend.config.settings.GEMINI_TIMEOUT_SECONDS", 45.0)
+def test_llm_client_installs_timeout(monkeypatch):
+    """The provider adapter must hand a per-request timeout to the SDK client."""
+    monkeypatch.setattr("backend.config.settings.LLM_TIMEOUT_SECONDS", 45.0)
 
     captured: dict = {}
 
-    def fake_client(api_key=None, http_options=None, **kw):  # noqa: ARG001
-        captured["http_options"] = http_options
+    def fake_async_openai(**kw):
+        captured.update(kw)
         return MagicMock()
 
-    monkeypatch.setattr("backend.llm.gemini_client.genai.Client", fake_client)
-
-    from backend.llm.gemini_client import GeminiClient
-
-    GeminiClient()
-    opts = captured["http_options"]
-    assert opts is not None, "GeminiClient must pass HttpOptions to genai.Client"
-    # SDK uses milliseconds.
-    assert int(opts.timeout) == 45_000
-
-
-# ---------------------------------------------------------------------------
-# Deliverable 3 — Gemini error wrapping: non-429 surfaces as GeminiCallFailed
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_gemini_non_429_raises_gemini_call_failed(monkeypatch):
-    """A non-429 failure (invalid API key, network, backend 500) must NOT be
-    wrapped as a rate-limit error — that hid broken keys for ages."""
-    from backend.llm.gemini_client import (
-        GeminiCallFailed,
-        GeminiClient,
-        GeminiRateLimitError,
+    monkeypatch.setattr(
+        "backend.llm.providers.openai_compat.AsyncOpenAI", fake_async_openai
     )
 
-    client = GeminiClient.__new__(GeminiClient)
-    client._call_times = deque(maxlen=GeminiClient.RPM_LIMIT)
-    client._lock = asyncio.Lock()
-    client._candidates = ["model-a"]
-    client._candidate_idx = 0
-    client._model_name = "model-a"
+    from backend.llm.providers.openai_compat import OpenAICompatClient
 
-    def boom(*a, **kw):
-        raise RuntimeError("403 PERMISSION_DENIED: API key invalid.")
+    OpenAICompatClient()
+    assert captured.get("timeout") == 45.0, "adapter must pass timeout to AsyncOpenAI"
 
-    client._client = MagicMock()
-    client._client.models.generate_content = boom
 
-    async def _noop():
-        return None
-
-    monkeypatch.setattr(client, "_wait_for_rate_limit", _noop)
-
-    with pytest.raises(GeminiCallFailed) as excinfo:
-        await client.generate_text("ping")
-    assert not isinstance(excinfo.value, GeminiRateLimitError)
+# ---------------------------------------------------------------------------
+# Deliverable 3 — LLM error wrapping: non-429 surfaces as LLMCallFailed
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_gemini_429_still_raises_rate_limit_error(monkeypatch):
-    """The 429 branch must still raise the rate-limit class — narrow fix,
-    don't break the legitimate rate-limit path."""
-    from backend.llm.gemini_client import GeminiClient, GeminiRateLimitError
+async def test_llm_non_429_raises_call_failed():
+    """A non-429 failure (invalid API key, network, backend 500) must NOT be
+    wrapped as a rate-limit error — that hid broken keys for ages."""
+    from backend.llm.base import LLMCallFailed, LLMRateLimitError
+    from backend.llm.providers.openai_compat import OpenAICompatClient
 
-    client = GeminiClient.__new__(GeminiClient)
-    client._call_times = deque(maxlen=GeminiClient.RPM_LIMIT)
-    client._lock = asyncio.Lock()
-    client._candidates = ["model-a"]
-    client._candidate_idx = 0
-    client._model_name = "model-a"
-
-    def boom(*a, **kw):
-        raise RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")
-
+    client = OpenAICompatClient.__new__(OpenAICompatClient)
+    client._model = "model-a"
     client._client = MagicMock()
-    client._client.models.generate_content = boom
+    client._client.chat.completions.create = AsyncMock(
+        side_effect=RuntimeError("403 PERMISSION_DENIED: API key invalid.")
+    )
 
-    async def _noop(*a, **kw):
-        return None
+    with pytest.raises(LLMCallFailed) as excinfo:
+        await client.generate_text("ping")
+    assert not isinstance(excinfo.value, LLMRateLimitError)
 
-    monkeypatch.setattr(client, "_wait_for_rate_limit", _noop)
-    monkeypatch.setattr("backend.llm.gemini_client.asyncio.sleep", _noop)
 
-    with pytest.raises(GeminiRateLimitError):
+@pytest.mark.asyncio
+async def test_llm_429_raises_rate_limit_error():
+    """The 429 branch must raise the rate-limit class — don't break the
+    legitimate rate-limit path."""
+    from backend.llm.base import LLMRateLimitError
+    from backend.llm.providers.openai_compat import OpenAICompatClient
+
+    client = OpenAICompatClient.__new__(OpenAICompatClient)
+    client._model = "model-a"
+    client._client = MagicMock()
+    client._client.chat.completions.create = AsyncMock(
+        side_effect=RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded")
+    )
+
+    with pytest.raises(LLMRateLimitError):
         await client.generate_text("ping")
 
 
@@ -263,7 +232,9 @@ def test_oauth_callback_bad_state_redirects_with_gmail_error(monkeypatch):
     monkeypatch.setenv("GMAIL_CLIENT_SECRET", "test-secret")
     import backend.config as cfg
 
-    cfg.settings = cfg._load_settings()
+    # monkeypatch (not bare assignment) so the global settings object is
+    # restored at teardown and does not pollute later tests.
+    monkeypatch.setattr(cfg, "settings", cfg._load_settings())
     from backend.main import app
 
     with TestClient(app, raise_server_exceptions=False) as client:

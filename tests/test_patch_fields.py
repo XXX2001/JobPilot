@@ -137,10 +137,10 @@ def test_engine_injects_on_get_patches_into_form_filler():
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _gemini_returning(mapping_json: str) -> MagicMock:
-    gemini = MagicMock()
-    gemini.generate_text = AsyncMock(return_value=mapping_json)
-    return gemini
+def _llm_returning(mapping_json: str) -> MagicMock:
+    llm = MagicMock()
+    llm.generate_text = AsyncMock(return_value=mapping_json)
+    return llm
 
 
 def _patch_playwright(monkeypatch, page: MagicMock) -> None:
@@ -183,13 +183,13 @@ async def test_patches_refilled_before_submit(monkeypatch):
     page.click = AsyncMock()
     _patch_playwright(monkeypatch, page)
 
-    gemini = _gemini_returning(
+    llm = _llm_returning(
         '{"fields": [{"selector": "#name", "value": "Auto"}],'
         ' "file_inputs": [], "submit_selector": "#submit"}'
     )
 
     filler = PlaywrightFormFiller(
-        llm_client=gemini,
+        llm_client=llm,
         on_get_patches=lambda job_id: {"#name": "Edited", "#phone": "123"},
     )
 
@@ -241,12 +241,12 @@ async def test_failing_patch_logs_warning_but_still_submits(monkeypatch, caplog)
     page.click = AsyncMock()
     _patch_playwright(monkeypatch, page)
 
-    gemini = _gemini_returning(
+    llm = _llm_returning(
         '{"fields": [], "file_inputs": [], "submit_selector": "#submit"}'
     )
 
     filler = PlaywrightFormFiller(
-        llm_client=gemini,
+        llm_client=llm,
         on_get_patches=lambda job_id: {"#broken": "x", "#ok": "y"},
     )
 

@@ -104,8 +104,8 @@ async def test_scraper_succeeds_on_second_attempt():
 
 
 @pytest.mark.asyncio
-async def test_cv_pipeline_fallback_when_gemini_fails(tmp_path):
-    """CVPipeline returns base CV (cv_tailored=False) when Gemini modifier fails."""
+async def test_cv_pipeline_fallback_when_llm_fails(tmp_path):
+    """CVPipeline returns base CV (cv_tailored=False) when the LLM modifier fails."""
     from backend.latex.pipeline import CVPipeline
     from backend.models.schemas import JobDetails
 
@@ -117,9 +117,9 @@ async def test_cv_pipeline_fallback_when_gemini_fails(tmp_path):
 
     # job_analyzer and cv_modifier that always raise
     failing_analyzer = MagicMock()
-    failing_analyzer.analyze = AsyncMock(side_effect=RuntimeError("Gemini down"))
+    failing_analyzer.analyze = AsyncMock(side_effect=RuntimeError("LLM down"))
     failing_modifier = MagicMock()
-    failing_modifier.modify = AsyncMock(side_effect=RuntimeError("Gemini down"))
+    failing_modifier.modify = AsyncMock(side_effect=RuntimeError("LLM down"))
 
     # Compiler that always succeeds (returns a fake PDF path)
     fake_pdf = tmp_path / "out" / "cv.pdf"
@@ -159,22 +159,21 @@ async def test_cv_pipeline_fallback_when_gemini_fails(tmp_path):
     assert result.pdf_path.exists()
 
 
-# ─── Gemini JSON parse retry ──────────────────────────────────────────────────
+# ─── LLM JSON parse retry ─────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_gemini_json_retry_on_malformed_output():
-    """GeminiClient retries JSON parsing once, then raises GeminiJSONError."""
-    from backend.llm.gemini_client import GeminiClient, GeminiJSONError
+async def test_llm_json_retry_on_malformed_output():
+    """The adapter retries JSON parsing once, then raises LLMJSONError."""
+    from backend.llm.base import LLMJSONError
+    from backend.llm.providers.openai_compat import OpenAICompatClient
     from pydantic import BaseModel
 
     class DummySchema(BaseModel):
         value: int
 
-    client = GeminiClient.__new__(GeminiClient)
-    client._call_times = __import__("collections").deque(maxlen=15)
-    client._lock = asyncio.Lock()
-    client._model_name = "gemini-2.0-flash"
+    client = OpenAICompatClient.__new__(OpenAICompatClient)
+    client._model = "model-a"
 
     # Both calls return garbage JSON
     call_count = 0
@@ -186,7 +185,7 @@ async def test_gemini_json_retry_on_malformed_output():
 
     client.generate_text = _bad_generate  # type: ignore[method-assign]
 
-    with pytest.raises(GeminiJSONError):
+    with pytest.raises(LLMJSONError):
         await client.generate_json("test prompt", DummySchema)
 
     # Should have tried twice (original + 1 retry)
@@ -194,18 +193,16 @@ async def test_gemini_json_retry_on_malformed_output():
 
 
 @pytest.mark.asyncio
-async def test_gemini_json_succeeds_on_retry():
-    """GeminiClient returns valid schema if retry produces valid JSON."""
-    from backend.llm.gemini_client import GeminiClient
+async def test_llm_json_succeeds_on_retry():
+    """The adapter returns a valid schema if retry produces valid JSON."""
+    from backend.llm.providers.openai_compat import OpenAICompatClient
     from pydantic import BaseModel
 
     class DummySchema(BaseModel):
         value: int
 
-    client = GeminiClient.__new__(GeminiClient)
-    client._call_times = __import__("collections").deque(maxlen=15)
-    client._lock = asyncio.Lock()
-    client._model_name = "gemini-2.0-flash"
+    client = OpenAICompatClient.__new__(OpenAICompatClient)
+    client._model = "model-a"
 
     call_count = 0
 

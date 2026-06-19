@@ -145,11 +145,11 @@ def test_cv_pipeline_modifier_failure_falls_back(tmp_path: Path):
     if shutil.which("tectonic") is None:
         pytest.skip("Tectonic not installed")
 
-    from backend.llm.gemini_client import GeminiJSONError
+    from backend.llm.base import LLMJSONError
     mock_analyzer = MagicMock()
     mock_analyzer.analyze = AsyncMock(return_value=_make_context())
     mock_modifier = MagicMock()
-    mock_modifier.modify = AsyncMock(side_effect=GeminiJSONError("fail"))
+    mock_modifier.modify = AsyncMock(side_effect=LLMJSONError("fail"))
 
     from backend.latex.applicator import CVApplicator
     pipeline = CVPipeline(

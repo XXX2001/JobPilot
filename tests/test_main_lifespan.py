@@ -1,7 +1,7 @@
 """Tests for ``backend.main`` lifespan startup behaviour.
 
 The lifespan context manager runs once at app boot to instantiate every
-singleton (Gemini client, batch runner, scraping orchestrator, etc.) and
+singleton (LLM client, batch runner, scraping orchestrator, etc.) and
 attach them to ``app.state``. Prior to this fix the ``except`` clause
 demoted any failure to a ``logger.warning(...)`` — production could boot
 half-broken with no signal, and the first real request would 5xx because
@@ -39,7 +39,7 @@ def test_happy_path_lifespan_populates_app_state(test_app: TestClient) -> None:
     # *presence* (not exact types) so this test stays decoupled from internal
     # signatures; type-level guarantees live in pyright.
     for attr in (
-        "gemini",
+        "llm",
         "cv_pipeline",
         "letter_pipeline",
         "adzuna",

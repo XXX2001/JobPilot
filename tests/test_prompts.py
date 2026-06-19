@@ -1,6 +1,6 @@
 """Prefix-caching tests for LLM prompt templates (LLM-01).
 
-Gemini's implicit prompt caching only triggers when consecutive requests
+Many LLM providers' implicit prompt caching only triggers when consecutive requests
 share a byte-identical prefix (~1024+ tokens). Every template in
 backend.llm.prompts must therefore put invariant content (system rules,
 output schema, the user's own CV/letter body) BEFORE any per-job variable
@@ -22,7 +22,7 @@ from backend.llm.prompts import (
     MOTIVATION_LETTER_PROMPT,
 )
 
-# Realistic-length CV body — Gemini's implicit cache kicks in around 1024 tokens
+# Realistic-length CV body — implicit caching kicks in around 1024 tokens
 # (~4000 chars). The CV body is what makes the cache hit on real workloads, so
 # the test uses a CV of that order of magnitude.
 SAMPLE_CV = (
@@ -67,7 +67,7 @@ JOB_B = {
     "job_description_excerpt": "Looking for ML engineer with PyTorch, MLOps.",
 }
 
-# Cache-eligibility threshold. Gemini's implicit prompt cache only triggers
+# Cache-eligibility threshold. Implicit prompt caching only triggers
 # when consecutive requests share a prefix of ~1024+ tokens. At a conservative
 # ~4 chars/token that's ~4096 chars; we assert 4500 to keep headroom above
 # the documented minimum so a regression that shrinks the shared prefix below
@@ -197,7 +197,7 @@ def test_no_variable_placeholder_precedes_invariant_data(
     appears before the invariant data placeholder (the CV body or letter body).
 
     Putting variable placeholders ahead of the invariant CV/letter content
-    breaks Gemini's implicit prefix cache (LLM-01).
+    breaks the implicit prefix cache (LLM-01).
     """
     invariant_idx = template.index("{" + invariant_key + "}")
     for var_key in variable_keys:
@@ -208,5 +208,5 @@ def test_no_variable_placeholder_precedes_invariant_data(
         assert var_idx > invariant_idx, (
             f"Variable placeholder {placeholder} at offset {var_idx} appears "
             f"BEFORE invariant {{{invariant_key}}} at offset {invariant_idx}; "
-            f"this breaks Gemini prefix caching (LLM-01)."
+            f"this breaks prefix caching (LLM-01)."
         )

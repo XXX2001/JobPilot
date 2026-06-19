@@ -53,9 +53,9 @@ fi
 cp "$EXAMPLE" "$ENV_FILE"
 
 # Clear the example's placeholder credentials/routing so the result only
-# contains what you actually choose below (placeholders like
-# "your_gemini_api_key" otherwise read as real, non-empty values).
-for _k in GOOGLE_API_KEY ADZUNA_APP_ID ADZUNA_APP_KEY OPENAI_API_KEY ANTHROPIC_API_KEY \
+# contains what you actually choose below (placeholders otherwise read as
+# real, non-empty values).
+for _k in ADZUNA_APP_ID ADZUNA_APP_KEY OPENAI_API_KEY ANTHROPIC_API_KEY \
           SERPAPI_KEY LLM_API_KEY LLM_BASE_URL LLM_MODEL EMBEDDING_API_KEY EMBEDDING_BASE_URL \
           BROWSER_LLM_API_KEY BROWSER_LLM_BASE_URL BROWSER_LLM_MODEL; do
   set_env "$_k" ""
@@ -64,9 +64,8 @@ done
 say ""
 say "Which AI provider should JobPilot use?"
 say "  1) Local / self-hosted  (OpenAI-compatible: Ollama, llama.cpp, LM Studio, vLLM)"
-say "  2) Google Gemini        (cloud, free tier)"
-say "  3) OpenAI               (cloud)"
-say "  4) Anthropic            (cloud; generation only — see notes)"
+say "  2) OpenAI-compatible    (cloud; hosted OpenAI or any OpenAI-compatible endpoint)"
+say "  3) Anthropic            (cloud; generation only — see notes)"
 choice="$(ask "Choice" "1")"
 
 case "$choice" in
@@ -84,10 +83,11 @@ case "$choice" in
     [ -n "$model" ] && set_env BROWSER_LLM_MODEL "$model"
     say ""
     say "Embeddings power job/CV fit-scoring. Most local servers do NOT serve"
-    say "embeddings, so you can point them at Gemini (free) or skip scoring."
-    gk="$(ask "Google API key for embeddings (free; blank = use the local server)" "")"
-    if [ -n "$gk" ]; then
-      set_env EMBEDDING_PROVIDER gemini; set_env GOOGLE_API_KEY "$gk"
+    say "embeddings, so you can point them at a hosted OpenAI-compatible key or"
+    say "skip scoring."
+    ek="$(ask "API key for embeddings (blank = use the local server)" "")"
+    if [ -n "$ek" ]; then
+      set_env EMBEDDING_PROVIDER openai; set_env EMBEDDING_API_KEY "$ek"
     else
       # No cloud key: point embeddings at the same local server. Config stays
       # valid and the app boots; if the server doesn't serve /v1/embeddings,
@@ -97,32 +97,32 @@ case "$choice" in
     fi
     ;;
   2)
-    gk="$(ask "Google API key (aistudio.google.com → Get API key)" "")"
-    set_env LLM_PROVIDER gemini
-    set_env EMBEDDING_PROVIDER gemini
-    set_env BROWSER_LLM_PROVIDER gemini
-    set_env GOOGLE_API_KEY "$gk"
-    ;;
-  3)
-    ok="$(ask "OpenAI API key (sk-…)" "")"
+    ok="$(ask "API key (sk-… for hosted OpenAI)" "")"
+    burl="$(ask "Base URL (blank = hosted OpenAI; set for another OpenAI-compatible endpoint)" "")"
     set_env LLM_PROVIDER openai
     set_env EMBEDDING_PROVIDER openai
     set_env BROWSER_LLM_PROVIDER openai
     set_env OPENAI_API_KEY "$ok"
+    if [ -n "$burl" ]; then
+      set_env LLM_BASE_URL "$burl"
+      set_env EMBEDDING_BASE_URL "$burl"
+      set_env BROWSER_LLM_BASE_URL "$burl"
+    fi
     ;;
-  4)
+  3)
     ak="$(ask "Anthropic API key (sk-ant-…)" "")"
     set_env LLM_PROVIDER anthropic
     set_env ANTHROPIC_API_KEY "$ak"
     say ""
     say "Note: Anthropic has no embeddings API and browser-use ships no Anthropic"
-    say "client, so embeddings + the browser agent fall back to Gemini."
-    gk="$(ask "Google API key for embeddings + browser agent" "")"
-    set_env EMBEDDING_PROVIDER gemini
-    set_env BROWSER_LLM_PROVIDER gemini
-    [ -n "$gk" ] && set_env GOOGLE_API_KEY "$gk"
+    say "client, so embeddings + the browser agent fall back to an OpenAI-compatible"
+    say "endpoint."
+    ek="$(ask "OpenAI-compatible API key for embeddings + browser agent" "")"
+    set_env EMBEDDING_PROVIDER openai
+    set_env BROWSER_LLM_PROVIDER openai
+    [ -n "$ek" ] && { set_env OPENAI_API_KEY "$ek"; }
     ;;
-  *) say "Unknown choice — re-run and pick 1-4."; exit 1 ;;
+  *) say "Unknown choice — re-run and pick 1-3."; exit 1 ;;
 esac
 
 say ""

@@ -33,7 +33,7 @@ class HealthOut(BaseModel):
     timestamp: datetime
     db: Literal["ok", "error"]
     tectonic: bool
-    gemini_key_set: bool
+    llm_key_set: bool
     tectonic_hint: str | None = None
     db_error_code: str | None = None
 
@@ -176,7 +176,7 @@ async def lifespan(app: FastAPI):
         )
 
         # Store on app.state for dependency injection
-        app.state.gemini = gen_client
+        app.state.llm = gen_client
         app.state.cv_pipeline = cv_pipeline
         app.state.letter_pipeline = letter_pipeline
         app.state.adzuna = adzuna
@@ -346,7 +346,7 @@ async def health(response: Response) -> HealthOut:
     tectonic_bin = PROJECT_ROOT / "bin" / tectonic_name
     tectonic = tectonic_bin.exists() or shutil.which("tectonic") is not None
 
-    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
+    llm_key_set = settings.llm_configured()
 
     # ── DB ping ────────────────────────────────────────────────────────────
     # Use the shared AsyncSessionLocal so we go through the existing pool
@@ -371,9 +371,9 @@ async def health(response: Response) -> HealthOut:
 
     # T9: conservative degradation — only DB failure flips overall status,
     # mirroring the pre-existing contract used by Docker / k8s probes. The
-    # ``tectonic`` and ``gemini_key_set`` booleans surface as advisory
+    # ``tectonic`` and ``llm_key_set`` booleans surface as advisory
     # component flags; downstream code paths handle their absence
-    # gracefully (LaTeX routes return 422, Gemini calls 5xx).
+    # gracefully (LaTeX routes return 422, LLM calls 5xx).
     overall_status: Literal["ok", "degraded"] = "ok" if db_status == "ok" else "degraded"
     if db_status == "error":
         # 503 lets orchestrators (k8s liveness, Docker healthcheck) react.
@@ -391,7 +391,7 @@ async def health(response: Response) -> HealthOut:
         timestamp=datetime.now(timezone.utc),
         db=db_status,
         tectonic=bool(tectonic),
-        gemini_key_set=bool(gemini_key_set),
+        llm_key_set=bool(llm_key_set),
         tectonic_hint=tectonic_hint,
         db_error_code=db_error_code,
     )
@@ -404,13 +404,15 @@ except ImportError:
     _LaTeXErr = None  # type: ignore[assignment,misc]
 
 try:
-    # These names are now aliases of the provider-neutral LLM* exceptions
-    # (see backend/llm/base.py), so the handlers cover every provider.
-    from backend.llm.gemini_client import GeminiJSONError as _GeminiJSONErr
-    from backend.llm.gemini_client import GeminiRateLimitError as _GeminiRateErr
+    # Provider-neutral LLM exceptions (see backend/llm/base.py) — the handlers
+    # cover every provider adapter.
+    from backend.llm.base import LLMCallFailed as _LLMCallFailed
+    from backend.llm.base import LLMJSONError as _LLMJSONErr
+    from backend.llm.base import LLMRateLimitError as _LLMRateErr
 except ImportError:
-    _GeminiJSONErr = None  # type: ignore[assignment,misc]
-    _GeminiRateErr = None  # type: ignore[assignment,misc]
+    _LLMCallFailed = None  # type: ignore[assignment,misc]
+    _LLMJSONErr = None  # type: ignore[assignment,misc]
+    _LLMRateErr = None  # type: ignore[assignment,misc]
 
 
 if _LaTeXErr is not None:
@@ -424,28 +426,43 @@ if _LaTeXErr is not None:
         )
 
 
-if _GeminiJSONErr is not None:
+if _LLMJSONErr is not None:
 
-    @app.exception_handler(_GeminiJSONErr)
-    async def _gemini_json_error_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.warning("Gemini JSON error: %s", exc)
+    @app.exception_handler(_LLMJSONErr)
+    async def _llm_json_error_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("LLM JSON error: %s", exc)
         return JSONResponse(
             status_code=500,
-            content={"error": "LLM response validation failed", "code": "gemini_json_error"},
+            content={"error": "LLM response validation failed", "code": "llm_json_error"},
         )
 
 
-if _GeminiRateErr is not None:
+if _LLMRateErr is not None:
 
-    @app.exception_handler(_GeminiRateErr)
-    async def _gemini_rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
-        logger.warning("Gemini rate limit: %s", exc)
+    @app.exception_handler(_LLMRateErr)
+    async def _llm_rate_limit_handler(request: Request, exc: Exception) -> JSONResponse:
+        logger.warning("LLM rate limit: %s", exc)
         return JSONResponse(
             status_code=429,
             content={
                 "error": "LLM rate limit reached — please try again shortly",
                 "code": "rate_limit",
             },
+        )
+
+
+if _LLMCallFailed is not None:
+
+    @app.exception_handler(_LLMCallFailed)
+    async def _llm_call_failed_handler(request: Request, exc: Exception) -> JSONResponse:
+        # The adapter already builds an actionable, secret-free message
+        # (timeout → raise LLM_TIMEOUT_SECONDS/disable thinking; connection →
+        # check the endpoint). Surface it so the user can self-serve instead of
+        # seeing a bare 500.
+        logger.warning("LLM call failed: %s", exc)
+        return JSONResponse(
+            status_code=502,
+            content={"error": str(exc) or "LLM request failed", "code": "llm_unreachable"},
         )
 
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 # ──────────────────────────────────────────────────────────────────────────────
 # PROMPT-PREFIX-CACHING NOTE (LLM-01)
 # ──────────────────────────────────────────────────────────────────────────────
-# Gemini's implicit prompt caching only kicks in when consecutive requests share
-# a byte-identical PREFIX (~1024+ tokens). To maximise cache hit rate, every
+# Many LLM providers' implicit prompt caching only kicks in when consecutive
+# requests share a byte-identical PREFIX (~1024+ tokens). To maximise cache hit
+# rate, every
 # template below is ordered so that the INVARIANT portion (system rules, output
 # schema, the user's own CV/letter body) comes FIRST and the VARIABLE per-job
 # portion (job title, company, job description, gap analysis) comes LAST.

@@ -3,9 +3,9 @@ def test_openai_and_anthropic_importable():
     import anthropic  # noqa: F401
 
 
-def test_exception_handlers_use_aliases():
-    # main.py imports GeminiJSONError/GeminiRateLimitError which now alias neutral types
-    from backend.llm.base import LLMJSONError, LLMRateLimitError
-    from backend.llm.gemini_client import GeminiJSONError, GeminiRateLimitError
-    assert GeminiJSONError is LLMJSONError
-    assert GeminiRateLimitError is LLMRateLimitError
+def test_provider_neutral_exceptions_importable():
+    # main.py and the provider adapters share these provider-neutral exceptions.
+    from backend.llm.base import LLMCallFailed, LLMJSONError, LLMRateLimitError
+    assert issubclass(LLMJSONError, Exception)
+    assert issubclass(LLMRateLimitError, Exception)
+    assert issubclass(LLMCallFailed, Exception)

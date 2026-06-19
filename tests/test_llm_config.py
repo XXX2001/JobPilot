@@ -1,12 +1,10 @@
 from backend.config import settings
 
-
-def test_provider_defaults_are_gemini():
-    assert settings.LLM_PROVIDER == "gemini"
-    assert settings.EMBEDDING_PROVIDER == "gemini"
-    assert settings.BROWSER_LLM_PROVIDER == "gemini"
-    assert settings.EMBEDDING_MODEL == "text-embedding-004"
-
+def test_provider_defaults_are_openai():
+    assert settings.LLM_PROVIDER == "openai"
+    assert settings.EMBEDDING_PROVIDER == "openai"
+    assert settings.BROWSER_LLM_PROVIDER == "openai"
+    assert settings.EMBEDDING_MODEL == "text-embedding-3-small"
 
 def test_provider_optional_fields_default_empty():
     assert settings.LLM_BASE_URL == ""

@@ -1,4 +1,4 @@
-"""CVEditor — uses GeminiClient + prompts to produce surgical LaTeX edits (T13)."""
+"""CVEditor — uses the configured LLM client + prompts to produce surgical LaTeX edits (T13)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import re
 from typing import Optional
 
 from backend.latex.parser import LaTeXSections
-from backend.llm.base import LLMClient, LLMJSONError as GeminiJSONError  # noqa: F401
+from backend.llm.base import LLMClient, LLMJSONError
 from backend.llm.prompts import MOTIVATION_LETTER_PROMPT
 from backend.llm.validators import LetterEdit
 from backend.models.schemas import JobDetails
@@ -28,7 +28,7 @@ def _has_new_latex_commands(original: str, edited: str) -> bool:
 
 
 class CVEditor:
-    """High-level editor that orchestrates Gemini prompts for CV tailoring."""
+    """High-level editor that orchestrates LLM prompts for CV tailoring."""
 
     MAX_DESCRIPTION_CHARS = 500
 
@@ -72,8 +72,8 @@ class CVEditor:
 
         try:
             edit = await self._client.generate_json(prompt, LetterEdit)
-        except GeminiJSONError as exc:
-            logger.warning("Gemini JSON error for letter edit: %s", exc)
+        except LLMJSONError as exc:
+            logger.warning("LLM JSON error for letter edit: %s", exc)
             raise
 
         # Validate: letter paragraph must not introduce new LaTeX commands

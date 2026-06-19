@@ -21,7 +21,9 @@ def app_with_gmail(monkeypatch):
     monkeypatch.setenv("GMAIL_CLIENT_ID", "smoke-client.apps.googleusercontent.com")
     monkeypatch.setenv("GMAIL_CLIENT_SECRET", "smoke-secret")
     import backend.config as cfg
-    cfg.settings = cfg._load_settings()
+    # monkeypatch (not bare assignment) so the global settings object is
+    # restored at teardown and does not pollute later tests.
+    monkeypatch.setattr(cfg, "settings", cfg._load_settings())
     # backend.gmail.auth binds `settings` at import time (`from ... import settings`),
     # so the prior import in earlier tests pinned an empty GMAIL_CLIENT_ID. Re-bind
     # it on the module so the live TokenManager sees our patched config.

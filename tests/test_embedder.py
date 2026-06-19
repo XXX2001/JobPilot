@@ -11,7 +11,7 @@ from backend.matching.embedder import Embedder
 from backend.matching.job_skill_extractor import JobProfile, JobSkill
 
 
-def _mock_gemini_client(dim: int = 3) -> MagicMock:
+def _mock_embedding_client(dim: int = 3) -> MagicMock:
     client = MagicMock()
 
     async def fake_embed(texts: list[str]) -> list[list[float]]:
@@ -23,7 +23,7 @@ def _mock_gemini_client(dim: int = 3) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_embed_cv_profile():
-    client = _mock_gemini_client()
+    client = _mock_embedding_client()
     embedder = Embedder(client)
 
     profile = CVProfile(
@@ -41,7 +41,7 @@ async def test_embed_cv_profile():
 
 @pytest.mark.asyncio
 async def test_embed_job_profile():
-    client = _mock_gemini_client()
+    client = _mock_embedding_client()
     embedder = Embedder(client)
 
     profile = JobProfile(
@@ -57,7 +57,7 @@ async def test_embed_job_profile():
 
 @pytest.mark.asyncio
 async def test_embed_skips_already_embedded():
-    client = _mock_gemini_client()
+    client = _mock_embedding_client()
     embedder = Embedder(client)
 
     profile = CVProfile(
@@ -74,7 +74,7 @@ async def test_embed_skips_already_embedded():
 
 @pytest.mark.asyncio
 async def test_embed_empty_profile():
-    client = _mock_gemini_client()
+    client = _mock_embedding_client()
     embedder = Embedder(client)
 
     profile = CVProfile(skills=[], raw_text_hash="abc123")

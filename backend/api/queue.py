@@ -178,7 +178,7 @@ async def refresh_queue(
 
     ``dry_run=true``: runs the scrape + match/rank steps INLINE (no background
     task) and returns ``{"status": "preview", "matches": [...], "total": N}``.
-    A dry-run writes NOTHING to the DB and makes no Gemini calls.
+    A dry-run writes NOTHING to the DB and makes no LLM calls.
     """
     import asyncio
 
@@ -274,7 +274,7 @@ async def update_match_status(
 async def enrich_job_description(
     match_id: int, db: DBSession, request: Request
 ) -> EnrichmentResponse:
-    """Fetch the full job description from the job URL using Gemini.
+    """Fetch the full job description from the job URL using the LLM.
 
     Used on-demand when a job's stored description is short or missing.
     """
@@ -289,19 +289,19 @@ async def enrich_job_description(
         raise HTTPException(status_code=422, detail="Job has no URL to fetch description from")
 
     # Get the ScraplingFetcher from app state or create one
-    gemini_client = getattr(request.app.state, "gemini", None)
-    if gemini_client is None:
-        raise HTTPException(status_code=503, detail="Gemini client not available")
+    llm_client = getattr(request.app.state, "llm", None)
+    if llm_client is None:
+        raise HTTPException(status_code=503, detail="LLM client not available")
 
     try:
         from backend.scraping.scrapling_fetcher import ScraplingFetcher
 
-        fetcher = ScraplingFetcher(gemini_client)
+        fetcher = ScraplingFetcher(llm_client)
         html = await fetcher.fetch_page(job.url)
         if not html:
             raise HTTPException(status_code=502, detail="Could not fetch job page")
 
-        # Clean and extract description using Gemini
+        # Clean and extract description using the LLM
         cleaned = fetcher._clean_html(html)
         prompt = (
             "Extract the FULL job description from the page content below. "
@@ -309,7 +309,7 @@ async def enrich_job_description(
             "Return ONLY the job description text, no JSON, no markdown formatting.\n\n"
             f"Page content:\n{cleaned[:20000]}"
         )
-        description = await gemini_client.generate_text(prompt)
+        description = await llm_client.generate_text(prompt)
 
         if description and len(description) > 50:
             job.description = description.strip()

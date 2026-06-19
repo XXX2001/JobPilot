@@ -2,7 +2,7 @@
 
 This route regenerates ONLY the cover letter for a job match via the
 ``LetterPipeline`` singleton stored on ``app.state``. The pipeline is mocked
-so no real LaTeX/Gemini work happens — mirroring how the apply-engine HTTP
+so no real LaTeX/LLM work happens — mirroring how the apply-engine HTTP
 tests stub ``app.state.apply_engine``.
 
 Covered behaviour:

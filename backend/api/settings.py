@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import platform
+import re
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional, Type, TypeVar
 
-import re
-
+import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -150,11 +152,11 @@ class SearchSettingsUpdate(BaseModel):
 class SourcesUpdate(BaseModel):
     adzuna_app_id: Optional[str] = None
     adzuna_app_key: Optional[str] = None
-    google_api_key: Optional[str] = None
+    llm_api_key: Optional[str] = None
 
 
 class SetupStatus(BaseModel):
-    gemini_key_set: bool
+    llm_key_set: bool
     adzuna_key_set: bool
     tectonic_found: bool
     base_cv_uploaded: bool
@@ -171,18 +173,36 @@ class SourceProviderStatus(BaseModel):
     app_id_hint: Optional[str] = None
 
 
-class GeminiProviderStatus(BaseModel):
+class LlmProviderStatus(BaseModel):
     configured: bool
 
 
 class SourcesOut(BaseModel):
     adzuna: SourceProviderStatus
-    gemini: GeminiProviderStatus
+    llm: LlmProviderStatus
 
 
 class SourcesUpdateResponse(BaseModel):
     message: str
     env_file: str
+
+
+class ProbeResult(BaseModel):
+    ok: bool
+    latency_ms: Optional[int] = None
+    detail: Optional[str] = None
+    error: Optional[str] = None
+
+
+class TestConnectionResponse(BaseModel):
+    generation: ProbeResult
+    embedding: ProbeResult
+
+
+class ModelListResponse(BaseModel):
+    base_url: Optional[str] = None
+    models: list[str] = []
+    error: Optional[str] = None
 
 
 class SiteToggleResponse(BaseModel):
@@ -290,7 +310,7 @@ async def get_sources() -> SourcesOut:
     adzuna_app_id = settings.ADZUNA_APP_ID
     adzuna_id_set = settings.is_configured("ADZUNA_APP_ID")
     adzuna_key_set = settings.is_configured("ADZUNA_APP_KEY")
-    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
+    llm_key_set = settings.llm_configured()
     return SourcesOut(
         adzuna=SourceProviderStatus(
             configured=bool(adzuna_id_set and adzuna_key_set),
@@ -298,8 +318,8 @@ async def get_sources() -> SourcesOut:
                 (adzuna_app_id[:4] + "****") if adzuna_id_set else None
             ),
         ),
-        gemini=GeminiProviderStatus(
-            configured=gemini_key_set,
+        llm=LlmProviderStatus(
+            configured=llm_key_set,
         ),
     )
 
@@ -311,16 +331,153 @@ async def update_sources(body: SourcesUpdate) -> SourcesUpdateResponse:
     return SourcesUpdateResponse(
         message=(
             "API keys must be set in the .env file at the project root. "
-            "Edit ADZUNA_APP_ID, ADZUNA_APP_KEY, and GOOGLE_API_KEY then restart the server."
+            "Edit ADZUNA_APP_ID, ADZUNA_APP_KEY, and your LLM provider key "
+            "(LLM_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY) then restart the server."
         ),
         env_file=".env",
     )
 
 
+_PROBE_TIMEOUT_S = 45.0
+
+
+async def _probe_generation() -> ProbeResult:
+    from backend.llm.factory import make_llm_client
+
+    t0 = time.monotonic()
+    try:
+        client = make_llm_client()
+        reply = await asyncio.wait_for(
+            client.generate_text("Reply with the single word: OK"),
+            timeout=_PROBE_TIMEOUT_S,
+        )
+        dt = int((time.monotonic() - t0) * 1000)
+        return ProbeResult(
+            ok=bool(reply.strip()),
+            latency_ms=dt,
+            detail=f"model responded ({len(reply.strip())} chars)",
+        )
+    except asyncio.TimeoutError:
+        return ProbeResult(
+            ok=False,
+            error=(
+                f"No response within {int(_PROBE_TIMEOUT_S)}s. If this is a local "
+                "reasoning model, set LLM_DISABLE_THINKING=true or raise "
+                "LLM_TIMEOUT_SECONDS."
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ProbeResult(ok=False, error=str(exc)[:300])
+
+
+async def _probe_embedding() -> ProbeResult:
+    from backend.llm.factory import make_embedding_client
+
+    t0 = time.monotonic()
+    try:
+        client = make_embedding_client()
+        vecs = await asyncio.wait_for(
+            client.embed(["connection test"]), timeout=_PROBE_TIMEOUT_S
+        )
+        dt = int((time.monotonic() - t0) * 1000)
+        dim = len(vecs[0]) if vecs and vecs[0] else 0
+        return ProbeResult(
+            ok=dim > 0,
+            latency_ms=dt,
+            detail=f"dimension={dim}",
+            error=None if dim > 0 else "Endpoint returned no embedding vector.",
+        )
+    except asyncio.TimeoutError:
+        return ProbeResult(ok=False, error=f"No response within {int(_PROBE_TIMEOUT_S)}s.")
+    except Exception as exc:  # noqa: BLE001
+        # A chat-only local server often returns 404/501 on /embeddings — make
+        # that the most common failure mode legible.
+        msg = str(exc)
+        if "404" in msg or "501" in msg or "not found" in msg.lower():
+            msg = (
+                "Endpoint does not serve /v1/embeddings (chat-only server?). "
+                "Point EMBEDDING_BASE_URL at a server that hosts an embedding model. "
+                f"[{msg[:150]}]"
+            )
+        return ProbeResult(ok=False, error=msg[:300])
+
+
+@router.post("/test-connection", response_model=TestConnectionResponse)
+async def test_connection() -> TestConnectionResponse:
+    """Live-probe the configured generation + embedding endpoints.
+
+    Unlike ``/status`` (which only checks that a key/base_url is *present*),
+    this actually calls each endpoint, so a wrong base_url, a chat-only server
+    that can't embed, or a too-slow model surfaces at setup instead of failing
+    silently mid-run.
+    """
+    return TestConnectionResponse(
+        generation=await _probe_generation(),
+        embedding=await _probe_embedding(),
+    )
+
+
+def _parse_model_ids(data: Any) -> list[str]:
+    """Pull model ids from an OpenAI- *or* Ollama-shaped /models payload."""
+    ids: list[str] = []
+    if isinstance(data, dict):
+        entries = data.get("data") or data.get("models") or []
+        if isinstance(entries, list):
+            for e in entries:
+                if isinstance(e, dict):
+                    val = e.get("id") or e.get("model") or e.get("name")
+                    if val:
+                        ids.append(str(val))
+                elif isinstance(e, str):
+                    ids.append(e)
+    # de-dup preserving order
+    seen: set[str] = set()
+    return [i for i in ids if not (i in seen or seen.add(i))]
+
+
+@router.get("/models", response_model=ModelListResponse)
+async def list_models(role: Literal["llm", "embedding"] = "llm") -> ModelListResponse:
+    """List model ids the configured endpoint advertises at ``/models``.
+
+    Lets the setup UI prefill the model field for a local/self-hosted server
+    instead of the user having to know the exact served id. Only meaningful
+    when a base_url is set (hosted OpenAI uses fixed, well-known model names).
+    """
+    if role == "llm":
+        base = settings.LLM_BASE_URL or ""
+        key = settings.LLM_API_KEY.get_secret_value() or settings.OPENAI_API_KEY.get_secret_value()
+    else:
+        base = settings.EMBEDDING_BASE_URL or ""
+        key = (
+            settings.EMBEDDING_API_KEY.get_secret_value()
+            or settings.OPENAI_API_KEY.get_secret_value()
+        )
+
+    if not base.strip():
+        return ModelListResponse(
+            base_url=None,
+            models=[],
+            error="No base_url configured for this role.",
+        )
+
+    url = base.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:
+            return ModelListResponse(
+                base_url=base, models=[], error=f"{url} returned HTTP {resp.status_code}"
+            )
+        return ModelListResponse(base_url=base, models=_parse_model_ids(resp.json()))
+    except Exception as exc:  # noqa: BLE001
+        return ModelListResponse(base_url=base, models=[], error=str(exc)[:300])
+
+
 @router.get("/status", response_model=SetupStatus)
 async def get_setup_status(db: DBSession):
     """Return setup completeness flags."""
-    gemini_key_set = settings.is_configured("GOOGLE_API_KEY")
+    llm_key_set = settings.llm_configured()
     adzuna_key_set = settings.is_configured("ADZUNA_APP_ID") and settings.is_configured(
         "ADZUNA_APP_KEY"
     )
@@ -344,10 +501,10 @@ async def get_setup_status(db: DBSession):
         templates_dir = DATA_DIR / "templates"
         base_cv_uploaded = any(templates_dir.glob("*.tex"))
 
-    setup_complete = gemini_key_set and adzuna_key_set and base_cv_uploaded
+    setup_complete = llm_key_set and adzuna_key_set and base_cv_uploaded
 
     return SetupStatus(
-        gemini_key_set=gemini_key_set,
+        llm_key_set=llm_key_set,
         adzuna_key_set=adzuna_key_set,
         tectonic_found=bool(tectonic_found),
         base_cv_uploaded=base_cv_uploaded,
@@ -355,8 +512,44 @@ async def get_setup_status(db: DBSession):
     )
 
 
-_ALLOWED_CV_EXTENSIONS = {".tex", ".cls"}
-_MAX_CV_SIZE_BYTES = 1 * 1024 * 1024  # 1 MB
+_ALLOWED_CV_EXTENSIONS = {".tex", ".cls", ".pdf", ".docx"}
+_CONVERTIBLE_CV_EXTENSIONS = {".pdf", ".docx"}
+_MAX_CV_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB (PDFs are larger than .tex)
+
+
+def _load_cv_template() -> str:
+    """Return the bundled LaTeX CV template used as the conversion target."""
+    for candidate in (
+        DATA_DIR / "templates" / "example_cv.tex",
+        PROJECT_ROOT / "scripts" / "defaults" / "templates" / "example_cv.tex",
+    ):
+        if candidate.exists():
+            return candidate.read_text(encoding="utf-8")
+    raise HTTPException(status_code=500, detail="Bundled CV template not found.")
+
+
+async def _compile_check(tex: str, templates_dir: Path) -> None:
+    """Compile *tex* in a temp dir (with support files) to validate it; raise on failure."""
+    import tempfile
+
+    from backend.latex.compiler import LaTeXCompilationError, LaTeXCompiler
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        (tmp_dir / "cv.tex").write_text(tex, encoding="utf-8")
+        for support in templates_dir.glob("*"):
+            if support.suffix.lower() in {".cls", ".sty", ".jpg", ".jpeg", ".png"}:
+                shutil.copy2(support, tmp_dir / support.name)
+        try:
+            await LaTeXCompiler().compile(tmp_dir / "cv.tex", tmp_dir / "out")
+        except LaTeXCompilationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The CV was converted to LaTeX but failed to compile. Try a "
+                    "simpler source PDF/DOCX or upload a .tex CV directly."
+                ),
+            ) from exc
 
 def _sanitize_cv_filename(raw_filename: str) -> str:
     """Slug a user-supplied filename, preserving extension.
@@ -383,7 +576,12 @@ def _sanitize_cv_filename(raw_filename: str) -> str:
 
 @router.post("/profile/cv-upload", response_model=CvUploadResponse)
 async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResponse:
-    """Accept a multipart .tex/.cls upload, persist it, and update UserProfile.base_cv_path."""
+    """Accept a CV upload, persist it, and update UserProfile.base_cv_path.
+
+    Accepts a ready-to-use ``.tex``/``.cls`` CV, or a ``.pdf``/``.docx`` which
+    is text-extracted and converted into the bundled LaTeX template via the
+    configured LLM (then compile-validated) so non-LaTeX users can onboard.
+    """
     raw_filename = file.filename or ""
 
     # --- Path-traversal guard (pre-slug) ---
@@ -403,7 +601,10 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
     if len(data) > _MAX_CV_SIZE_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large ({len(data)} bytes). Maximum allowed size is {_MAX_CV_SIZE_BYTES} bytes (1 MB).",
+            detail=(
+                f"File too large ({len(data)} bytes). Maximum allowed size is "
+                f"{_MAX_CV_SIZE_BYTES} bytes ({_MAX_CV_SIZE_BYTES // (1024*1024)} MB)."
+            ),
         )
 
     # --- Sanitise filename ---
@@ -412,10 +613,36 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # --- Write to data/templates/ ---
     templates_dir = DATA_DIR / "templates"
     templates_dir.mkdir(parents=True, exist_ok=True)
 
+    # --- PDF/DOCX → convert to LaTeX via the configured LLM ---
+    if ext in _CONVERTIBLE_CV_EXTENSIONS:
+        if not settings.llm_configured():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Converting a PDF/DOCX CV requires a configured LLM. Set up a "
+                    "provider in Settings, or upload a .tex CV directly."
+                ),
+            )
+        from backend.latex.cv_import import (
+            CVImportError,
+            convert_to_latex,
+            extract_text,
+        )
+        from backend.llm.factory import make_llm_client
+
+        try:
+            cv_text = extract_text(data, ext)
+            tex = await convert_to_latex(cv_text, _load_cv_template(), make_llm_client())
+        except CVImportError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await _compile_check(tex, templates_dir)
+        data = tex.encode("utf-8")
+        safe_name = Path(safe_name).stem + ".tex"  # persist the converted LaTeX
+
+    # --- Write to data/templates/ ---
     dest = templates_dir / safe_name
 
     # Defence layer 2: verify resolved path is a descendant of templates_dir

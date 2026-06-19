@@ -15,7 +15,7 @@ from pathlib import Path
 def _fresh_settings(monkeypatch, **env):
     """Build a Settings instance from explicit env vars only (no .env file)."""
     # Required (no-default) credentials must always be present.
-    monkeypatch.setenv("GOOGLE_API_KEY", "google-secret")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-secret")
     monkeypatch.setenv("ADZUNA_APP_ID", "adzuna-id")
     monkeypatch.setenv("ADZUNA_APP_KEY", "adzuna-secret")
     for key, value in env.items():
@@ -30,7 +30,7 @@ def _fresh_settings(monkeypatch, **env):
 
 def test_required_credentials_read_from_their_env_names(monkeypatch):
     settings = _fresh_settings(monkeypatch)
-    assert settings.GOOGLE_API_KEY.get_secret_value() == "google-secret"
+    assert settings.OPENAI_API_KEY.get_secret_value() == "openai-secret"
     assert settings.ADZUNA_APP_ID == "adzuna-id"
     assert settings.ADZUNA_APP_KEY.get_secret_value() == "adzuna-secret"
 
@@ -74,13 +74,13 @@ def test_app_settings_use_uppercase_env_names(monkeypatch):
 def test_model_and_feature_flags_read_from_their_env_names(monkeypatch):
     settings = _fresh_settings(
         monkeypatch,
-        GOOGLE_MODEL="gemini-x",
-        GOOGLE_MODEL_FALLBACKS="a,b",
+        LLM_PROVIDER="anthropic",
+        LLM_MODEL="some-model",
         SCRAPLING_ENABLED="false",
         APPLY_TIER1_ENABLED="false",
     )
-    assert settings.GOOGLE_MODEL == "gemini-x"
-    assert settings.GOOGLE_MODEL_FALLBACKS == "a,b"
+    assert settings.LLM_PROVIDER == "anthropic"
+    assert settings.LLM_MODEL == "some-model"
     assert settings.SCRAPLING_ENABLED is False
     assert settings.APPLY_TIER1_ENABLED is False
 
@@ -108,8 +108,8 @@ def test_defaults_are_preserved_when_env_unset(monkeypatch):
         "JOBPILOT_SCRAPER_HEADLESS",
         "JOBPILOT_DATA_DIR",
         "JOBPILOT_ALLOWED_ORIGINS",
-        "GOOGLE_MODEL",
-        "GOOGLE_MODEL_FALLBACKS",
+        "LLM_PROVIDER",
+        "LLM_MODEL",
         "SCRAPLING_ENABLED",
         "APPLY_TIER1_ENABLED",
         "GMAIL_CLIENT_ID",
@@ -125,8 +125,8 @@ def test_defaults_are_preserved_when_env_unset(monkeypatch):
     assert settings.jobpilot_log_level == "info"
     assert settings.jobpilot_scraper_headless is True
     assert settings.jobpilot_data_dir == "./data"
-    assert settings.GOOGLE_MODEL == "gemini-3-flash-preview"
-    assert settings.GOOGLE_MODEL_FALLBACKS == ""
+    assert settings.LLM_PROVIDER == "openai"
+    assert settings.LLM_MODEL == ""
     assert settings.SCRAPLING_ENABLED is True
     assert settings.APPLY_TIER1_ENABLED is True
     assert settings.GMAIL_CLIENT_ID == ""

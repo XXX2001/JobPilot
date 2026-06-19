@@ -26,7 +26,7 @@ class AnthropicClient:
         self._client = AsyncAnthropic(
             api_key=(api_key or settings.LLM_API_KEY.get_secret_value()
                      or settings.ANTHROPIC_API_KEY.get_secret_value()),
-            timeout=settings.GEMINI_TIMEOUT_SECONDS,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
         )
 
     async def generate_text(

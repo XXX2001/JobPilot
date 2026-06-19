@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
 from backend.config import settings
-from backend.defaults import CONCURRENCY_GEMINI, DAILY_LIMIT, MIN_JOB_SKILLS_FOR_FIT_ENGINE, MIN_MATCH_SCORE
+from backend.defaults import CONCURRENCY_LLM, DAILY_LIMIT, MIN_JOB_SKILLS_FOR_FIT_ENGINE, MIN_MATCH_SCORE
 from backend.matching.cv_parser import CVParser
 from backend.matching.embedder import Embedder
 from backend.matching.filters import JobFilters
@@ -136,7 +136,7 @@ class BatchRunner:
 
         ``dry_run=True`` runs ONLY Step 1 (scrape) and Step 2 (match/rank), then
         returns a lightweight preview ``list[dict]`` of what *would* be matched.
-        It performs NO DB writes and makes NO Gemini calls — used to preview
+        It performs NO DB writes and makes NO LLM calls — used to preview
         today's batch without burning quota or committing rows.
         """
         if self.running:
@@ -228,7 +228,7 @@ class BatchRunner:
         logger.info("Ranked %d jobs above threshold %.1f", len(ranked), filters.min_score)
 
         # ── Dry-run cut point ────────────────────────────────────────────
-        # Everything below this line writes to the DB and/or calls Gemini.
+        # Everything below this line writes to the DB and/or calls the LLM.
         # For a preview we stop here and return what WOULD be matched.
         if dry_run:
             preview = [
@@ -273,10 +273,10 @@ class BatchRunner:
         assessments: dict[int, Any] = {}  # match_id -> FitAssessment or None
         if cv_profile and self._embedder:
             # Run extraction + embedding + FitEngine.assess concurrently for each
-            # match (bounded by CONCURRENCY_GEMINI). DB writes and WS broadcasts
+            # match (bounded by CONCURRENCY_LLM). DB writes and WS broadcasts
             # MUST happen sequentially after the gather — AsyncSession is not
             # safe for concurrent use, and we want deterministic broadcast order.
-            sem = asyncio.Semaphore(CONCURRENCY_GEMINI)
+            sem = asyncio.Semaphore(CONCURRENCY_LLM)
 
             async def _gated_assess(mid: int, jd: Any) -> tuple[int, FitAssessment | None]:
                 async with sem:
@@ -351,7 +351,7 @@ class BatchRunner:
             _additional_context = "\n".join(_additional_parts)
 
             pairs = list(zip(top_ids, [jd for jd, _ in ranked[: len(top_ids)]]))
-            sem = asyncio.Semaphore(CONCURRENCY_GEMINI)
+            sem = asyncio.Semaphore(CONCURRENCY_LLM)
 
             async def _gen_one(mid: int, jd: Any) -> tuple[int, Any]:
                 async with sem:
@@ -361,6 +361,16 @@ class BatchRunner:
                     dir_name = f"{mid}_{slug}"
                     out_dir = Path(settings.jobpilot_data_dir) / "cvs" / dir_name
                     out_dir.mkdir(parents=True, exist_ok=True)
+
+                    # Sub-step feedback: a single tailoring call on a local
+                    # reasoning model can take 100s+, during which the only other
+                    # signal is the prior "CV x/N generated" line. Emit a
+                    # per-job "started" status so the UI isn't silent. Hold the
+                    # progress bar at the CV-phase floor (it advances on
+                    # completion in the gather loop below).
+                    await broadcast_status(
+                        f"Generating CV: {(jd.title or 'job')[:40]}…", progress=0.66
+                    )
 
                     # When CV tailoring is disabled, always use the base CV (no AI calls)
                     if not cv_tailoring_enabled:
@@ -442,7 +452,12 @@ class BatchRunner:
         if len(job_profile.skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE:
             return mid, None
         job_profile = await self._embedder.embed_job_profile(job_profile)
-        assessment = self._fit_engine.assess(job_profile, cv_profile, sensitivity)
+        # assess() is pure CPU (O(job×cv) cosine similarity, ~15-125ms) and
+        # touches no DB/shared state, so run it off the event loop to keep
+        # concurrent embedding I/O and WS progress broadcasts responsive.
+        assessment = await asyncio.to_thread(
+            self._fit_engine.assess, job_profile, cv_profile, sensitivity
+        )
         return mid, assessment
 
     # ------------------------------------------------------------------ #

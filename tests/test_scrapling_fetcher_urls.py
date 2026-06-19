@@ -1,7 +1,7 @@
 """Tests for ScraplingFetcher URL construction and pagination support.
 
 These tests don't hit the network — they exercise the pure URL-builder
-path on a real ``ScraplingFetcher`` instance with a stub Gemini client.
+path on a real ``ScraplingFetcher`` instance with a stub LLM client.
 """
 
 from __future__ import annotations

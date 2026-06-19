@@ -1,12 +1,12 @@
-"""Tier 1 apply: Playwright direct form filler + single Gemini call.
+"""Tier 1 apply: Playwright direct form filler + single LLM call.
 
 Architecture mirrors ScraplingFetcher (scraping Tier 1):
   1. preflight_check_url()  — CAPTCHA detection (reuses captcha_handler)
   2. launch_persistent_context() — load saved browser profile (cookies/auth)
   3. page.goto(apply_url)
   4. _clean_form_html()     — strip page to form skeleton
-  5. _build_fill_prompt()   — build single Gemini prompt
-  6. Gemini call            — returns JSON field mapping
+  5. _build_fill_prompt()   — build single LLM prompt
+  6. LLM call               — returns JSON field mapping
   7. page.fill() / page.set_input_files()
   8. broadcast apply_review WS
   9. wait confirm/cancel
@@ -22,6 +22,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
 from backend.config import settings
+from backend.defaults import (
+    MAX_LEN_ADDITIONAL_ANSWERS,
+    MAX_LEN_EMAIL,
+    MAX_LEN_FULL_NAME,
+    MAX_LEN_LOCATION,
+    MAX_LEN_PHONE,
+)
+from backend.security.sanitizer import sanitize_for_prompt
 
 if TYPE_CHECKING:
     from backend.llm.base import LLMClient
@@ -143,7 +151,7 @@ class PlaywrightFormFiller:
                 if await detect_any_block(page):
                     raise RuntimeError(f"CAPTCHA on {apply_url} could not be resolved")
 
-            # Phase 2: extract form structure + single Gemini call
+            # Phase 2: extract form structure + single LLM call
             html = await page.content()
             form_content = self._clean_form_html(html)
             prompt = self._build_fill_prompt(
@@ -158,7 +166,7 @@ class PlaywrightFormFiller:
             )
 
             raw = await self._llm.generate_text(prompt)
-            mapping = self._parse_gemini_response(raw)
+            mapping = self._parse_llm_response(raw)
 
             # Phase 3: fill fields
             filled_fields: dict[str, str] = {}
@@ -342,7 +350,7 @@ class PlaywrightFormFiller:
             )
 
             raw = await self._llm.generate_text(prompt)
-            mapping = self._parse_gemini_response(raw)
+            mapping = self._parse_llm_response(raw)
 
             filled_fields: dict[str, str] = {}
             for field in mapping.get("fields", []):
@@ -454,17 +462,17 @@ class PlaywrightFormFiller:
         has_cv: bool,
         has_letter: bool,
     ) -> str:
-        """Build the single Gemini prompt for form field mapping."""
+        """Build the single LLM prompt for form field mapping."""
         lines = [
             "You are a job application form analyst.",
             "Analyse the form content below and return a JSON object with instructions",
             "for filling every visible field. Use CSS selectors.",
             "",
             "Applicant details:",
-            f"  Name: {full_name}",
-            f"  Email: {email}",
-            f"  Phone: {phone}",
-            f"  Location: {location}",
+            f"  Name: {sanitize_for_prompt(full_name, MAX_LEN_FULL_NAME, 'full_name')}",
+            f"  Email: {sanitize_for_prompt(email, MAX_LEN_EMAIL, 'email')}",
+            f"  Phone: {sanitize_for_prompt(phone, MAX_LEN_PHONE, 'phone')}",
+            f"  Location: {sanitize_for_prompt(location, MAX_LEN_LOCATION, 'location')}",
         ]
 
         if additional_answers:
@@ -473,9 +481,14 @@ class PlaywrightFormFiller:
                 lines.append("")
                 lines.append("Additional answers for custom questions:")
                 for k, v in (parsed.items() if isinstance(parsed, dict) else []):
-                    lines.append(f"  {k}: {v}")
+                    sk = sanitize_for_prompt(str(k), MAX_LEN_LOCATION, "answer_key")
+                    sv = sanitize_for_prompt(str(v), MAX_LEN_ADDITIONAL_ANSWERS, "answer_value")
+                    lines.append(f"  {sk}: {sv}")
             except Exception:
-                lines.append(f"  Additional context: {additional_answers[:500]}")
+                lines.append(
+                    f"  Additional context: "
+                    f"{sanitize_for_prompt(additional_answers, 500, 'additional_answers')}"
+                )
 
         file_note = []
         if has_cv:
@@ -501,8 +514,8 @@ class PlaywrightFormFiller:
         ]
         return "\n".join(lines)
 
-    def _parse_gemini_response(self, raw: str) -> dict:
-        """Extract and parse JSON from Gemini response.
+    def _parse_llm_response(self, raw: str) -> dict:
+        """Extract and parse JSON from the LLM response.
 
         Returns a safe default dict on any parse failure.
         """
@@ -514,7 +527,7 @@ class PlaywrightFormFiller:
         # Find first JSON object
         m = re.search(r"\{.*\}", cleaned, re.DOTALL)
         if not m:
-            logger.warning("[Tier 1] No JSON found in Gemini response")
+            logger.warning("[Tier 1] No JSON found in LLM response")
             return default
         try:
             parsed = json.loads(m.group())

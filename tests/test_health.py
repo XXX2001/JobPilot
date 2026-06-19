@@ -4,7 +4,7 @@ The endpoint must:
 - Actually ping the DB (SELECT 1), not just hard-code "connected".
 - Return 503 when the DB is unreachable.
 - Never leak raw exception text — only a short error code.
-- Include version, ISO-8601 UTC timestamp, tectonic and gemini_key_set flags.
+- Include version, ISO-8601 UTC timestamp, tectonic and llm_key_set flags.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ def test_health_response_shape_matches_healthout_schema(test_app: TestClient) ->
         "timestamp",
         "db",
         "tectonic",
-        "gemini_key_set",
+        "llm_key_set",
         "tectonic_hint",
         "db_error_code",
     }
@@ -67,9 +67,9 @@ def test_health_timestamp_is_iso8601_utc_aware(test_app: TestClient) -> None:
 
 
 def test_health_flags_reflect_test_env(test_app: TestClient) -> None:
-    """tectonic and gemini_key_set are booleans matching the test env.
+    """tectonic and llm_key_set are booleans matching the test env.
 
-    conftest seeds GOOGLE_API_KEY='test-key-not-real', so gemini_key_set
+    conftest seeds OPENAI_API_KEY='test-key-not-real', so llm_key_set
     must be True (it's not in {"", None, "placeholder"}). Tectonic
     presence depends on whether the test host has it installed — we just
     assert the value is a bool.
@@ -78,9 +78,9 @@ def test_health_flags_reflect_test_env(test_app: TestClient) -> None:
     data = resp.json()
 
     assert isinstance(data["tectonic"], bool)
-    assert isinstance(data["gemini_key_set"], bool)
-    assert data["gemini_key_set"] is True, (
-        "conftest sets GOOGLE_API_KEY=test-key-not-real, which should count as set"
+    assert isinstance(data["llm_key_set"], bool)
+    assert data["llm_key_set"] is True, (
+        "conftest sets OPENAI_API_KEY=test-key-not-real, which should count as set"
     )
 
     # If tectonic is missing the hint should be populated; if present, hint is None.

@@ -129,33 +129,33 @@ def test_build_fill_prompt_returns_json_schema_instructions():
     assert "JSON" in prompt
 
 
-# ── _parse_gemini_response ────────────────────────────────────────────────────
+# ── _parse_llm_response ────────────────────────────────────────────────────
 
 
-def test_parse_gemini_response_valid_json():
+def test_parse_llm_response_valid_json():
     filler = _filler()
     raw = '{"fields": [{"selector": "#name", "value": "Alice"}], "file_inputs": [], "submit_selector": "button[type=submit]"}'
-    result = filler._parse_gemini_response(raw)
+    result = filler._parse_llm_response(raw)
     assert result["fields"][0]["selector"] == "#name"
     assert result["submit_selector"] == "button[type=submit]"
 
 
-def test_parse_gemini_response_handles_markdown_fences():
+def test_parse_llm_response_handles_markdown_fences():
     filler = _filler()
     raw = '```json\n{"fields": [], "file_inputs": [], "submit_selector": "#submit"}\n```'
-    result = filler._parse_gemini_response(raw)
+    result = filler._parse_llm_response(raw)
     assert result["submit_selector"] == "#submit"
 
 
-def test_parse_gemini_response_returns_defaults_on_empty():
+def test_parse_llm_response_returns_defaults_on_empty():
     filler = _filler()
-    result = filler._parse_gemini_response("")
+    result = filler._parse_llm_response("")
     assert result["fields"] == []
     assert result["file_inputs"] == []
     assert "submit_selector" in result
 
 
-def test_parse_gemini_response_returns_defaults_on_invalid_json():
+def test_parse_llm_response_returns_defaults_on_invalid_json():
     filler = _filler()
-    result = filler._parse_gemini_response("not json at all")
+    result = filler._parse_llm_response("not json at all")
     assert result["fields"] == []

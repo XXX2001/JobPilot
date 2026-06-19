@@ -1,4 +1,4 @@
-"""Tests for JobAnalyzer — all using mocked GeminiClient."""
+"""Tests for JobAnalyzer — all using a mocked LLM client."""
 from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 import pytest
@@ -53,10 +53,10 @@ async def test_job_analyzer_context_markdown_is_valid():
 
 
 @pytest.mark.asyncio
-async def test_job_analyzer_propagates_gemini_error():
-    from backend.llm.gemini_client import GeminiJSONError
+async def test_job_analyzer_propagates_llm_error():
+    from backend.llm.base import LLMJSONError
     client = MagicMock()
-    client.generate_json = AsyncMock(side_effect=GeminiJSONError("bad json"))
+    client.generate_json = AsyncMock(side_effect=LLMJSONError("bad json"))
     analyzer = JobAnalyzer(client=client)
-    with pytest.raises(GeminiJSONError):
+    with pytest.raises(LLMJSONError):
         await analyzer.analyze(_make_job())

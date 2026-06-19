@@ -9,7 +9,7 @@ from time import monotonic
 from backend.latex.compiler import LaTeXCompiler
 from backend.latex.injector import LaTeXInjector
 from backend.latex.parser import LaTeXParser
-from backend.llm.gemini_client import GeminiJSONError, GeminiRateLimitError
+from backend.llm.base import LLMJSONError, LLMRateLimitError
 from backend.models.schemas import JobDetails
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class TailoredCV:
     tex_path: Path
     pdf_path: Path
     diff: list["DiffEntry"]
-    cv_tailored: bool = True  # False when Gemini editing failed and base CV was used
+    cv_tailored: bool = True  # False when LLM editing failed and base CV was used
 
 
 @dataclass
@@ -154,7 +154,7 @@ class CVPipeline:
                     ]
                     cv_tailored = bool(diff)
 
-            except (GeminiRateLimitError, GeminiJSONError) as exc:
+            except (LLMRateLimitError, LLMJSONError) as exc:
                 logger.warning("CV modifier LLM error (%s); using base CV unchanged.", exc)
                 cv_tex = dest_tex.read_text(encoding="utf-8")
                 diff = []
@@ -219,7 +219,7 @@ class LetterPipeline:
                         letter_edit.edited_paragraph,
                         letter_edit.company_name,
                     )
-            except (GeminiRateLimitError, GeminiJSONError) as exc:
+            except (LLMRateLimitError, LLMJSONError) as exc:
                 logger.warning("Letter editor LLM error (%s); using base letter.", exc)
             except Exception as exc:
                 logger.error(

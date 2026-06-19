@@ -49,7 +49,9 @@ os.environ["JOBPILOT_DATA_DIR"] = _TEST_DATA_DIR
 
 # Seed dummy credentials so backend.config.Settings() doesn't refuse to load
 # on fresh checkouts / CI machines that don't have a real ``.env``.
-os.environ.setdefault("GOOGLE_API_KEY", "test-key-not-real")
+os.environ.setdefault("LLM_API_KEY", "test-key-not-real")
+os.environ.setdefault("EMBEDDING_API_KEY", "test-key-not-real")
+os.environ.setdefault("BROWSER_LLM_API_KEY", "test-key-not-real")
 os.environ.setdefault("ADZUNA_APP_ID", "test-adzuna-id")
 os.environ.setdefault("ADZUNA_APP_KEY", "test-adzuna-key")
 
@@ -159,7 +161,9 @@ def test_settings(monkeypatch):
     if os.getcwd() not in sys.path:
         sys.path.insert(0, os.getcwd())
 
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("LLM_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("EMBEDDING_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("BROWSER_LLM_API_KEY", "test-key-not-real")
     monkeypatch.setenv("ADZUNA_APP_ID", "test-adzuna-id")
     monkeypatch.setenv("ADZUNA_APP_KEY", "test-adzuna-key")
     monkeypatch.setenv("JOBPILOT_HOST", "127.0.0.1")

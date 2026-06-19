@@ -219,14 +219,14 @@ def test_get_settings_status(test_app: TestClient):
     assert resp.status_code == 200
     data = resp.json()
     for key in (
-        "gemini_key_set",
+        "llm_key_set",
         "adzuna_key_set",
         "tectonic_found",
         "base_cv_uploaded",
         "setup_complete",
     ):
         assert key in data
-    assert isinstance(data["gemini_key_set"], bool)
+    assert isinstance(data["llm_key_set"], bool)
 
 
 def test_get_sources(test_app: TestClient):
@@ -235,7 +235,7 @@ def test_get_sources(test_app: TestClient):
     assert resp.status_code == 200
     data = resp.json()
     assert "adzuna" in data
-    assert "gemini" in data
+    assert "llm" in data
 
 
 def test_get_profile_not_found_initially(test_app: TestClient):

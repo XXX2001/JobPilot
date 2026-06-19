@@ -17,7 +17,14 @@ from backend.applier._strategy_common import (
 )
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import settings
-from backend.security.sanitizer import sanitize_url
+from backend.defaults import (
+    MAX_LEN_ADDITIONAL_ANSWERS,
+    MAX_LEN_EMAIL,
+    MAX_LEN_FULL_NAME,
+    MAX_LEN_LOCATION,
+    MAX_LEN_PHONE,
+)
+from backend.security.sanitizer import sanitize_for_prompt, sanitize_url
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +52,7 @@ except ImportError:
 class AutoApplyStrategy:
     """Full auto-apply.
 
-    Tries Tier 1 (PlaywrightFormFiller — direct Playwright + 1 Gemini call) first,
+    Tries Tier 1 (PlaywrightFormFiller — direct Playwright + 1 LLM call) first,
     but skips Tier 1 for multi-step sites (e.g. LinkedIn Easy Apply).
     Falls back to Tier 2 (browser-use agent loop) on any Tier 1 exception.
     ALWAYS pauses before submitting to emit an ``apply_review`` WS message
@@ -105,7 +112,7 @@ class AutoApplyStrategy:
                 status="cancelled", method="auto", message="Invalid apply URL"
             )
 
-        # ── Tier 1: Playwright direct + single Gemini call ──────────────
+        # ── Tier 1: Playwright direct + single LLM call ─────────────────
         # Skip Tier 1 for multi-step sites (LinkedIn, etc.) — they need
         # browser-use agent to click through modals and multi-page forms.
         use_tier1 = (
@@ -145,7 +152,7 @@ class AutoApplyStrategy:
                     exc,
                 )
 
-        # ── Tier 2: browser-use agent (Gemini + Playwright) ─────────────
+        # ── Tier 2: browser-use agent (LLM + Playwright) ────────────────
         return await self._browser_use_apply(
             job_id=job_id,
             apply_url=apply_url,
@@ -208,12 +215,15 @@ class AutoApplyStrategy:
 
         lines.append(f"\nURL: {apply_url}\n")
 
+        # Sanitize every applicant field before it lands in the agent's task
+        # prompt: strip control chars / injection-shaped lines so a crafted
+        # profile value can't override the STOP-before-Submit instruction.
         lines.append(
             "\nAPPLICANT DETAILS (use these to fill the form):\n"
-            f"  Full Name: {full_name}\n"
-            f"  Email: {email}\n"
-            f"  Phone: {phone}\n"
-            f"  Location: {location}\n"
+            f"  Full Name: {sanitize_for_prompt(full_name, MAX_LEN_FULL_NAME, 'full_name')}\n"
+            f"  Email: {sanitize_for_prompt(email, MAX_LEN_EMAIL, 'email')}\n"
+            f"  Phone: {sanitize_for_prompt(phone, MAX_LEN_PHONE, 'phone')}\n"
+            f"  Location: {sanitize_for_prompt(location, MAX_LEN_LOCATION, 'location')}\n"
             + PHONE_NUMBER_NOTE
         )
 
@@ -228,9 +238,14 @@ class AutoApplyStrategy:
                 if isinstance(parsed, dict) and parsed:
                     lines.append("\nAdditional information for form questions:\n")
                     for k, v in parsed.items():
-                        lines.append(f"  {k}: {v}\n")
+                        sk = sanitize_for_prompt(str(k), MAX_LEN_LOCATION, "answer_key")
+                        sv = sanitize_for_prompt(str(v), MAX_LEN_ADDITIONAL_ANSWERS, "answer_value")
+                        lines.append(f"  {sk}: {sv}\n")
             except Exception:
-                lines.append(f"\nAdditional context: {additional_answers[:500]}\n")
+                lines.append(
+                    "\nAdditional context: "
+                    f"{sanitize_for_prompt(additional_answers, 500, 'additional_answers')}\n"
+                )
 
         lines.append(
             "\nIMPORTANT RULES:\n"
@@ -259,7 +274,7 @@ class AutoApplyStrategy:
         confirm_event: asyncio.Event | None = None,
         cancel_event: asyncio.Event | None = None,
     ) -> ApplicationResult:
-        """Tier 2: browser-use agent with Gemini + persistent browser profile."""
+        """Tier 2: browser-use agent with the LLM + persistent browser profile."""
 
         if not _BROWSER_USE_AVAILABLE or Agent is None:
             logger.warning("browser-use not available — falling back to manual open")
@@ -299,7 +314,7 @@ class AutoApplyStrategy:
         screenshot_b64: str | None = None
 
         browser_kwargs: dict = dict(
-            headless=False,
+            headless=settings.jobpilot_apply_headless,
             keep_alive=True,
             minimum_wait_page_load_time=3.0,
             wait_for_network_idle_page_load_time=15.0,
@@ -325,6 +340,9 @@ class AutoApplyStrategy:
             agent = Agent(
                 task=fill_task, llm=llm, browser=browser,
                 available_file_paths=file_paths or None,
+                # Retry malformed action-JSON (common with local reasoning
+                # models) on a fresh client instead of aborting the run.
+                fallback_llm=make_browser_llm(),
             )
             logger.info("[Tier 2] Agent started — filling form for job_id=%d", job_id)
             result = await agent.run()
@@ -425,7 +443,10 @@ class AutoApplyStrategy:
             )
             from backend.llm.factory import make_browser_llm
             llm2 = make_browser_llm()
-            submit_agent = Agent(task=submit_task, llm=llm2, browser=browser)
+            submit_agent = Agent(
+                task=submit_task, llm=llm2, browser=browser,
+                fallback_llm=make_browser_llm(),
+            )
             await submit_agent.run()
             logger.info("Auto-apply submitted for job_id=%d", job_id)
             return ApplicationResult(status="applied", method="auto")

@@ -58,6 +58,38 @@ async def test_api_error_raises_exception():
             await client.search(["ML"], JobFilters())
 
 
+async def test_float_salaries_are_coerced_to_int():
+    """Adzuna returns salaries as floats (e.g. 67255.94); RawJob requires int.
+
+    Regression: previously the float was passed straight through and pydantic
+    raised ``int_from_float``, breaking ingestion of any job with a fractional
+    salary (i.e. most of them).
+    """
+    payload = {
+        "results": [
+            {
+                "id": "9",
+                "title": "Backend Dev",
+                "company": {"display_name": "ACME"},
+                "location": {"display_name": "London"},
+                "description": "desc",
+                "redirect_url": "http://example.com",
+                "salary_min": 67255.94,
+                "salary_max": 81000.5,
+            }
+        ]
+    }
+    mock_client = _make_mock_client(200, payload)
+    with patch("backend.scraping.adzuna_client.httpx.AsyncClient", return_value=mock_client):
+        client = AdzunaClient()
+        results = await client.search(["python"], JobFilters())
+
+    assert len(results) == 1
+    assert results[0].salary_min == 67255
+    assert results[0].salary_max == 81000
+    assert isinstance(results[0].salary_min, int)
+
+
 async def test_empty_results_returns_empty_list():
     """AdzunaClient.search returns empty list when API has no results."""
     mock_client = _make_mock_client(200, {"results": []})

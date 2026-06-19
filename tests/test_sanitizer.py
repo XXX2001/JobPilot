@@ -150,6 +150,21 @@ class TestSanitizeUrl:
     def test_non_string_returns_empty(self):
         assert sanitize_url(None) == ""  # type: ignore[arg-type]
 
+    def test_rejects_loopback_ip(self):
+        assert sanitize_url("http://127.0.0.1:8080/apply") == ""
+
+    def test_rejects_private_lan_ip(self):
+        assert sanitize_url("http://192.168.1.50/jobs/1") == ""
+        assert sanitize_url("https://10.0.0.5/apply") == ""
+
+    def test_rejects_link_local_metadata_ip(self):
+        # AWS/GCP cloud-metadata endpoint.
+        assert sanitize_url("http://169.254.169.254/latest/meta-data/") == ""
+
+    def test_allows_public_ip(self):
+        url = "https://93.184.216.34/jobs/1"
+        assert sanitize_url(url) == url
+
 
 # ── wrap_untrusted ─────────────────────────────────────────────────────────────
 

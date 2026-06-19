@@ -3,7 +3,7 @@ OpenAI-compatible local model (llama.cpp / Ollama / LM Studio / vLLM, …).
 
 Unlike the rest of the suite (which mocks the provider transport), these tests
 make REAL network calls through ``OpenAICompatClient`` / the factory, proving
-the abstraction works end-to-end with no Gemini and no cloud keys.
+the abstraction works end-to-end with a local model and no cloud keys.
 
 They **auto-skip** when the endpoint is unreachable, so the default suite stays
 green offline and in CI. Point them at any OpenAI-compatible server via env:

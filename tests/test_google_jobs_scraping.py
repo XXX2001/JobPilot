@@ -17,7 +17,7 @@ from backend.scraping.site_prompts import (
 
 
 def _make_fetcher() -> ScraplingFetcher:
-    """Create a ScraplingFetcher without a real GeminiClient (bypass __init__)."""
+    """Create a ScraplingFetcher without a real LLM client (bypass __init__)."""
     fetcher = ScraplingFetcher.__new__(ScraplingFetcher)
     fetcher._llm = None  # type: ignore[assignment]
     fetcher._selector_miss_counts = {}

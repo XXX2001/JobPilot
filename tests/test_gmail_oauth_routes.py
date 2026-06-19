@@ -13,7 +13,11 @@ def app_with_gmail(monkeypatch):
     monkeypatch.setenv("GMAIL_CLIENT_ID", "test-client.apps.googleusercontent.com")
     monkeypatch.setenv("GMAIL_CLIENT_SECRET", "test-secret")
     import backend.config as cfg
-    cfg.settings = cfg._load_settings()
+    # monkeypatch (not bare assignment) so the global settings object is
+    # restored at teardown — a bare reassignment leaves modules that did
+    # ``from backend.config import settings`` pointing at a stale object and
+    # silently pollutes later tests.
+    monkeypatch.setattr(cfg, "settings", cfg._load_settings())
     from backend.main import app
     with TestClient(app, raise_server_exceptions=False) as client:
         yield client
@@ -35,7 +39,11 @@ def test_oauth_start_when_unconfigured_returns_503(monkeypatch):
     monkeypatch.setenv("GMAIL_CLIENT_ID", "")
     monkeypatch.setenv("GMAIL_CLIENT_SECRET", "")
     import backend.config as cfg
-    cfg.settings = cfg._load_settings()
+    # monkeypatch (not bare assignment) so the global settings object is
+    # restored at teardown — a bare reassignment leaves modules that did
+    # ``from backend.config import settings`` pointing at a stale object and
+    # silently pollutes later tests.
+    monkeypatch.setattr(cfg, "settings", cfg._load_settings())
     from backend.main import app
     with TestClient(app, raise_server_exceptions=False) as client:
         resp = client.get("/api/gmail/oauth/start", follow_redirects=False)

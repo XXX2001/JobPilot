@@ -1,8 +1,10 @@
 """Centralized sanitization module for all LLM-facing code."""
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+from urllib.parse import urlparse
 
 from backend.defaults import (
     MAX_LEN_APPLY_URL,
@@ -98,5 +100,20 @@ def sanitize_url(url: str, max_len: int = MAX_LEN_APPLY_URL) -> str:
     if not url.startswith(("http://", "https://")):
         if url:
             logger.warning("Rejected URL with invalid scheme: %r", url[:100])
+        return ""
+    # SSRF guard: a job/apply URL should never point at the local machine or
+    # the private LAN. If the host is a literal private/loopback/link-local IP,
+    # reject it so a crafted listing can't make the browser/enrich path probe
+    # internal services or cloud-metadata endpoints. (DNS names are left to the
+    # network layer — this blocks the cheap, direct-IP exfil vector.)
+    host = urlparse(url).hostname or ""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        ip = None
+    if ip is not None and (
+        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+    ):
+        logger.warning("Rejected URL pointing at non-public host: %r", url[:100])
         return ""
     return url

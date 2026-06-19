@@ -3,12 +3,15 @@ from __future__ import annotations
 import logging
 from typing import Type, TypeVar
 
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APITimeoutError, AsyncOpenAI
 from pydantic import BaseModel
 
 from backend.config import settings
 from backend.llm.base import (
-    LLMCallFailed, LLMJSONError, LLMRateLimitError, parse_json_response,
+    LLMCallFailed,
+    LLMJSONError,
+    LLMRateLimitError,
+    parse_json_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,16 +29,45 @@ def _resolve_key() -> str:
     )
 
 
+def _wrap_error(e: Exception, *, base_url: str | None, kind: str) -> Exception:
+    """Map a raw SDK error to a neutral LLM exception with an *actionable* message.
+
+    ``kind`` is "generation" or "embeddings"; ``base_url`` is the endpoint the
+    failing client targets (None == hosted OpenAI). The messages tell a user
+    running a local/self-hosted model exactly which knob to turn instead of
+    bubbling up an opaque 500.
+    """
+    where = base_url or "the OpenAI API"
+    if isinstance(e, APITimeoutError):
+        hint = (
+            f"LLM {kind} request to {where} timed out after "
+            f"{settings.LLM_TIMEOUT_SECONDS:.0f}s. If this is a local reasoning "
+            "model, raise LLM_TIMEOUT_SECONDS or set LLM_DISABLE_THINKING=true "
+            "for much faster responses."
+        )
+        return LLMCallFailed(hint)
+    if isinstance(e, APIConnectionError):
+        return LLMCallFailed(
+            f"Could not reach the LLM endpoint at {where}. Check the server is "
+            "running and the *_BASE_URL is correct."
+        )
+    msg = str(e)
+    if "429" in msg or "rate limit" in msg.lower():
+        return LLMRateLimitError(msg)
+    return LLMCallFailed(msg)
+
+
 class OpenAICompatClient:
     """Generation adapter for any OpenAI-compatible endpoint (OpenAI, DeepSeek, local)."""
 
     def __init__(self, api_key: str | None = None, model: str | None = None,
                  base_url: str | None = None) -> None:
         self._model = model or settings.LLM_MODEL or _DEFAULT_MODEL
+        self._base_url = base_url or settings.LLM_BASE_URL or None
         self._client = AsyncOpenAI(
             api_key=api_key or _resolve_key() or "not-needed",
-            base_url=base_url or settings.LLM_BASE_URL or None,
-            timeout=settings.GEMINI_TIMEOUT_SECONDS,
+            base_url=self._base_url,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
         )
 
     async def generate_text(
@@ -49,14 +81,18 @@ class OpenAICompatClient:
         }
         if response_mime_type == "application/json":
             kwargs["response_format"] = {"type": "json_object"}
+        if settings.LLM_DISABLE_THINKING:
+            # Ask reasoning-capable servers (Qwen3/DeepSeek via llama.cpp/vLLM/
+            # Ollama) to skip the chain-of-thought. Ignored by servers that
+            # don't recognise the flag.
+            kwargs["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         try:
             resp = await self._client.chat.completions.create(**kwargs)
             return resp.choices[0].message.content or ""
         except Exception as e:  # noqa: BLE001
-            msg = str(e)
-            if "429" in msg or "rate limit" in msg.lower():
-                raise LLMRateLimitError(msg) from e
-            raise LLMCallFailed(msg) from e
+            raise _wrap_error(
+                e, base_url=getattr(self, "_base_url", None), kind="generation"
+            ) from e
 
     async def generate_json(self, prompt: str, schema: Type[T]) -> T:
         text = await self.generate_text(prompt, response_mime_type="application/json")
@@ -78,11 +114,12 @@ class OpenAICompatEmbeddingClient:
     def __init__(self, api_key: str | None = None, model: str | None = None,
                  base_url: str | None = None) -> None:
         self._model = model or settings.EMBEDDING_MODEL or _DEFAULT_EMBED_MODEL
+        self._base_url = base_url or settings.EMBEDDING_BASE_URL or None
         self._client = AsyncOpenAI(
             api_key=(api_key or settings.EMBEDDING_API_KEY.get_secret_value()
                      or settings.OPENAI_API_KEY.get_secret_value() or "not-needed"),
-            base_url=base_url or settings.EMBEDDING_BASE_URL or None,
-            timeout=settings.GEMINI_TIMEOUT_SECONDS,
+            base_url=self._base_url,
+            timeout=settings.LLM_TIMEOUT_SECONDS,
         )
         self._dimension = _EMBED_DIMS.get(self._model, 1536)
 
@@ -92,14 +129,21 @@ class OpenAICompatEmbeddingClient:
 
     @property
     def dimension(self) -> int:
+        # Best-effort until the first embed() call corrects it. The static map
+        # only covers hosted-OpenAI models; for any other endpoint (local Qwen,
+        # Ollama, etc.) the true width is unknown until we see a real vector, so
+        # ``embed`` updates this from the response rather than reporting a wrong
+        # hardcoded default forever.
         return self._dimension
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         try:
             resp = await self._client.embeddings.create(model=self._model, input=texts)
-            return [d.embedding for d in resp.data]
+            vectors = [d.embedding for d in resp.data]
+            if vectors and vectors[0]:
+                self._dimension = len(vectors[0])
+            return vectors
         except Exception as e:  # noqa: BLE001
-            msg = str(e)
-            if "429" in msg or "rate limit" in msg.lower():
-                raise LLMRateLimitError(msg) from e
-            raise LLMCallFailed(msg) from e
+            raise _wrap_error(
+                e, base_url=getattr(self, "_base_url", None), kind="embeddings"
+            ) from e

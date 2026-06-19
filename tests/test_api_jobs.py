@@ -71,7 +71,7 @@ def test_queue_refresh_dry_run_returns_preview(test_app: TestClient):
     """POST /api/queue/refresh?dry_run=true runs inline and returns a preview.
 
     The runner is swapped for a stub so the endpoint stays hermetic (no real
-    scraping / Gemini). We assert the {status:'preview', matches, total} shape.
+    scraping / LLM). We assert the {status:'preview', matches, total} shape.
     """
     from unittest.mock import AsyncMock
 

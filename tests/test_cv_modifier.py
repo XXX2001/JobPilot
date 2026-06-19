@@ -1,4 +1,4 @@
-"""Tests for CVModifier — all using mocked GeminiClient."""
+"""Tests for CVModifier — all using a mocked LLM client."""
 from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 import pytest
@@ -78,11 +78,11 @@ async def test_cv_modifier_caps_at_three():
 
 @pytest.mark.asyncio
 async def test_cv_modifier_propagates_error():
-    from backend.llm.gemini_client import GeminiJSONError
+    from backend.llm.base import LLMJSONError
     client = MagicMock()
-    client.generate_json = AsyncMock(side_effect=GeminiJSONError("bad"))
+    client.generate_json = AsyncMock(side_effect=LLMJSONError("bad"))
     modifier = CVModifier(client=client)
-    with pytest.raises(GeminiJSONError):
+    with pytest.raises(LLMJSONError):
         await modifier.modify(_make_job(), SAMPLE_CV, _make_context())
 
 

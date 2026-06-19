@@ -52,10 +52,10 @@ if (Test-Path $EnvFile) {
 Copy-Item $Example $EnvFile -Force
 
 # Clear the example's placeholder credentials/routing so the result only
-# contains what you actually choose below (placeholders like
-# "your_gemini_api_key" otherwise read as real, non-empty values).
+# contains what you actually choose below (placeholders otherwise read as
+# real, non-empty values).
 foreach ($k in @(
-  'GOOGLE_API_KEY','ADZUNA_APP_ID','ADZUNA_APP_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY',
+  'ADZUNA_APP_ID','ADZUNA_APP_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY',
   'SERPAPI_KEY','LLM_API_KEY','LLM_BASE_URL','LLM_MODEL','EMBEDDING_API_KEY','EMBEDDING_BASE_URL',
   'BROWSER_LLM_API_KEY','BROWSER_LLM_BASE_URL','BROWSER_LLM_MODEL')) {
   Set-Env $k ''
@@ -64,9 +64,8 @@ foreach ($k in @(
 Write-Host ''
 Write-Host 'Which AI provider should JobPilot use?'
 Write-Host '  1) Local / self-hosted  (OpenAI-compatible: Ollama, llama.cpp, LM Studio, vLLM)'
-Write-Host '  2) Google Gemini        (cloud, free tier)'
-Write-Host '  3) OpenAI               (cloud)'
-Write-Host '  4) Anthropic            (cloud; generation only - see notes)'
+Write-Host '  2) OpenAI-compatible    (cloud; hosted OpenAI or any OpenAI-compatible endpoint)'
+Write-Host '  3) Anthropic            (cloud; generation only - see notes)'
 $choice = Ask 'Choice' '1'
 
 switch ($choice) {
@@ -84,11 +83,11 @@ switch ($choice) {
     if ($model) { Set-Env 'BROWSER_LLM_MODEL' $model }
     Write-Host ''
     Write-Host 'Embeddings power job/CV fit-scoring. Most local servers do NOT serve'
-    Write-Host 'embeddings, so you can point them at Gemini (free) or skip scoring.'
-    $gk = Ask 'Google API key for embeddings (free; blank = use the local server)' ''
-    if ($gk) {
-      Set-Env 'EMBEDDING_PROVIDER' 'gemini'
-      Set-Env 'GOOGLE_API_KEY' $gk
+    Write-Host 'embeddings, so you can point them at a hosted OpenAI-compatible key or skip scoring.'
+    $ek = Ask 'API key for embeddings (blank = use the local server)' ''
+    if ($ek) {
+      Set-Env 'EMBEDDING_PROVIDER' 'openai'
+      Set-Env 'EMBEDDING_API_KEY' $ek
     } else {
       # No cloud key: point embeddings at the same local server. Config stays
       # valid and the app boots; if the server lacks /v1/embeddings, fit-scoring
@@ -99,32 +98,31 @@ switch ($choice) {
     }
   }
   '2' {
-    $gk = Ask 'Google API key (aistudio.google.com -> Get API key)' ''
-    Set-Env 'LLM_PROVIDER' 'gemini'
-    Set-Env 'EMBEDDING_PROVIDER' 'gemini'
-    Set-Env 'BROWSER_LLM_PROVIDER' 'gemini'
-    Set-Env 'GOOGLE_API_KEY' $gk
-  }
-  '3' {
-    $ok = Ask 'OpenAI API key (sk-...)' ''
+    $ok = Ask 'API key (sk-... for hosted OpenAI)' ''
+    $burl = Ask 'Base URL (blank = hosted OpenAI; set for another OpenAI-compatible endpoint)' ''
     Set-Env 'LLM_PROVIDER' 'openai'
     Set-Env 'EMBEDDING_PROVIDER' 'openai'
     Set-Env 'BROWSER_LLM_PROVIDER' 'openai'
     Set-Env 'OPENAI_API_KEY' $ok
+    if ($burl) {
+      Set-Env 'LLM_BASE_URL' $burl
+      Set-Env 'EMBEDDING_BASE_URL' $burl
+      Set-Env 'BROWSER_LLM_BASE_URL' $burl
+    }
   }
-  '4' {
+  '3' {
     $ak = Ask 'Anthropic API key (sk-ant-...)' ''
     Set-Env 'LLM_PROVIDER' 'anthropic'
     Set-Env 'ANTHROPIC_API_KEY' $ak
     Write-Host ''
     Write-Host 'Note: Anthropic has no embeddings API and browser-use ships no Anthropic'
-    Write-Host 'client, so embeddings + the browser agent fall back to Gemini.'
-    $gk = Ask 'Google API key for embeddings + browser agent' ''
-    Set-Env 'EMBEDDING_PROVIDER' 'gemini'
-    Set-Env 'BROWSER_LLM_PROVIDER' 'gemini'
-    if ($gk) { Set-Env 'GOOGLE_API_KEY' $gk }
+    Write-Host 'client, so embeddings + the browser agent fall back to an OpenAI-compatible endpoint.'
+    $ek = Ask 'OpenAI-compatible API key for embeddings + browser agent' ''
+    Set-Env 'EMBEDDING_PROVIDER' 'openai'
+    Set-Env 'BROWSER_LLM_PROVIDER' 'openai'
+    if ($ek) { Set-Env 'OPENAI_API_KEY' $ek }
   }
-  Default { Write-Host 'Unknown choice - re-run and pick 1-4.'; exit 1 }
+  Default { Write-Host 'Unknown choice - re-run and pick 1-3.'; exit 1 }
 }
 
 Write-Host ''

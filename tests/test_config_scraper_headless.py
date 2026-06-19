@@ -3,7 +3,7 @@
 
 def _make_settings(monkeypatch, **extra_env):
     """Return a fresh Settings instance with required fields set via env vars."""
-    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("ADZUNA_APP_ID", "test-id")
     monkeypatch.setenv("ADZUNA_APP_KEY", "test-key")
     if "JOBPILOT_SCRAPER_HEADLESS" not in extra_env:

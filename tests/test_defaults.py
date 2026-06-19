@@ -1,5 +1,4 @@
 from backend.defaults import (
-    EMBEDDING_MODEL,
     GAP_SEVERITY_THRESHOLD_AGGRESSIVE,
     GAP_SEVERITY_THRESHOLD_BALANCED,
     GAP_SEVERITY_THRESHOLD_CONSERVATIVE,
@@ -16,10 +15,6 @@ def test_gap_severity_thresholds_ordered():
 
 def test_similarity_thresholds_ordered():
     assert SIMILARITY_PARTIAL_MATCH < SIMILARITY_FULL_MATCH
-
-
-def test_embedding_model_set():
-    assert EMBEDDING_MODEL == "text-embedding-004"
 
 
 def test_min_job_skills_positive():

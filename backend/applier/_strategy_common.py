@@ -57,6 +57,15 @@ def build_browser(browser_kwargs: dict, saved_session_path: Path | None) -> "Bro
     if saved_session_path is not None and saved_session_path.exists():
         browser_kwargs["storage_state"] = saved_session_path.resolve().as_posix()
         browser_kwargs["user_data_dir"] = None
+    # Containerized / headless-server launches (e.g. the Docker image) have no
+    # user namespace for Chromium's sandbox and a tiny /dev/shm; without these
+    # flags the browser process dies before its CDP port comes up and the
+    # whole apply run fails at launch. They are harmless on a desktop, so we
+    # set them unconditionally rather than trying to detect the environment.
+    browser_kwargs.setdefault("chromium_sandbox", False)
+    extra_args = ["--no-sandbox", "--disable-dev-shm-usage"]
+    existing_args = list(browser_kwargs.get("args") or [])
+    browser_kwargs["args"] = existing_args + [a for a in extra_args if a not in existing_args]
     return _Browser(**browser_kwargs)
 
 

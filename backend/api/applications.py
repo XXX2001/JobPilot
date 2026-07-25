@@ -491,7 +491,7 @@ async def apply_to_job(
     except ImportError:
         raise HTTPException(status_code=503, detail="ApplicationEngine not available")
 
-    engine: ApplicationEngine = getattr(request.app.state, "apply_engine", None)
+    engine: ApplicationEngine | None = getattr(request.app.state, "apply_engine", None)
     if engine is None:
         raise HTTPException(status_code=503, detail="ApplicationEngine not initialised")
 

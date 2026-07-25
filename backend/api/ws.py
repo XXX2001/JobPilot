@@ -4,34 +4,37 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 
-try:
+if TYPE_CHECKING:
     from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-except Exception:  # pragma: no cover - fallback for environments without fastapi
+else:
+    try:
+        from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+    except Exception:  # pragma: no cover - fallback for environments without fastapi
 
-    def APIRouter():  # type: ignore
-        class _R:
-            def websocket(self, path: str):
-                def _decorator(func):
-                    return func
+        def APIRouter():
+            class _R:
+                def websocket(self, path: str):
+                    def _decorator(func):
+                        return func
 
-                return _decorator
+                    return _decorator
 
-        return _R()
+            return _R()
 
-    class WebSocketDisconnect(Exception):
-        pass
+        class WebSocketDisconnect(Exception):
+            pass
 
-    class WebSocket:
-        async def accept(self):
-            return None
+        class WebSocket:
+            async def accept(self):
+                return None
 
-        async def receive_text(self):
-            raise WebSocketDisconnect()
+            async def receive_text(self):
+                raise WebSocketDisconnect()
 
-        async def send_text(self, data: str):
-            return None
+            async def send_text(self, data: str):
+                return None
 
 
 from backend.api.ws_models import JobAssessment, Pong, SkillGap, Status
@@ -111,7 +114,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     # connect, but a developer running with `LOG_LEVEL=debug` can see why
     # the resume-state replay was skipped.
     try:
-        app = websocket.app if hasattr(websocket, "app") else None
+        app = getattr(websocket, "app", None)
         runner = getattr(getattr(app, "state", None), "batch_runner", None) if app else None
         if runner and runner.running and runner.last_status:
             await websocket.send_text(manager._encode(runner.last_status))

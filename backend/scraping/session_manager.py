@@ -7,14 +7,17 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 logger = logging.getLogger(__name__)
 
-try:
-    from browser_use import Browser  # type: ignore
-except ImportError:  # pragma: no cover
-    Browser = None  # type: ignore
+if TYPE_CHECKING:
+    from browser_use import Browser
+else:
+    try:
+        from browser_use import Browser
+    except ImportError:  # pragma: no cover
+        Browser = None
 
 
 @dataclass

@@ -40,14 +40,16 @@ class LaTeXParser:
             logger.warning("No JOBPILOT markers found, attempting TexSoup fallback")
             sections.has_markers = False
             try:
-                import texsoup
+                from TexSoup import TexSoup
 
-                soup = texsoup.TexSoup(tex_content)
+                soup = TexSoup(tex_content)
                 # Attempt to find a section named Summary and use its content as a hint
+                # TexSoup ships no py.typed marker, so pyright infers node types
+                # from its untyped internals rather than the real TexNode API.
                 for sec in soup.find_all("section"):
-                    title = "".join(str(x) for x in sec.args)
+                    title = "".join(str(x) for x in sec.args)  # type: ignore[reportAttributeAccessIssue]
                     if "Summary" in title:
-                        sections.summary = str(sec.text).strip() or None
+                        sections.summary = str(sec.text).strip() or None  # type: ignore[reportAttributeAccessIssue]
                         break
             except Exception:
                 # if TexSoup is not available or parsing fails, silently continue

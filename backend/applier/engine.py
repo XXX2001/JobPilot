@@ -37,11 +37,11 @@ class ApplyMode(str, Enum):
 
 
 class ApplicantInfo(BaseModel):
-    full_name: str = Field("", max_length=200)
-    email: str = Field("", max_length=MAX_LEN_EMAIL)
-    phone: str = Field("", max_length=MAX_LEN_PHONE)
-    location: str = Field("", max_length=MAX_LEN_LOCATION)
-    additional_answers_json: str = Field("", max_length=MAX_LEN_ADDITIONAL_ANSWERS)
+    full_name: str = Field(default="", max_length=200)
+    email: str = Field(default="", max_length=MAX_LEN_EMAIL)
+    phone: str = Field(default="", max_length=MAX_LEN_PHONE)
+    location: str = Field(default="", max_length=MAX_LEN_LOCATION)
+    additional_answers_json: str = Field(default="", max_length=MAX_LEN_ADDITIONAL_ANSWERS)
 
 
 class ApplicationEngine:

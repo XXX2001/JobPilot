@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from backend.config import settings
 
@@ -44,7 +45,7 @@ def make_browser_llm():
         key = (settings.BROWSER_LLM_API_KEY.get_secret_value()
                or settings.OPENAI_API_KEY.get_secret_value()
                or settings.ANTHROPIC_API_KEY.get_secret_value())
-        kwargs = {"model": settings.BROWSER_LLM_MODEL or "gpt-4o", "api_key": key}
+        kwargs: dict[str, Any] = {"model": settings.BROWSER_LLM_MODEL or "gpt-4o", "api_key": key}
         if base_url:
             kwargs["base_url"] = base_url
         return ChatOpenAI(**kwargs)

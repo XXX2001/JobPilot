@@ -210,15 +210,24 @@ class LetterPipeline:
         tex_content = dest_tex.read_text(encoding="utf-8")
         sections = self._parser.extract_sections(tex_content)
 
-        if self._cv_editor is not None and sections.has_markers:
+        # Defaults used when there's no cv_editor, or the LLM call fails —
+        # {company_name} is a template placeholder, not AI-editable content,
+        # so it must always get substituted with *some* value. Previously it
+        # sat inside the try/except below alongside the paragraph edit, so an
+        # LLM failure left the literal, uncompilable "{company_name}" in the
+        # output (the compile error then misleadingly looked like a template
+        # bug rather than an LLM/auth failure).
+        final_paragraph = sections.letter_paragraph or ""
+        final_company = job.company
+
+        if sections.has_markers and self._cv_editor is not None:
             try:
                 letter_edit = await self._cv_editor.edit_letter(job, sections)
-                if letter_edit and letter_edit.edited_paragraph:
-                    tex_content = self._injector.inject_letter_edit(
-                        tex_content,
-                        letter_edit.edited_paragraph,
-                        letter_edit.company_name,
-                    )
+                if letter_edit:
+                    if letter_edit.edited_paragraph:
+                        final_paragraph = letter_edit.edited_paragraph
+                    if letter_edit.company_name:
+                        final_company = letter_edit.company_name
             except (LLMRateLimitError, LLMJSONError) as exc:
                 logger.warning("Letter editor LLM error (%s); using base letter.", exc)
             except Exception as exc:
@@ -226,6 +235,11 @@ class LetterPipeline:
                     "Letter editor unexpected failure (%s: %s); using base letter.",
                     type(exc).__name__, exc, exc_info=True,
                 )
+
+        if sections.has_markers:
+            tex_content = self._injector.inject_letter_edit(
+                tex_content, final_paragraph, final_company
+            )
 
         dest_tex.write_text(tex_content, encoding="utf-8")
         pdf_path = await self._compiler.compile(dest_tex, output_dir)

@@ -26,17 +26,29 @@ def extract_text(data: bytes, ext: str) -> str:
     if ext == ".pdf":
         from pypdf import PdfReader
 
-        reader = PdfReader(io.BytesIO(data))
-        text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        except Exception as exc:
+            raise CVImportError(
+                "Could not read the PDF — it may be corrupted, encrypted, or not "
+                "actually a PDF file."
+            ) from exc
     elif ext == ".docx":
         import docx  # python-docx
 
-        doc = docx.Document(io.BytesIO(data))
-        parts = [p.text for p in doc.paragraphs]
-        for table in doc.tables:
-            for row in table.rows:
-                parts.append(" \t ".join(cell.text for cell in row.cells))
-        text = "\n".join(parts)
+        try:
+            doc = docx.Document(io.BytesIO(data))
+            parts = [p.text for p in doc.paragraphs]
+            for table in doc.tables:
+                for row in table.rows:
+                    parts.append(" \t ".join(cell.text for cell in row.cells))
+            text = "\n".join(parts)
+        except Exception as exc:
+            raise CVImportError(
+                "Could not read the DOCX — it may be corrupted or not actually a "
+                "Word document."
+            ) from exc
     else:
         raise CVImportError(f"Unsupported CV import type: {ext}")
 

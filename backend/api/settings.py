@@ -22,6 +22,7 @@ from backend.models.base import Base
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.scraping.site_prompts import SITE_CONFIGS
+from backend.security.sanitizer import sanitize_url
 from backend.utils.time import utc_now
 
 _T = TypeVar("_T", bound=Base)
@@ -940,10 +941,16 @@ async def get_custom_sites(db: DBSession):
 @router.post("/custom-sites", response_model=CustomSiteOut)
 async def add_custom_site(body: CustomSiteCreate, db: DBSession):
     """Add a custom website job source."""
+    clean_url = sanitize_url(body.url)
+    if not clean_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid URL: only http(s) URLs to a public host are allowed.",
+        )
     row = JobSource(
         name=body.name,
         type="lab_url",
-        url=body.url,
+        url=clean_url,
         config={"display_name": body.display_name or body.name},
         enabled=True,
     )

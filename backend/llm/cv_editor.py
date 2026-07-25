@@ -6,6 +6,7 @@ import logging
 import re
 from typing import Optional
 
+from backend.latex.injector import _escape_latex
 from backend.latex.parser import LaTeXSections
 from backend.llm.base import LLMClient, LLMJSONError
 from backend.llm.prompts import MOTIVATION_LETTER_PROMPT
@@ -79,9 +80,16 @@ class CVEditor:
         # Validate: letter paragraph must not introduce new LaTeX commands
         if _has_new_latex_commands(sections.letter_paragraph, edit.edited_paragraph):
             logger.warning("Letter edit introduces LaTeX commands — using original.")
+            # sections.letter_paragraph is raw content lifted verbatim from the
+            # user's own template, so it's already LaTeX-safe — do not escape it.
             return LetterEdit(
                 edited_paragraph=sections.letter_paragraph,
                 company_name=job.company,
             )
 
-        return edit
+        # Fresh LLM prose is plain text, not LaTeX — escape special characters
+        # (%, &, $, #, _, {, }) before it's spliced into the .tex source.
+        return LetterEdit(
+            edited_paragraph=_escape_latex(edit.edited_paragraph),
+            company_name=edit.company_name,
+        )

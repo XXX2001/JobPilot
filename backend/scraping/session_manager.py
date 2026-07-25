@@ -311,7 +311,11 @@ class BrowserSessionManager:
         # Open browser via browser_use (provides watchdog with save path)
         from backend.utils.browser_path import get_chromium_executable
         _exe = get_chromium_executable()
-        _bkw2: dict = {"headless": False, "storage_state": save_path.resolve().as_posix(), "user_data_dir": None}
+        _bkw2: dict = {
+            "headless": settings.jobpilot_scraper_headless,
+            "storage_state": save_path.resolve().as_posix(),
+            "user_data_dir": None,
+        }
         if _exe:
             _bkw2["executable_path"] = _exe
         browser = Browser(**_bkw2)

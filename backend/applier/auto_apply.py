@@ -115,15 +115,16 @@ class AutoApplyStrategy:
         # ── Tier 1: Playwright direct + single LLM call ─────────────────
         # Skip Tier 1 for multi-step sites (LinkedIn, etc.) — they need
         # browser-use agent to click through modals and multi-page forms.
+        form_filler = self._form_filler
         use_tier1 = (
             settings.APPLY_TIER1_ENABLED
-            and self._form_filler is not None
+            and form_filler is not None
             and not is_multi_step_site(apply_url)
         )
 
-        if use_tier1:
+        if use_tier1 and form_filler is not None:
             try:
-                result = await self._form_filler.fill_and_submit(
+                result = await form_filler.fill_and_submit(
                     apply_url=apply_url,
                     job_id=job_id,
                     full_name=full_name,

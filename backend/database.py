@@ -8,6 +8,7 @@ silencing comments to reduce noisy diagnostics from the language server.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from sqlalchemy import event  # type: ignore
 from sqlalchemy.ext.asyncio import (  # type: ignore
@@ -102,13 +103,9 @@ def _alembic_upgrade_head() -> None:
     command.upgrade(cfg, "head")
 
 
-@asynccontextmanager  # type: ignore
-async def db_session() -> AsyncSession:  # type: ignore[override]
-    """Provide an async session context manager.
-
-    The asynccontextmanager typing is a bit strict for some LSPs; the
-    type: ignore above keeps pyright from complaining in this workspace.
-    """
+@asynccontextmanager
+async def db_session() -> AsyncIterator[AsyncSession]:
+    """Provide an async session context manager."""
     async with AsyncSessionLocal() as session:
         try:
             yield session

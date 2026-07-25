@@ -96,15 +96,16 @@ class AssistedApplyStrategy:
             )
 
         # ── Tier 1: Playwright direct (skip for multi-step sites) ─────────
+        form_filler = self._form_filler
         use_tier1 = (
             settings.APPLY_TIER1_ENABLED
-            and self._form_filler is not None
+            and form_filler is not None
             and not is_multi_step_site(apply_url)
         )
 
-        if use_tier1:
+        if use_tier1 and form_filler is not None:
             try:
-                await self._form_filler.fill_only(
+                await form_filler.fill_only(
                     apply_url=apply_url,
                     full_name=full_name,
                     email=email,

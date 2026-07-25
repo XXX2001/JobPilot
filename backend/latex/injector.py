@@ -54,7 +54,15 @@ class LaTeXInjector:
         return result
 
     def inject_letter_edit(self, original_tex: str, new_paragraph: str, company_name: str) -> str:
-        """Replace letter paragraph and {company_name} placeholders."""
+        """Replace letter paragraph and {company_name} placeholders.
+
+        ``new_paragraph`` must already be LaTeX-safe by the time it reaches
+        here — :meth:`backend.llm.cv_editor.CVEditor.edit_letter` escapes
+        freshly-generated text but passes the original section content
+        through verbatim on its no-new-commands fallback path, where
+        re-escaping would corrupt any LaTeX escapes already present in the
+        user's template.
+        """
         tex = self._replace_marker_content(original_tex, "LETTER:PARA", new_paragraph)
         tex = tex.replace("{company_name}", _escape_latex(company_name))
         return tex

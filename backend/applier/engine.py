@@ -28,7 +28,7 @@ from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.utils.time import utc_now
 from backend.applier.recorder import ApplicationRecorder
 from backend.applier.state import ApplyContext, State, Statechart, Transition
-from backend.defaults import DAILY_LIMIT, MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
+from backend.defaults import MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,7 @@ class ApplicationEngine:
 
     def __init__(
         self,
-        daily_limit: int = DAILY_LIMIT,
+        daily_limit: int | None = None,
     ) -> None:
         self._daily_limit = daily_limit
 
@@ -239,7 +239,13 @@ class ApplicationEngine:
         # ── Daily-limit reservation (non-MANUAL only) ───────────────────
         reserved_app_id: Optional[int] = None
         if mode != ApplyMode.MANUAL:
-            guard = DailyLimitGuard(db=db, limit=self._daily_limit)
+            # W11: the configured limit is resolved at reservation time (the
+            # constructor value only overrides it, e.g. in tests).
+            guard = (
+                DailyLimitGuard(db=db, limit=self._daily_limit)
+                if self._daily_limit is not None
+                else await DailyLimitGuard.from_settings(db)
+            )
             try:
                 reserved_app_id = await guard.reserve_slot(
                     job_match_id=job_match_id,

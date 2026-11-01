@@ -161,9 +161,8 @@ async def lifespan(app: FastAPI):
             scrapling_fetcher=scrapling,
         )
         matcher = JobMatcher()
-        from backend.defaults import DAILY_LIMIT
 
-        apply_engine = ApplicationEngine(daily_limit=DAILY_LIMIT)
+        apply_engine = ApplicationEngine()  # W11: limit read from settings per reservation
 
         # DB factory for the batch runner (creates a new session each call)
         from backend.database import AsyncSessionLocal

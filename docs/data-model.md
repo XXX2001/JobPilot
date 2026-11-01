@@ -69,7 +69,7 @@ All entities and their tables:
 | `JobMatch` | `job_matches` | FK `job_id → jobs.id` (CASCADE); `score`, `status` (CHECK), `batch_date`, `keyword_hits`/`fit_assessment_json` (JSON), `gap_severity`, `ats_score` | [`job.py:77`](../backend/models/job.py) |
 | `TailoredDocument` | `tailored_documents` | FK `job_match_id → job_matches.id` (CASCADE); `doc_type` (CHECK: cv/letter), `tex_path`, `pdf_path`, `pdf_sha256` (hash at publication; selection refuses a changed file), `diff_json`, `llm_prompt`/`llm_response` | [`document.py:22`](../backend/models/document.py) |
 | `DocumentOperation` | `document_operations` | FK `job_match_id → job_matches.id` (CASCADE), `document_id → tailored_documents.id` (SET NULL); `kind` (CHECK: regenerate_cv), `state` (CHECK: queued/running/succeeded/failed), `input_version`, `error`, `attempts`. Partial unique index `uq_document_operations_active` allows one queued/running operation per (kind, match). Rows persist before the HTTP response; startup requeues `running` and runs `queued` | [`operation.py`](../backend/models/operation.py) |
-| `Application` | `applications` | FK `job_match_id → job_matches.id` (SET NULL); `method` (CHECK), `status` (CHECK; includes `awaiting_submission` and `needs_verification`, see [submission outcomes](applying.md#submission-outcomes-and-evidence-w06)), `applied_at` (set only for confirmed submissions), `confirmation_source`, `confirmation_evidence`, `notes`, `error_log`, `last_correspondence_at` | [`application.py:21`](../backend/models/application.py) |
+| `Application` | `applications` | FK `job_match_id → job_matches.id` (SET NULL); `method` (CHECK), `status` (CHECK; includes `awaiting_submission` and `needs_verification`, see [submission outcomes](applying.md#submission-outcomes-and-evidence-w06)), `applied_at` (set only for confirmed submissions), `quota_reserved_at` (automated-submission slot, UTC; see [quota](applying.md)), `confirmation_source`, `confirmation_evidence`, `notes`, `error_log`, `last_correspondence_at` | [`application.py:21`](../backend/models/application.py) |
 | `ApplicationEvent` | `application_events` | FK `application_id → applications.id` (CASCADE); `event_type`, `details`, `event_date` | [`application.py:61`](../backend/models/application.py) |
 | `GmailCredential` | `gmail_credentials` | `email_address` unique; Fernet-encrypted refresh token; `history_id` sync cursor; access tokens never persisted | [`gmail.py:24`](../backend/models/gmail.py) |
 | `GmailMessage` | `gmail_messages` | `gmail_message_id` unique; cached metadata (no body); `category` (CHECK), `category_confidence`; ATS/extraction fields are nullable and currently unpopulated | [`gmail.py:46`](../backend/models/gmail.py) |
@@ -143,11 +143,12 @@ async engine (`async_engine_from_config` + `NullPool`,
 | `t2b2_unique_keys` | Unique constraints on natural keys + duplicate collapse | `t2b1_enum_checks` |
 | `t2b3_not_null` | NOT NULL + conditional CHECK on always-set columns | `t2b2_unique_keys` |
 | `t2b4_indexes` | Covering indexes for hot query paths | `t2b3_not_null` |
+| `w11_quota_reservation` | Adds indexed `applications.quota_reserved_at`; backfills it from `applied_at` for non-manual pending/applied/needs_verification rows. | `w06_submission_evidence` |
 | `w06_submission_evidence` | Rebuilds `applications` to allow `awaiting_submission` / `needs_verification` and add `confirmation_source` (CHECK: destination/user/legacy_unknown) + `confirmation_evidence`; existing applied/recruiting rows become `legacy_unknown`. | `w05_document_operations` |
 | `w05_document_operations` | Creates `document_operations` (new table only). | `w04_document_pdf_hash` |
 | `w04_document_pdf_hash` | Adds nullable `tailored_documents.pdf_sha256`; backfills it for rows whose PDF still exists (missing/invalid stay NULL and are reported unavailable). Additive: the previous version runs on the upgraded schema. | `t2b4_indexes` |
 
-`w06_submission_evidence` is the current **head**. `e3a1f2b8c9d7` is significant: it is the stamp point used
+`w11_quota_reservation` is the current **head**. `e3a1f2b8c9d7` is significant: it is the stamp point used
 by `_alembic_upgrade_head()` for legacy `create_all` databases, so they only run the idempotent
 catch-up migration (`e5a65a3427cf`) onward.
 

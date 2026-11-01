@@ -128,7 +128,7 @@ Browser agents get restricted tools (`restricted_tools` in `_strategy_common.py`
 
 ## Daily limit (`daily_limit.py`)
 
-`DailyLimitGuard` (`daily_limit.py:55`) enforces a configurable N-applications/day cap (default `DAILY_LIMIT`, 10). Statuses counted toward the quota (`COUNTABLE_STATUSES`, `daily_limit.py:46`) are `applied`, `pending` and `needs_verification` (a possible submission must not be retried around the cap) plus the legacy aliases. Prepared work (`awaiting_submission`) does not count.
+`DailyLimitGuard` (`daily_limit.py`) is the **automated-submission guard** (W11). There is one policy: `DailyLimitGuard.from_settings(db)` reads `SearchSettings.daily_limit` (default `DAILY_LIMIT`, 10) at reservation time, and the engine, the batch planner and `GET /api/applications/limit-status` all use it, so changing the setting changes enforcement immediately. A row counts when it holds a reservation for the current **UTC day** (`quota_reserved_at >= quota_day_start()`, the same midnight shown as `resets_at`) and its status is `pending`, `needs_verification` or `applied`. `reserve_slot` inserts the reservation and recounts inside one write transaction, so two connections cannot both take the last slot. The recorder clears `quota_reserved_at` once non-submission is established (prepared for the user, cancelled, failed before submit); it keeps it for confirmed and possibly-submitted attempts, so retries cannot evade the cap. Hand-recorded tracker entries and manual/assisted preparation never consume the quota. Lowering the limit blocks new reservations without touching existing rows; a reservation keeps the day it was made on.
 
 The only safe gate is `reserve_slot` (`daily_limit.py:98`), which is **atomic**:
 

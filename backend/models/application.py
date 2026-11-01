@@ -56,6 +56,9 @@ class Application(Base):
     method: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="pending", index=True)
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    # W11: when this row reserved an automated-submission slot (naive UTC).
+    # Cleared when non-submission is established; the daily guard counts it.
+    quota_reserved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     # W06: how an applied row's submission is known — destination page
     # evidence, explicit user attestation, or legacy (pre-W06, unproven).

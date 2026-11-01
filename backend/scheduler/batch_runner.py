@@ -159,7 +159,6 @@ class BatchRunner:
         sources = await self._load_sources(db)
 
         keywords: list[str] = _extract_json_list(settings_row.keywords, "include")
-        daily_limit: int = settings_row.daily_limit or DAILY_LIMIT
         max_results_per_source: int = getattr(settings_row, "max_results_per_source", 20) or 20
         max_age_days: int | None = getattr(settings_row, "max_job_age_days", None)
         cv_path = _resolve_cv_path(
@@ -304,7 +303,7 @@ class BatchRunner:
 
         # ── Step 4: Pre-generate CVs for top N ──────────────────────────
         cv_tailoring_enabled = getattr(settings_row, "cv_tailoring_enabled", True)
-        guard = DailyLimitGuard(db=db, limit=daily_limit)
+        guard = await DailyLimitGuard.from_settings(db)
         remaining = await guard.remaining_today()
         selected = stored[:remaining]
         top_ids = [sm.match_id for sm in selected]

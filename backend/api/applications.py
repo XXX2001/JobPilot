@@ -16,15 +16,12 @@ from backend.applier import (
     STATUS_AWAITING_SUBMISSION,
     STATUS_NEEDS_VERIFICATION,
 )
-from backend.applier.daily_limit import COUNTABLE_STATUSES
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import DATA_DIR
 from backend.utils.time import utc_now
-from backend.defaults import DAILY_LIMIT
 from backend.models.application import Application, ApplicationEvent
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch
-from backend.models.user import SearchSettings
 
 logger = logging.getLogger(__name__)
 
@@ -255,28 +252,15 @@ async def list_applications(
 async def get_limit_status(db: DBSession) -> LimitStatusOut:
     """Return today's application usage against the configured daily limit.
 
-    Reads the same counter as :class:`~backend.applier.daily_limit.DailyLimitGuard`:
-    Application rows whose ``applied_at`` is today (UTC date) and whose
-    ``status`` is in ``{"applied", "pending"}`` (plus legacy aliases).
-
-    The ``daily_limit`` is read from :class:`~backend.models.user.SearchSettings`
-    row id=1; falls back to :data:`~backend.defaults.DAILY_LIMIT` (10) if
-    no settings row exists.
+    Uses :class:`~backend.applier.daily_limit.DailyLimitGuard` itself — the
+    same configured limit, reservation count and UTC day as the engine.
 
     ``resets_at`` is the next UTC midnight in ISO 8601 format.
     """
-    # ── Resolve the configured limit ──────────────────────────────────────────
-    ss_result = await db.execute(select(SearchSettings).where(SearchSettings.id == 1))
-    ss = ss_result.scalar_one_or_none()
-    limit = (ss.daily_limit if ss is not None else None) or DAILY_LIMIT
+    from backend.applier.daily_limit import DailyLimitGuard
 
-    # ── Count today's applications (same SQL as DailyLimitGuard.remaining_today) ──
-    today = datetime.now(timezone.utc).date()
-    stmt = select(func.count(Application.id)).where(
-        Application.applied_at >= today,  # type: ignore[operator]
-        Application.status.in_(COUNTABLE_STATUSES),
-    )
-    used: int = (await db.execute(stmt)).scalar_one_or_none() or 0
+    guard = await DailyLimitGuard.from_settings(db)  # W11: same policy as the engine
+    limit, used = guard.limit, await guard.used_today()
 
     # ── Compute next UTC midnight ──────────────────────────────────────────────
     now_utc = datetime.now(timezone.utc)

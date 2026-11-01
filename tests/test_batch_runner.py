@@ -185,6 +185,7 @@ async def test_batch_runs_all_steps(tmp_path):
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=10)
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         await runner.run_batch()
 
@@ -228,6 +229,7 @@ async def test_batch_cv_error_continues():
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=5)
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         # Should not raise even though cv pipeline fails
         with patch("pathlib.Path.exists", return_value=True):
@@ -273,6 +275,7 @@ async def test_batch_stops_cv_generation_at_daily_limit():
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=3)  # only 3 left
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         await runner.run_batch()
 
@@ -410,6 +413,7 @@ async def test_normal_run_returns_none(tmp_path):
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=10)
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         result = await runner.run_batch()
 
@@ -505,6 +509,7 @@ async def test_fit_assessments_run_concurrently():
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=0)  # skip CV gen entirely
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         # db.execute(...).scalar_one_or_none() → None so the DB-write branch is a no-op
         db = AsyncMock()

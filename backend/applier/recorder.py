@@ -105,6 +105,10 @@ class ApplicationRecorder:
                 app.notes = result_message or None
                 app.confirmation_source = "destination" if is_success else None
                 app.confirmation_evidence = evidence or None
+                # W11: keep the reservation only while a submission did or may
+                # have happen(ed); prepared/cancelled/failed-before-submit release it.
+                if result_status not in (*SUCCESS_RESULT_STATUSES, RESULT_NEEDS_VERIFICATION):
+                    app.quota_reserved_at = None
             else:
                 app = Application(
                     job_match_id=job_match_id,
@@ -180,6 +184,7 @@ class ApplicationRecorder:
             if app is not None:
                 app.status = RESULT_CANCELLED
                 app.applied_at = None
+                app.quota_reserved_at = None
                 await db.commit()
         except Exception:
             logger.exception(

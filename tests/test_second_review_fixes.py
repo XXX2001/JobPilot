@@ -134,3 +134,26 @@ def test_approval_is_refused_when_the_new_day_is_full(test_app):
     assert resp.status_code == 409 and "limit" in resp.json()["detail"].lower()
     assert not engine._confirm_events[mid].is_set()
     assert engine.get_pending_review(mid) is not None  # the review stays open
+
+
+# ── R09: a PDF must parse and have pages, not just start with %PDF ───────────
+
+
+@pytest.mark.parametrize(
+    "content", [b"%PDF", b"%PDF-1.4 not really a pdf", b"%PDF-1.7\n%%EOF\n"]
+)
+def test_unparseable_pdf_is_rejected(tmp_path, content):
+    from backend.latex.artifacts import pdf_sha256
+
+    path = tmp_path / "cv.pdf"
+    path.write_bytes(content)
+    assert pdf_sha256(path) is None
+
+
+def test_real_pdf_is_hashed(tmp_path):
+    from backend.latex.artifacts import pdf_sha256, sha256_file
+    from tests.pdfs import real_pdf
+
+    path = tmp_path / "cv.pdf"
+    path.write_bytes(real_pdf("CV"))
+    assert pdf_sha256(path) == sha256_file(path)

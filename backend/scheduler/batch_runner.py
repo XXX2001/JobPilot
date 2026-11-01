@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
 from backend.config import settings
+from backend.latex.artifacts import pdf_sha256, resolve_base_source
 from backend.defaults import CONCURRENCY_LLM, DAILY_LIMIT, MIN_JOB_SKILLS_FOR_FIT_ENGINE, MIN_MATCH_SCORE
 from backend.matching.cv_parser import CVParser
 from backend.matching.embedder import Embedder
@@ -69,31 +70,8 @@ def _extract_json_list(value: Any, key: str) -> list[str]:
 
 
 def _resolve_cv_path(profile_row: Any, data_dir: Path) -> Path | None:
-    """Return the CV path to use for this batch run.
-
-    Resolution order:
-    1. ``profile_row.base_cv_path`` — if set *and* the file exists, use it.
-    2. Auto-detect: scan ``<data_dir>/templates/`` for ``*.tex`` files and pick
-       the alphabetically first one (deterministic across runs).
-    3. Return ``None`` if no CV can be found.
-
-    A warning is logged whenever we fall back to auto-detection.
-    """
-    if profile_row and profile_row.base_cv_path:
-        raw = Path(profile_row.base_cv_path)
-        candidate = raw if raw.is_absolute() else data_dir / raw
-        if candidate.exists():
-            return candidate
-
-    # Fallback: scan the templates directory
-    templates_dir = data_dir / "templates"
-    candidates = sorted(templates_dir.glob("*.tex")) if templates_dir.is_dir() else []
-    if candidates:
-        cv_path = candidates[0]
-        logger.warning("No base_cv_path in profile — using auto-detected CV: %s", cv_path)
-        return cv_path
-
-    return None
+    """Base CV source for this batch: the profile path, else ``templates/*.tex``."""
+    return resolve_base_source(getattr(profile_row, "base_cv_path", None), data_dir, "*.tex")
 
 
 class BatchRunner:
@@ -625,11 +603,13 @@ class BatchRunner:
             except Exception:
                 pass
 
+        pdf_path = getattr(tailored, "pdf_path", None)
         doc = TailoredDocument(
             job_match_id=match_id,
             doc_type=doc_type,
             tex_path=str(tailored.tex_path) if hasattr(tailored, "tex_path") else None,
-            pdf_path=str(tailored.pdf_path) if hasattr(tailored, "pdf_path") else None,
+            pdf_path=str(pdf_path) if pdf_path else None,
+            pdf_sha256=pdf_sha256(Path(pdf_path)) if pdf_path else None,
             diff_json=diff_json,
         )
         db.add(doc)

@@ -120,6 +120,8 @@ Split across two routers (`applications_export.py` mounted first).
 | GET | `/api/applications/{job_id}/review-state` | _(dict)_ | Review state for a job |
 | POST | `/api/applications/{match_id}/apply` | `ApplicationResult` | Run the apply engine for a match (`method`: `manual`, `assisted`, `auto`). `auto` returns **409** unless `JOBPILOT_AUTO_SUBMIT_ENABLED=true` |
 
+**Document selection on apply (W04).** The apply body accepts `cv_document_id` (a reviewed tailored CV of this match) **or** `use_base_cv: true`, plus an optional `letter_document_id`. With an explicit selection the engine receives exactly those PDFs and no letter unless one is named; each is checked against the match, the document type, the file on disk and its recorded `pdf_sha256`, and any mismatch returns **409** before anything is uploaded. The base CV is compiled from its `.tex` source into `cvs/base/<source-hash>/cv.pdf` and reused while the source is unchanged. Without a selection (legacy callers), the newest *valid* tailored CV/letter is used, else the compiled base CV; a `.tex` source or an unrelated `templates/*.pdf` is never uploaded.
+
 ## Documents — `/api/documents`
 
 Generated CVs, cover letters, and template validation. PDF routes return `FileResponse`; LaTeX failures surface as `422` via the global handler (see below).
@@ -129,9 +131,9 @@ Generated CVs, cover letters, and template validation. PDF routes return `FileRe
 | GET | `/api/documents` | `list[DocumentOut]` | List generated documents |
 | POST | `/api/documents/validate-template` | `ValidateTemplateResponse` | Validate a LaTeX template |
 | POST | `/api/documents/compile-test` | `CompileTestResponse` | Test-compile a template |
-| GET | `/api/documents/{match_id}/cv/pdf` | `FileResponse` | Download tailored CV PDF |
+| GET | `/api/documents/{match_id}/cv/pdf` | `FileResponse` | Download the newest CV PDF, or `?document_id=` a specific version of this match |
 | GET | `/api/documents/{match_id}/letter/pdf` | `FileResponse` | Download cover-letter PDF |
-| GET | `/api/documents/{match_id}/diff` | `CVDiffResponse` | Diff of tailored vs. base CV |
+| GET | `/api/documents/{match_id}/diff` | `CVDiffResponse` | Diff of the newest CV version vs. base, with its `document_id` and the newest `letter_document_id` (the IDs the review UI sends back on apply) |
 | POST | `/api/documents/{match_id}/regenerate` | `RegenerateResponse` | Re-tailor the CV |
 | POST | `/api/documents/{match_id}/letter/regenerate` | `LetterRegenerateResponse` | Regenerate the cover letter |
 

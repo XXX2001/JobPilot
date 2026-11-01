@@ -44,6 +44,9 @@ class TailoredDocument(Base):
     doc_type: Mapped[str] = mapped_column(String, nullable=False)
     tex_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     pdf_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # W04: SHA-256 of the PDF at publication. Selection re-hashes the file and
+    # refuses a mismatch, so a modified artifact is never uploaded.
+    pdf_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     diff_json: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     llm_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     llm_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

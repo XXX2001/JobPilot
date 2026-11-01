@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from backend.api.deps import DBSession
-from backend.config import settings
+from backend.config import DATA_DIR, settings
+from backend.latex.artifacts import pdf_sha256, resolve_base_source, resolve_data_path
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch
 from backend.models.schemas import JobDetails
@@ -62,6 +63,10 @@ _MAX_ERROR_LOG_CHARS = 8000
 
 class CVDiffResponse(BaseModel):
     match_id: int
+    # W04: the reviewed CV version; send it back as ``cv_document_id`` on apply.
+    document_id: int
+    # Newest cover letter for the match, if any (``letter_document_id`` on apply).
+    letter_document_id: Optional[int] = None
     diff: Any
     generated_at: Optional[str] = None
 
@@ -82,49 +87,24 @@ class LetterRegenerateResponse(BaseModel):
 
 
 def _resolve_letter_path(profile: Optional[UserProfile], data_dir: Path) -> Optional[Path]:
-    """Return the base cover-letter template to tailor, or ``None``.
-
-    Mirrors ``backend.scheduler.batch_runner._resolve_cv_path``: prefer the
-    profile's ``base_letter_path`` (absolute or relative to the data dir) when
-    the file exists, otherwise auto-detect a ``*letter*.tex`` template under
-    ``<data_dir>/templates/``.
-    """
-    if profile and profile.base_letter_path:
-        raw = Path(profile.base_letter_path)
-        candidate = raw if raw.is_absolute() else data_dir / raw
-        if candidate.exists():
-            return candidate
-
-    templates_dir = data_dir / "templates"
-    candidates = sorted(templates_dir.glob("*letter*.tex")) if templates_dir.is_dir() else []
-    if candidates:
-        logger.warning("No base_letter_path in profile — using auto-detected letter: %s", candidates[0])
-        return candidates[0]
-
-    return None
+    """Base cover-letter source: the profile path, else ``templates/*letter*.tex``."""
+    return resolve_base_source(profile.base_letter_path if profile else None, data_dir, "*letter*.tex")
 
 
 def _resolve_cv_path(profile: Optional[UserProfile], data_dir: Path) -> Optional[Path]:
-    """Return the base CV template to compile, or ``None``.
+    """Base CV source: the profile path, else ``templates/*.tex``."""
+    return resolve_base_source(profile.base_cv_path if profile else None, data_dir, "*.tex")
 
-    Mirrors ``backend.scheduler.batch_runner._resolve_cv_path``: prefer the
-    profile's ``base_cv_path`` (absolute or relative to the data dir) when the
-    file exists, otherwise auto-detect the alphabetically first ``*.tex``
-    template under ``<data_dir>/templates/``.
-    """
-    if profile and profile.base_cv_path:
-        raw = Path(profile.base_cv_path)
-        candidate = raw if raw.is_absolute() else data_dir / raw
-        if candidate.exists():
-            return candidate
 
-    templates_dir = data_dir / "templates"
-    candidates = sorted(templates_dir.glob("*.tex")) if templates_dir.is_dir() else []
-    if candidates:
-        logger.warning("No base_cv_path in profile — using auto-detected CV: %s", candidates[0])
-        return candidates[0]
-
-    return None
+async def _latest_document(db, match_id: int, doc_type: str) -> Optional[TailoredDocument]:
+    """Newest document of *doc_type* for a match (stable on equal timestamps)."""
+    stmt = (
+        select(TailoredDocument)
+        .where(TailoredDocument.job_match_id == match_id, TailoredDocument.doc_type == doc_type)
+        .order_by(TailoredDocument.created_at.desc(), TailoredDocument.id.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -193,14 +173,14 @@ async def compile_test(db: DBSession) -> CompileTestResponse:
 
 
 @router.get("/{match_id}/cv/pdf", response_class=FileResponse)
-async def get_cv_pdf(match_id: int, db: DBSession):
-    """Stream the tailored CV PDF for a given job match."""
-    stmt = select(TailoredDocument).where(
-        TailoredDocument.job_match_id == match_id,
-        TailoredDocument.doc_type == "cv",
-    )
-    result = await db.execute(stmt)
-    doc = result.scalar_one_or_none()
+async def get_cv_pdf(match_id: int, db: DBSession, document_id: Optional[int] = None):
+    """Stream a CV PDF for a job match: *document_id* if given, else the newest."""
+    if document_id is None:
+        doc = await _latest_document(db, match_id, "cv")
+    else:
+        doc = await db.get(TailoredDocument, document_id)
+        if doc is not None and (doc.job_match_id != match_id or doc.doc_type != "cv"):
+            doc = None
 
     if doc is None:
         raise HTTPException(
@@ -214,8 +194,8 @@ async def get_cv_pdf(match_id: int, db: DBSession):
             detail="CV PDF has not been compiled yet",
         )
 
-    pdf_path = Path(doc.pdf_path)
-    if not pdf_path.exists():
+    pdf_path = resolve_data_path(doc.pdf_path, DATA_DIR)
+    if pdf_path is None:
         raise HTTPException(
             status_code=404,
             detail=f"CV PDF file not found on disk: {doc.pdf_path}",
@@ -230,13 +210,8 @@ async def get_cv_pdf(match_id: int, db: DBSession):
 
 @router.get("/{match_id}/letter/pdf", response_class=FileResponse)
 async def get_letter_pdf(match_id: int, db: DBSession):
-    """Stream the tailored cover letter PDF for a given job match."""
-    stmt = select(TailoredDocument).where(
-        TailoredDocument.job_match_id == match_id,
-        TailoredDocument.doc_type == "letter",
-    )
-    result = await db.execute(stmt)
-    doc = result.scalar_one_or_none()
+    """Stream the newest cover letter PDF for a given job match."""
+    doc = await _latest_document(db, match_id, "letter")
 
     if doc is None:
         raise HTTPException(
@@ -250,8 +225,8 @@ async def get_letter_pdf(match_id: int, db: DBSession):
             detail="Letter PDF has not been compiled yet",
         )
 
-    pdf_path = Path(doc.pdf_path)
-    if not pdf_path.exists():
+    pdf_path = resolve_data_path(doc.pdf_path, DATA_DIR)
+    if pdf_path is None:
         raise HTTPException(
             status_code=404,
             detail=f"Letter PDF file not found on disk: {doc.pdf_path}",
@@ -266,13 +241,8 @@ async def get_letter_pdf(match_id: int, db: DBSession):
 
 @router.get("/{match_id}/diff", response_model=CVDiffResponse)
 async def get_cv_diff(match_id: int, db: DBSession) -> CVDiffResponse:
-    """Return the JSON diff of CV changes for a given job match."""
-    stmt = select(TailoredDocument).where(
-        TailoredDocument.job_match_id == match_id,
-        TailoredDocument.doc_type == "cv",
-    )
-    result = await db.execute(stmt)
-    doc = result.scalar_one_or_none()
+    """Return the JSON diff of the newest CV version for a given job match."""
+    doc = await _latest_document(db, match_id, "cv")
 
     if doc is None:
         raise HTTPException(
@@ -280,8 +250,11 @@ async def get_cv_diff(match_id: int, db: DBSession) -> CVDiffResponse:
             detail=f"No CV document found for match {match_id}",
         )
 
+    letter = await _latest_document(db, match_id, "letter")
     return CVDiffResponse(
         match_id=match_id,
+        document_id=doc.id,
+        letter_document_id=letter.id if letter else None,
         diff=doc.diff_json or [],
         generated_at=doc.created_at.isoformat() if doc.created_at else None,
     )
@@ -404,8 +377,10 @@ async def regenerate_letter(
         doc = TailoredDocument(job_match_id=match_id, doc_type="letter")
         db.add(doc)
 
+    letter_pdf = getattr(tailored, "pdf_path", None)
     doc.tex_path = str(tailored.tex_path) if getattr(tailored, "tex_path", None) else None
-    doc.pdf_path = str(tailored.pdf_path) if getattr(tailored, "pdf_path", None) else None
+    doc.pdf_path = str(letter_pdf) if letter_pdf else None
+    doc.pdf_sha256 = pdf_sha256(Path(letter_pdf)) if letter_pdf else None
     doc.created_at = naive_utc_now()
 
     await db.commit()

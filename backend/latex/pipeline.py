@@ -68,23 +68,25 @@ class CVPipeline:
         additional_context: str = "",
     ) -> TailoredCV:
         """Copy base CV and compile PDF without any LLM modification."""
-        output_dir.mkdir(parents=True, exist_ok=True)
-        dest_tex = output_dir / "cv.tex"
-
-        shutil.copy2(base_cv_path, dest_tex)
-        for support_file in base_cv_path.parent.iterdir():
-            if support_file.suffix.lower() in {".cls", ".sty", ".jpg", ".jpeg", ".png", ".pdf", ".eps"}:
-                shutil.copy2(support_file, output_dir / support_file.name)
-
-        pdf_path = await self._compiler.compile(dest_tex, output_dir)
+        pdf_path = await self.compile_base_cv(base_cv_path, output_dir)
 
         return TailoredCV(
             job_id=job.id,
-            tex_path=dest_tex,
+            tex_path=output_dir / "cv.tex",
             pdf_path=pdf_path,
             diff=[],
             cv_tailored=False,
         )
+
+    async def compile_base_cv(self, base_cv_path: Path, output_dir: Path) -> Path:
+        """Compile the unmodified base CV (plus its support files) into *output_dir*."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        dest_tex = output_dir / "cv.tex"
+        shutil.copy2(base_cv_path, dest_tex)
+        for support_file in base_cv_path.parent.iterdir():
+            if support_file.suffix.lower() in {".cls", ".sty", ".jpg", ".jpeg", ".png", ".pdf", ".eps"}:
+                shutil.copy2(support_file, output_dir / support_file.name)
+        return await self._compiler.compile(dest_tex, output_dir)
 
     async def generate_tailored_cv(
         self,

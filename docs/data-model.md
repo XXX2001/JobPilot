@@ -67,7 +67,7 @@ All entities and their tables:
 | `JobSource` | `job_sources` | `name` unique (`uq_job_sources_name`); `type`, `url`, `config` (JSON), `prompt_template`, `enabled` | [`job.py:26`](../backend/models/job.py) |
 | `Job` | `jobs` | Scraped posting; `dedup_hash` unique; FK `source_id → job_sources.id` (SET NULL); salary/description/`requirements`/`benefits` (JSON), `raw_data` (JSON) | [`job.py:49`](../backend/models/job.py) |
 | `JobMatch` | `job_matches` | FK `job_id → jobs.id` (CASCADE); `score`, `status` (CHECK), `batch_date`, `keyword_hits`/`fit_assessment_json` (JSON), `gap_severity`, `ats_score` | [`job.py:77`](../backend/models/job.py) |
-| `TailoredDocument` | `tailored_documents` | FK `job_match_id → job_matches.id` (CASCADE); `doc_type` (CHECK: cv/letter), `tex_path`, `pdf_path`, `diff_json`, `llm_prompt`/`llm_response` | [`document.py:22`](../backend/models/document.py) |
+| `TailoredDocument` | `tailored_documents` | FK `job_match_id → job_matches.id` (CASCADE); `doc_type` (CHECK: cv/letter), `tex_path`, `pdf_path`, `pdf_sha256` (hash at publication; selection refuses a changed file), `diff_json`, `llm_prompt`/`llm_response` | [`document.py:22`](../backend/models/document.py) |
 | `Application` | `applications` | FK `job_match_id → job_matches.id` (SET NULL); `method` (CHECK), `status` (CHECK), `applied_at`, `notes`, `error_log`, `last_correspondence_at` | [`application.py:21`](../backend/models/application.py) |
 | `ApplicationEvent` | `application_events` | FK `application_id → applications.id` (CASCADE); `event_type`, `details`, `event_date` | [`application.py:61`](../backend/models/application.py) |
 | `GmailCredential` | `gmail_credentials` | `email_address` unique; Fernet-encrypted refresh token; `history_id` sync cursor; access tokens never persisted | [`gmail.py:24`](../backend/models/gmail.py) |
@@ -142,8 +142,9 @@ async engine (`async_engine_from_config` + `NullPool`,
 | `t2b2_unique_keys` | Unique constraints on natural keys + duplicate collapse | `t2b1_enum_checks` |
 | `t2b3_not_null` | NOT NULL + conditional CHECK on always-set columns | `t2b2_unique_keys` |
 | `t2b4_indexes` | Covering indexes for hot query paths | `t2b3_not_null` |
+| `w04_document_pdf_hash` | Adds nullable `tailored_documents.pdf_sha256`; backfills it for rows whose PDF still exists (missing/invalid stay NULL and are reported unavailable). Additive: the previous version runs on the upgraded schema. | `t2b4_indexes` |
 
-`t2b4_indexes` is the current **head**. `e3a1f2b8c9d7` is significant: it is the stamp point used
+`w04_document_pdf_hash` is the current **head**. `e3a1f2b8c9d7` is significant: it is the stamp point used
 by `_alembic_upgrade_head()` for legacy `create_all` databases, so they only run the idempotent
 catch-up migration (`e5a65a3427cf`) onward.
 

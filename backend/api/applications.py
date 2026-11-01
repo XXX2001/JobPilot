@@ -13,6 +13,7 @@ from backend.api.deps import DBSession
 from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED
 from backend.applier.daily_limit import COUNTABLE_STATUSES
 from backend.applier.manual_apply import ApplicationResult
+from backend.config import DATA_DIR
 from backend.defaults import DAILY_LIMIT
 from backend.models.application import Application, ApplicationEvent
 from backend.models.document import TailoredDocument
@@ -390,46 +391,79 @@ async def add_application_event(application_id: int, body: CreateEventRequest, d
 # ─── Apply endpoint ───────────────────────────────────────────────────────────
 
 
-async def _resolve_documents(match_id: int, db) -> tuple[Path | None, Path | None]:
-    """Return (cv_pdf, letter_pdf) Paths for the latest tailored docs for match_id.
+async def _select_documents(
+    *, match_id: int, body: "ApplyRequest", profile, db, request: Request
+) -> tuple[Path | None, Path | None]:
+    """Resolve the CV/letter to upload. W04: what the user selected is what is uploaded.
 
-    Returns (None, None) if no documents have been generated yet.
-    Note: engine.apply() already accepts cv_pdf/letter_pdf — no changes to engine.py needed.
+    Explicit selection (``cv_document_id`` or ``use_base_cv``): exactly those
+    documents, validated against the match, type, file and content hash; the
+    letter is attached only if ``letter_document_id`` is given. Without one
+    (legacy callers): the newest *valid* tailored CV/letter for the match, else
+    the base CV compiled to PDF. A ``.tex`` source is never returned.
+    Raises :class:`ArtifactError` with a user-facing reason.
     """
-    cv_path: Path | None = None
-    letter_path: Path | None = None
-
-    cv_stmt = (
-        select(TailoredDocument)
-        .where(
-            TailoredDocument.job_match_id == match_id,
-            TailoredDocument.doc_type == "cv",
-        )
-        .order_by(TailoredDocument.created_at.desc())
-        .limit(1)
+    from backend.latex.artifacts import (
+        ArtifactError,
+        ensure_base_cv_pdf,
+        resolve_base_source,
+        validate_document,
     )
-    cv_row = (await db.execute(cv_stmt)).scalar_one_or_none()
-    if cv_row and cv_row.pdf_path:
-        cv_path = Path(cv_row.pdf_path)
 
-    letter_stmt = (
-        select(TailoredDocument)
-        .where(
-            TailoredDocument.job_match_id == match_id,
-            TailoredDocument.doc_type == "letter",
-        )
-        .order_by(TailoredDocument.created_at.desc())
-        .limit(1)
-    )
-    letter_row = (await db.execute(letter_stmt)).scalar_one_or_none()
-    if letter_row and letter_row.pdf_path:
-        letter_path = Path(letter_row.pdf_path)
+    data_dir = DATA_DIR
 
-    return cv_path, letter_path
+    async def base_cv() -> Path:
+        source = resolve_base_source(profile.base_cv_path if profile else None, data_dir, "*.tex")
+        if source is None:
+            raise ArtifactError("No base CV is configured; upload one in Settings → Profile.")
+        pipeline = getattr(request.app.state, "cv_pipeline", None)
+        if pipeline is None:
+            raise ArtifactError("The document pipeline is not available.")
+        return await ensure_base_cv_pdf(source, data_dir, pipeline.compile_base_cv)
+
+    async def pick(doc_id: int, doc_type: str) -> Path:
+        doc = await db.get(TailoredDocument, doc_id)
+        return validate_document(doc, match_id=match_id, doc_type=doc_type, data_dir=data_dir)
+
+    explicit = body.use_base_cv or body.cv_document_id is not None
+    if explicit:
+        if body.use_base_cv and body.cv_document_id is not None:
+            raise ArtifactError("Choose either the base CV or a tailored CV, not both.")
+        cv = await base_cv() if body.use_base_cv else await pick(body.cv_document_id, "cv")  # type: ignore[arg-type]
+        letter = await pick(body.letter_document_id, "letter") if body.letter_document_id else None
+        return cv, letter
+
+    async def newest_valid(doc_type: str) -> Path | None:
+        rows = (
+            await db.execute(
+                select(TailoredDocument)
+                .where(TailoredDocument.job_match_id == match_id, TailoredDocument.doc_type == doc_type)
+                .order_by(TailoredDocument.created_at.desc(), TailoredDocument.id.desc())
+            )
+        ).scalars()
+        for doc in rows:
+            try:
+                return validate_document(doc, match_id=match_id, doc_type=doc_type, data_dir=data_dir)
+            except ArtifactError as exc:
+                logger.warning("Skipping document id=%d for match_id=%d: %s", doc.id, match_id, exc)
+        return None
+
+    cv = await newest_valid("cv")
+    if cv is None and resolve_base_source(profile.base_cv_path if profile else None, data_dir, "*.tex"):
+        cv = await base_cv()
+    # No CV at all stays None (legacy manual apply just opens the job link).
+    return cv, await newest_valid("letter")
 
 
 class ApplyRequest(BaseModel):
     method: Literal["auto", "assisted", "manual"] = "manual"
+    # W04 explicit document selection (from the review UI). Set either
+    # cv_document_id (a reviewed tailored CV) or use_base_cv; the letter is
+    # attached only when letter_document_id is given. Omit all three for the
+    # legacy "newest valid document" behaviour.
+    cv_document_id: int | None = None
+    use_base_cv: bool = False
+    letter_document_id: int | None = None
     apply_url: str = ""
     full_name: str = ""
     email: str = ""
@@ -595,29 +629,15 @@ async def apply_to_job(
         additional_answers_json=additional_answers,
     )
 
-    # Resolve tailored CV and cover letter for this job match
-    cv_pdf, letter_pdf = await _resolve_documents(match_id=match_id, db=db)
+    from backend.latex.artifacts import ArtifactError
 
-    # Fall back to base CV/letter from user profile if no tailored docs exist
-    if cv_pdf is None and profile and profile.base_cv_path:
-        base_cv = Path(profile.base_cv_path)
-        if base_cv.exists():
-            cv_pdf = base_cv
-            logger.info("Using base CV as fallback: %s", cv_pdf)
-    if letter_pdf is None and profile and profile.base_letter_path:
-        base_letter = Path(profile.base_letter_path)
-        if base_letter.exists():
-            letter_pdf = base_letter
-            logger.info("Using base cover letter as fallback: %s", letter_pdf)
-
-    # Last resort: scan templates directory for a .tex-compiled PDF
-    if cv_pdf is None:
-        templates_dir = Path(app_settings.jobpilot_data_dir) / "templates"
-        if templates_dir.is_dir():
-            pdf_candidates = sorted(templates_dir.glob("*.pdf"))
-            if pdf_candidates:
-                cv_pdf = pdf_candidates[0]
-                logger.info("Using auto-detected base CV PDF: %s", cv_pdf)
+    try:
+        cv_pdf, letter_pdf = await _select_documents(
+            match_id=match_id, body=body, profile=profile, db=db, request=request
+        )
+    except ArtifactError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await db.commit()  # persists hashes pinned on first use of legacy rows
 
     if cv_pdf:
         logger.info("Resolved cv_pdf=%s for match_id=%d", cv_pdf, match_id)

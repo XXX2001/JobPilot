@@ -479,6 +479,7 @@ async def test_fit_assessments_run_concurrently():
         # match_row lookup → return None so we don't try to set attrs on a Mock
         patch("backend.scheduler.batch_runner.select"),
         # Make the cv_path resolution succeed (the runner reads the file)
+        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=Path("/tmp/base.tex")),
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.read_text", return_value="\\documentclass{article}\\begin{document}cv\\end{document}"),
     ):

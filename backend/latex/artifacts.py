@@ -126,3 +126,15 @@ async def ensure_base_cv_pdf(source: Path, data_dir: Path, compile_base_cv: Comp
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return published
+
+
+def diff_to_json(tailored) -> list | None:
+    """Serialize a generation result's diff entries for ``TailoredDocument.diff_json``."""
+    diff = getattr(tailored, "diff", None)
+    if not diff:
+        return None
+    try:
+        return [d.__dict__ if hasattr(d, "__dict__") else str(d) for d in diff]
+    except Exception:
+        logger.warning("Could not serialize document diff", exc_info=True)
+        return None

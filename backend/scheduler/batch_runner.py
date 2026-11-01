@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
 from backend.config import settings
-from backend.latex.artifacts import pdf_sha256, resolve_base_source
+from backend.latex.artifacts import diff_to_json, pdf_sha256, resolve_base_source
+from backend.latex.regeneration import additional_context
 from backend.defaults import CONCURRENCY_LLM, DAILY_LIMIT, MIN_JOB_SKILLS_FOR_FIT_ENGINE, MIN_MATCH_SCORE
 from backend.matching.cv_parser import CVParser
 from backend.matching.embedder import Embedder
@@ -319,17 +320,7 @@ class BatchRunner:
 
         done = failed = 0
         if cv_path and cv_path.exists():
-            # Build additional context from user profile for the CV modifier
-            _additional_parts: list[str] = []
-            if profile_row:
-                if profile_row.driver_license:
-                    _additional_parts.append(f"Driver license: {profile_row.driver_license}")
-                if profile_row.mobility:
-                    _additional_parts.append(f"Mobility / relocation: {profile_row.mobility}")
-                if profile_row.additional_info and isinstance(profile_row.additional_info, dict):
-                    for k, v in profile_row.additional_info.items():
-                        _additional_parts.append(f"{k}: {v}")
-            _additional_context = "\n".join(_additional_parts)
+            _additional_context = additional_context(profile_row)
 
             pairs = [(sm.match_id, sm.job) for sm in selected]
             sem = asyncio.Semaphore(CONCURRENCY_LLM)
@@ -594,15 +585,7 @@ class BatchRunner:
         tailored: Any,
         doc_type: str,
     ) -> None:
-        diff_json = None
-        if hasattr(tailored, "diff") and tailored.diff:
-            try:
-                diff_json = [
-                    d.__dict__ if hasattr(d, "__dict__") else str(d) for d in tailored.diff
-                ]
-            except Exception:
-                pass
-
+        diff_json = diff_to_json(tailored)
         pdf_path = getattr(tailored, "pdf_path", None)
         doc = TailoredDocument(
             job_match_id=match_id,

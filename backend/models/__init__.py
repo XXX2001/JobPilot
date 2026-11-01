@@ -2,6 +2,7 @@ from backend.models.application import Application, ApplicationEvent
 from backend.models.base import Base
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
+from backend.models.operation import DocumentOperation
 from backend.models.session import BrowserSession
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
 from backend.models.gmail import (
@@ -18,6 +19,7 @@ __all__ = [
     "Job",
     "JobMatch",
     "TailoredDocument",
+    "DocumentOperation",
     "Application",
     "ApplicationEvent",
     "BrowserSession",

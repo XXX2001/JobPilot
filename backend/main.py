@@ -190,6 +190,11 @@ async def lifespan(app: FastAPI):
         app.state.batch_runner = batch_runner
 
         logger.info("All singletons initialised")
+
+        # W05: resume document operations accepted before a restart.
+        from backend.latex.regeneration import resume_pending
+
+        await resume_pending(app, AsyncSessionLocal)
     except Exception:
         # Fail-fast: a half-initialised app.state can boot a half-broken server
         # (no apply_engine, no batch_runner, no orchestrator) that returns 200
@@ -279,6 +284,9 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down JobPilot application")
+    from backend.latex.regeneration import cancel_all
+
+    await cancel_all(app)  # interrupted operations stay 'running' → resumed next start
     scheduler = getattr(app.state, "scheduler", None)
     if scheduler is not None:
         try:

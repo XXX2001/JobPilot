@@ -132,10 +132,11 @@ Generated CVs, cover letters, and template validation. PDF routes return `FileRe
 | POST | `/api/documents/validate-template` | `ValidateTemplateResponse` | Validate a LaTeX template |
 | POST | `/api/documents/compile-test` | `CompileTestResponse` | Test-compile a template |
 | GET | `/api/documents/{match_id}/cv/pdf` | `FileResponse` | Download the newest CV PDF, or `?document_id=` a specific version of this match |
-| GET | `/api/documents/{match_id}/letter/pdf` | `FileResponse` | Download cover-letter PDF |
+| GET | `/api/documents/{match_id}/letter/pdf` | `FileResponse` | Download the newest cover-letter PDF, or `?document_id=` a specific version |
 | GET | `/api/documents/{match_id}/diff` | `CVDiffResponse` | Diff of the newest CV version vs. base, with its `document_id` and the newest `letter_document_id` (the IDs the review UI sends back on apply) |
-| POST | `/api/documents/{match_id}/regenerate` | `RegenerateResponse` | Re-tailor the CV |
-| POST | `/api/documents/{match_id}/letter/regenerate` | `LetterRegenerateResponse` | Regenerate the cover letter |
+| POST | `/api/documents/{match_id}/regenerate` | `RegenerateResponse` (**202**) | Accept a CV re-tailoring as a durable operation; returns `operation_id` and `state`. Duplicate requests return the active operation; without `force` an unchanged valid result is reused. A failure keeps the previous PDF; 409 if no base CV is configured |
+| GET | `/api/documents/operations/{operation_id}` | `DocumentOperationOut` | Operation state (`queued`/`running`/`succeeded`/`failed`), resulting `document_id`, `error` |
+| POST | `/api/documents/{match_id}/letter/regenerate` | `LetterRegenerateResponse` | Regenerate the cover letter as a new version (earlier versions stay retrievable) |
 
 ## Settings — `/api/settings`
 

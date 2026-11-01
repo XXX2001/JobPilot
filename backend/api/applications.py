@@ -10,10 +10,16 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import exists, func, select
 
 from backend.api.deps import DBSession
-from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED
+from backend.applier import (
+    LEGACY_APPLIED_ALIASES,
+    STATUS_APPLIED,
+    STATUS_AWAITING_SUBMISSION,
+    STATUS_NEEDS_VERIFICATION,
+)
 from backend.applier.daily_limit import COUNTABLE_STATUSES
 from backend.applier.manual_apply import ApplicationResult
 from backend.config import DATA_DIR
+from backend.utils.time import utc_now
 from backend.defaults import DAILY_LIMIT
 from backend.models.application import Application, ApplicationEvent
 from backend.models.document import TailoredDocument
@@ -47,6 +53,9 @@ class ApplicationOut(BaseModel):
     notes: Optional[str]
     error_log: Optional[str]
     created_at: datetime
+    # W06: "destination" | "user" | "legacy_unknown" for applied rows.
+    confirmation_source: Optional[str] = None
+    confirmation_evidence: Optional[str] = None
     events: list[ApplicationEventOut] = []
     # Denormalized job fields for display
     job_title: Optional[str] = None
@@ -68,7 +77,8 @@ class ApplicationListOut(BaseModel):
 # them (deep-dive HIGH-2 in
 # docs/reports/2026-05-23-codebase-deep-dive/01-app-shell-and-api.md).
 ApplicationStatus = Literal[
-    "pending", "applied", "cancelled", "failed", "interview", "offer", "rejected"
+    "pending", "applied", "cancelled", "failed", "awaiting_submission",
+    "needs_verification", "interview", "offer", "rejected",
 ]
 
 
@@ -323,6 +333,10 @@ async def update_application(application_id: int, body: UpdateApplicationRequest
         raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
 
     if body.status is not None:
+        if body.status == STATUS_APPLIED and app.status != STATUS_APPLIED:
+            # Marking a row applied by hand is a user attestation (W06).
+            app.confirmation_source = "user"
+            app.applied_at = app.applied_at or utc_now()
         app.status = body.status
     if body.notes is not None:
         app.notes = body.notes
@@ -363,6 +377,33 @@ async def update_application(application_id: int, body: UpdateApplicationRequest
         out.location = job.location
         out.url = job.url
     return out
+
+
+@router.post("/{application_id}/confirm-submitted", response_model=ApplicationOut)
+async def confirm_submitted(application_id: int, db: DBSession):
+    """The user attests they submitted a prepared or unverified application (W06).
+
+    Only ``awaiting_submission`` / ``needs_verification`` rows can be
+    confirmed; the result is ``applied`` with ``confirmation_source='user'``,
+    distinct from destination-verified submissions.
+    """
+    app = await db.get(Application, application_id)
+    if app is None:
+        raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
+    if app.status not in (STATUS_AWAITING_SUBMISSION, STATUS_NEEDS_VERIFICATION):
+        raise HTTPException(
+            status_code=409, detail=f"Application {application_id} is {app.status!r}; nothing to confirm."
+        )
+    app.status = STATUS_APPLIED
+    app.applied_at = utc_now()
+    app.confirmation_source = "user"
+    db.add(ApplicationEvent(application_id=app.id, event_type="applied", details="Confirmed submitted by the user"))
+    if app.job_match_id is not None:
+        match = await db.get(JobMatch, app.job_match_id)
+        if match is not None:
+            match.status = "applied"
+    await db.commit()
+    return await get_application(application_id, db)
 
 
 @router.post("/{application_id}/events", response_model=ApplicationEventOut, status_code=201)

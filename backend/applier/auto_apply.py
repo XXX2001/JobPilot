@@ -137,16 +137,10 @@ class AutoApplyStrategy:
                     confirm_event=confirm_event,
                     cancel_event=cancel_event,
                 )
-                status = result.get("status", "cancelled")
-                if status in ("applied", "cancelled"):
-                    return ApplicationResult(
-                        status=status,
-                        method="auto",
-                        message="Applied via Tier 1 (Playwright direct)"
-                        if status == "applied"
-                        else "Cancelled by user.",
-                    )
+                return _tier1_result(result)
             except Exception as exc:
+                # Only raised BEFORE the submit click (see _submit_and_verify),
+                # so retrying on Tier 2 cannot duplicate a submission.
                 logger.warning(
                     "[Tier 1] apply failed for job_id=%d — falling back to browser-use: %s",
                     job_id,
@@ -282,9 +276,10 @@ class AutoApplyStrategy:
             import webbrowser
             webbrowser.open(apply_url)
             return ApplicationResult(
-                status="manual",
+                status="awaiting_user_submission",
                 method="auto",
-                message=f"browser-use not installed. Opened {apply_url} manually.",
+                next_action_url=apply_url,
+                message=f"browser-use not installed. Opened {apply_url}; submit it yourself.",
             )
 
         # ── Reuse saved session (cookies/auth) from scraping ──────────────
@@ -448,16 +443,74 @@ class AutoApplyStrategy:
                 task=submit_task, llm=llm2, browser=browser,
                 fallback_llm=make_browser_llm(),
             )
-            await submit_agent.run()
-            logger.info("Auto-apply submitted for job_id=%d", job_id)
-            return ApplicationResult(status="applied", method="auto")
+            history = await submit_agent.run()
         except Exception as exc:
             logger.error("Submit phase failed for job_id=%d: %s", job_id, exc)
-            return ApplicationResult(
-                status="cancelled",
-                method="auto",
-                message=f"Submit phase failed: {exc}",
-            )
+            return outcome_after_agent_error(exc)
+        result = await outcome_after_agent(browser, history)
+        logger.info("Auto-apply job_id=%d submit outcome=%s (%s)", job_id, result.status, result.evidence)
+        return result
+
+
+def _tier1_result(result: dict) -> ApplicationResult:
+    """Map a Tier-1 outcome. Every post-click status is final for this attempt."""
+    status = result.get("status", "cancelled")
+    evidence = result.get("evidence", "")
+    if status == "confirmed":
+        return ApplicationResult(
+            status="confirmed", method="auto", evidence=evidence,
+            message="Submitted via Tier 1 and confirmed by the site.",
+        )
+    if status == "rejected":
+        return ApplicationResult(
+            status="failed", method="auto", evidence=evidence,
+            message=f"The site did not accept the submission: {evidence}",
+        )
+    if status == "needs_verification":
+        return ApplicationResult(
+            status="needs_verification", method="auto", evidence=evidence,
+            message="Submit was clicked but the site showed no confirmation — check it before retrying.",
+        )
+    return ApplicationResult(status="cancelled", method="auto", message="Cancelled by user.")
+
+
+async def outcome_after_agent(browser, history) -> ApplicationResult:
+    """Tier 2: agent completion is a hint; only the destination page confirms (W06)."""
+    from backend.applier.verification import verify_page
+
+    try:
+        page = await browser.get_current_page()
+    except Exception:  # noqa: BLE001
+        page = None
+    check = await verify_page(page) if page is not None else None
+    if check is not None and check.outcome == "confirmed":
+        return ApplicationResult(
+            status="confirmed", method="auto", evidence=check.evidence,
+            message="Submitted via the browser agent and confirmed by the site.",
+        )
+    agent_note = ""
+    try:
+        agent_note = f"agent success={history.is_successful()}, result={history.final_result()!r}"
+    except Exception:  # noqa: BLE001
+        pass
+    evidence = "; ".join(p for p in (check.evidence if check else "page unavailable", agent_note) if p)
+    if check is not None and check.outcome == "rejected":
+        return ApplicationResult(
+            status="failed", method="auto", evidence=evidence,
+            message=f"The site did not accept the submission: {check.evidence}",
+        )
+    return ApplicationResult(
+        status="needs_verification", method="auto", evidence=evidence[:300],
+        message="The agent finished but the site showed no confirmation — check it before retrying.",
+    )
+
+
+def outcome_after_agent_error(exc: Exception) -> ApplicationResult:
+    """The submit agent raised mid-way: it may already have clicked submit."""
+    return ApplicationResult(
+        status="needs_verification", method="auto", evidence=f"submit agent error: {exc}"[:300],
+        message="Submission was interrupted and may have reached the site — check it before retrying.",
+    )
 
 
 __all__ = ["AutoApplyStrategy"]

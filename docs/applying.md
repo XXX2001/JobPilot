@@ -53,7 +53,21 @@ Most middle states (`CaptchaCheck`, `Filling`, `AwaitingConfirm`, `Submitting`) 
 
 - `RESULT_CANCELLED` → `CANCELLED`
 - `RESULT_FAILED` → `FAILED`
-- success → call `ApplicationRecorder.record`; on success → `APPLIED`, on any record exception → `REMOTE_SUBMITTED_LOCAL_FAILED` (the remote submit may have succeeded while the local DB write failed).
+- success → call ### Submission outcomes and evidence (W06)
+
+Opening a link, pre-filling a form, clicking submit and an agent saying "done" are not proof that an employer received an application. Strategies return one of:
+
+| Outcome | Persisted `Application.status` | Meaning |
+| --- | --- | --- |
+| `confirmed` | `applied`, `confirmation_source=destination` | The destination page showed a confirmation (`backend/applier/verification.py`); the matched text and URL are stored in `confirmation_evidence`. |
+| `awaiting_user_submission` | `awaiting_submission` | Manual opened the link / assisted pre-filled the form; the user submits. `next_action_url` carries the link (also when no browser could be opened). |
+| `needs_verification` | `needs_verification` | Submit was clicked (or the submit agent was interrupted) but no confirmation was seen. Never retried automatically; counts against the daily cap. |
+| `failed` | `failed` | E.g. the site showed validation errors after submit. |
+| `cancelled` | `cancelled` | Cancelled before submission. |
+
+After a Tier-1 submit click the outcome is final for that attempt — it never falls back to Tier 2, which could submit twice. The user turns a prepared or unverified row into `applied` with **Mark submitted** in the tracker (`POST /api/applications/{id}/confirm-submitted`, `confirmation_source=user`); marking a row applied by hand via `PATCH` is recorded the same way. Rows that were `applied` before this change carry `confirmation_source=legacy_unknown`.
+
+`ApplicationRecorder.record`; on success → `APPLIED`, on any record exception → `REMOTE_SUBMITTED_LOCAL_FAILED` (the remote submit may have succeeded while the local DB write failed).
 
 Terminal `on_enter` handlers (`engine.py:380`–`435`) perform compensation:
 
@@ -114,7 +128,7 @@ Both tiers pause before submitting and emit an `ApplyReview` WS message (`backen
 
 ## Daily limit (`daily_limit.py`)
 
-`DailyLimitGuard` (`daily_limit.py:55`) enforces a configurable N-applications/day cap (default `DAILY_LIMIT`, 10). Statuses counted toward the quota (`COUNTABLE_STATUSES`, `daily_limit.py:46`) are `applied` + `pending` plus the legacy aliases.
+`DailyLimitGuard` (`daily_limit.py:55`) enforces a configurable N-applications/day cap (default `DAILY_LIMIT`, 10). Statuses counted toward the quota (`COUNTABLE_STATUSES`, `daily_limit.py:46`) are `applied`, `pending` and `needs_verification` (a possible submission must not be retried around the cap) plus the legacy aliases. Prepared work (`awaiting_submission`) does not count.
 
 The only safe gate is `reserve_slot` (`daily_limit.py:98`), which is **atomic**:
 
@@ -128,7 +142,7 @@ The reserved placeholder is later updated in place by the recorder, or released 
 
 ## Recording the outcome (`recorder.py`)
 
-`ApplicationRecorder.record` (`recorder.py:46`) persists the result. If `reserved_app_id` is set (the AUTO/ASSISTED path) it **updates the placeholder in place** — never inserts a duplicate (which would double-count the limit); for MANUAL it inserts a fresh row. It also writes an `ApplicationEvent` lifecycle row, and on a success outcome flips the parent `JobMatch.status` to `"applied"`. Strategy outcome strings are mapped to the canonical persisted status via `normalize_result_status` (`backend/applier/__init__.py:100`); the status vocabulary and legacy aliases (`manual`/`assisted` → `applied`) are defined in that same `__init__.py`. Any DB-write failure rolls back and raises `ApplicationRecordError`, which the FSM routes to `REMOTE_SUBMITTED_LOCAL_FAILED`.
+`ApplicationRecorder.record` (`recorder.py:46`) persists the result. If `reserved_app_id` is set (the AUTO/ASSISTED path) it **updates the placeholder in place** — never inserts a duplicate (which would double-count the limit); for MANUAL it inserts a fresh row. It also writes an `ApplicationEvent` lifecycle row, and flips the parent `JobMatch.status` to `"applied"` only for a `confirmed` outcome (to `"applying"` for prepared or unverified ones). Strategy outcome strings are mapped to the canonical persisted status via `normalize_result_status` (`backend/applier/__init__.py:100`); the status vocabulary and legacy aliases (`manual`/`assisted` → `applied`) are defined in that same `__init__.py`. Any DB-write failure rolls back and raises `ApplicationRecordError`, which the FSM routes to `REMOTE_SUBMITTED_LOCAL_FAILED`.
 
 ## CAPTCHA handling (`captcha_handler.py`)
 

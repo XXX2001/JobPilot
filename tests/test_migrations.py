@@ -68,3 +68,28 @@ def test_w04_backfills_pdf_hash_for_existing_documents(tmp_path, monkeypatch):
         hashes = dict(c.execute(text("SELECT id, pdf_sha256 FROM tailored_documents")).fetchall())
     eng.dispose()
     assert hashes == {1: hashlib.sha256(good.read_bytes()).hexdigest(), 2: None, 3: None}
+
+
+def test_w06_marks_existing_applied_rows_legacy_unknown(tmp_path):
+    """Historical applied rows keep their status/timestamp; provenance becomes legacy_unknown."""
+    from sqlalchemy import text
+
+    db = tmp_path / "w06.db"
+    cfg = _alembic_config(f"sqlite+aiosqlite:///{db}")
+    command.upgrade(cfg, "w05_document_operations")
+    eng = create_engine(f"sqlite:///{db}")
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO applications (id, method, status, applied_at, created_at) VALUES "
+            "(1, 'manual', 'applied', '2026-01-02', '2026-01-01'), (2, 'manual', 'pending', NULL, '2026-01-01')"
+        ))
+    command.upgrade(cfg, "head")
+    with eng.begin() as c:
+        rows = dict(c.execute(text("SELECT id, confirmation_source FROM applications")).fetchall())
+        applied_at = c.execute(text("SELECT applied_at FROM applications WHERE id = 1")).scalar()
+        c.execute(text(
+            "INSERT INTO applications (method, status, created_at) VALUES ('manual', 'awaiting_submission', '2026-01-03')"
+        ))
+    eng.dispose()
+    assert rows == {1: "legacy_unknown", 2: None}
+    assert str(applied_at).startswith("2026-01-02")

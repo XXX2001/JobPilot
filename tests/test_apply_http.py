@@ -127,7 +127,7 @@ def test_apply_happy_path(test_app: TestClient):
     match_id = asyncio.run(_seed_job_match(job_id_hint="happy"))
 
     fake_result = ApplicationResult(
-        status="manual",
+        status="awaiting_user_submission",
         method="manual",
         message="Opened in browser.",
     )
@@ -142,7 +142,7 @@ def test_apply_happy_path(test_app: TestClient):
     body = resp.json()
     # Endpoint returns ApplicationResult.model_dump(), not ApplicationOut —
     # document the actual shape so future endpoint changes are visible.
-    assert body["status"] == "manual"
+    assert body["status"] == "awaiting_user_submission"
     assert body["method"] == "manual"
     assert "Opened" in body["message"]
 
@@ -165,7 +165,7 @@ def test_apply_with_unknown_match_id_still_calls_engine(test_app: TestClient):
     from backend.applier.manual_apply import ApplicationResult
 
     fake_result = ApplicationResult(
-        status="manual",
+        status="awaiting_user_submission",
         method="manual",
         message="No-op.",
     )
@@ -267,7 +267,7 @@ def test_apply_idempotency_documented_behaviour(test_app: TestClient):
     asyncio.run(_flip_match_to_applied())
 
     fake_result = ApplicationResult(
-        status="manual",
+        status="awaiting_user_submission",
         method="manual",
         message="Second apply call (engine did not block).",
     )

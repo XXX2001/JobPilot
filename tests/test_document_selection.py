@@ -82,7 +82,7 @@ def client(test_app: TestClient, monkeypatch):
     from backend.applier.manual_apply import ApplicationResult
 
     engine = MagicMock(spec=ApplicationEngine)
-    engine.apply = AsyncMock(return_value=ApplicationResult(status="manual", method="manual"))
+    engine.apply = AsyncMock(return_value=ApplicationResult(status="awaiting_user_submission", method="manual"))
     test_app.app.state.apply_engine = engine  # type: ignore[attr-defined]
 
     compiled: list[Path] = []

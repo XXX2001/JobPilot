@@ -23,8 +23,14 @@ class Application(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending', 'applied', 'cancelled', 'failed', "
+            "'awaiting_submission', 'needs_verification', "
             "'interview', 'offer', 'rejected')",
             name="ck_applications_status",
+        ),
+        CheckConstraint(
+            "confirmation_source IS NULL OR confirmation_source IN "
+            "('destination', 'user', 'legacy_unknown')",
+            name="ck_applications_confirmation_source",
         ),
         CheckConstraint(
             "method IN ('auto', 'assisted', 'manual')",
@@ -51,6 +57,10 @@ class Application(Base):
     status: Mapped[str] = mapped_column(String, default="pending", index=True)
     applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
     notes: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # W06: how an applied row's submission is known — destination page
+    # evidence, explicit user attestation, or legacy (pre-W06, unproven).
+    confirmation_source: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    confirmation_evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now, index=True)
     last_correspondence_at: Mapped[Optional[datetime]] = mapped_column(

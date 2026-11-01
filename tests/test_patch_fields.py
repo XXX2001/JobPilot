@@ -204,7 +204,7 @@ async def test_patches_refilled_before_submit(monkeypatch):
         cancel_event=cancel,
     )
 
-    assert result["status"] == "applied"
+    assert result["status"] == "needs_verification"  # fake page shows no confirmation (W06)
 
     # Both patched selectors must have been re-filled.
     fill_calls = [c for c in page.fill.await_args_list]
@@ -261,6 +261,6 @@ async def test_failing_patch_logs_warning_but_still_submits(monkeypatch, caplog)
             cancel_event=asyncio.Event(),
         )
 
-    assert result["status"] == "applied"
+    assert result["status"] == "needs_verification"  # fake page shows no confirmation (W06)
     page.click.assert_awaited_once()
     assert any("#broken" in rec.getMessage() for rec in caplog.records)

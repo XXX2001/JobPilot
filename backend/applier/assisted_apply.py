@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-from backend.applier import RESULT_ASSISTED, RESULT_FAILED
+from backend.applier import RESULT_AWAITING_USER, RESULT_FAILED
 from backend.applier._strategy_common import (
     PHONE_NUMBER_NOTE,
     build_browser,
@@ -115,8 +115,9 @@ class AssistedApplyStrategy:
                     letter_pdf=letter_pdf,
                 )
                 return ApplicationResult(
-                    status="assisted",
+                    status=RESULT_AWAITING_USER,
                     method="assisted",
+                    next_action_url=apply_url,
                     message=(
                         "Form pre-filled. Please review the open browser window "
                         "and submit manually when ready."
@@ -134,8 +135,9 @@ class AssistedApplyStrategy:
             import webbrowser
             webbrowser.open(apply_url)
             return ApplicationResult(
-                status="assisted",
+                status=RESULT_AWAITING_USER,
                 method="assisted",
+                next_action_url=apply_url,
                 message=f"browser-use not installed. Opened {apply_url} manually.",
             )
 
@@ -215,8 +217,9 @@ class AssistedApplyStrategy:
 
         # Browser stays open — user reviews and submits manually
         return ApplicationResult(
-            status=RESULT_ASSISTED,
+            status=RESULT_AWAITING_USER,
             method="assisted",
+            next_action_url=apply_url,
             message=(
                 "Form pre-filled via the LLM agent. Please review the open browser "
                 "window and submit manually when ready."

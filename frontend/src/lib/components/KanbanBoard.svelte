@@ -3,13 +3,16 @@
 	import { Briefcase, Clock, GripVertical, ChevronDown } from 'lucide-svelte';
 	import { getRejectionMilestone } from '$lib/utils/easterEggs';
 	import type { Application } from '$lib/types/api';
+	import { columnFor, needsUserAction, statusForColumn } from '$lib/utils/trackerColumns';
 
 	const COLUMNS: { id: string; label: string; color: string }[] = [
+		{ id: 'to_submit', label: 'To submit', color: 'border-zinc-500/40' },
 		{ id: 'applied', label: 'Applied', color: 'border-blue-500/40' },
 		{ id: 'heard_back', label: 'Heard Back', color: 'border-yellow-500/40' },
 		{ id: 'interview', label: 'Interview', color: 'border-purple-500/40' },
 		{ id: 'offer', label: 'Offer', color: 'border-green-500/40' },
-		{ id: 'rejected', label: 'Rejected', color: 'border-red-500/40' }
+		{ id: 'rejected', label: 'Rejected', color: 'border-red-500/40' },
+		{ id: 'not_submitted', label: 'Not submitted', color: 'border-zinc-700/40' }
 	];
 
 	let { applications = [] }: { applications: Application[] } = $props();
@@ -17,6 +20,7 @@
 	const dispatch = createEventDispatcher<{
 		update: { id: number; status: string };
 		addEvent: { id: number; event_type: string; details?: string };
+		confirm: { id: number };
 	}>();
 
 	let draggedId = $state<number | null>(null);
@@ -28,9 +32,7 @@
 		const map: Record<string, Application[]> = {};
 		for (const col of COLUMNS) map[col.id] = [];
 		for (const app of applications) {
-			const col = app.status.toLowerCase().replace(' ', '_');
-			if (map[col]) map[col].push(app);
-			else map['applied'].push(app);
+			map[columnFor(app.status)].push(app);
 		}
 		return map;
 	});
@@ -63,7 +65,7 @@
 	function onDrop(e: DragEvent, col: string) {
 		e.preventDefault();
 		if (draggedId !== null && col !== getColForApp(draggedId)) {
-			dispatch('update', { id: draggedId, status: col });
+			dispatch('update', { id: draggedId, status: statusForColumn(col) });
 		}
 		draggedId = null;
 		dragOverCol = null;
@@ -76,8 +78,8 @@
 
 	function getColForApp(id: number): string {
 		const app = applications.find((a) => a.id === id);
-		if (!app) return 'applied';
-		return app.status.toLowerCase().replace(' ', '_');
+		if (!app) return 'to_submit';
+		return columnFor(app.status);
 	}
 
 	function addNote(appId: number) {
@@ -161,11 +163,26 @@
 						<!-- Meta row -->
 						<div class="flex items-center gap-2 mt-2">
 							<span class="text-xs px-1.5 py-0.5 rounded capitalize {methodBadge[app.method] ?? methodBadge.manual}">{app.method}</span>
+							{#if app.status === 'needs_verification'}
+								<span class="text-xs px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400" title={app.confirmation_evidence ?? ''}>unverified</span>
+							{:else if app.status === 'awaiting_submission'}
+								<span class="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">prepared</span>
+							{/if}
 							<span class="flex items-center gap-1 text-xs text-muted-foreground ml-auto">
 								<Clock size={9} />
 								{timeAgo(app.applied_at ?? app.created_at)}
 							</span>
 						</div>
+
+						{#if needsUserAction(app.status)}
+							<button
+								onclick={() => dispatch('confirm', { id: app.id })}
+								class="mt-2 w-full text-xs px-2 py-1 rounded border border-primary/40 text-primary hover:bg-primary/10 transition-colors"
+								title="Confirm you submitted this application on the job site"
+							>
+								Mark submitted
+							</button>
+						{/if}
 
 						<!-- Events -->
 						{#if (app.events?.length ?? 0) > 0}

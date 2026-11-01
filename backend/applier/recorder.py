@@ -21,7 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier import (
     ApplicationRecordError,
+    RESULT_AWAITING_USER,
     RESULT_CANCELLED,
+    RESULT_NEEDS_VERIFICATION,
     SUCCESS_RESULT_STATUSES,
     normalize_result_status,
 )
@@ -51,8 +53,15 @@ class ApplicationRecorder:
         result_method: str,
         result_message: Optional[str],
         reserved_app_id: Optional[int] = None,
+        evidence: str = "",
     ) -> None:
         """Persist the application and an initial lifecycle event.
+
+        W06: only a ``confirmed`` outcome becomes ``applied`` (with
+        ``confirmation_source='destination'`` and its *evidence*). Prepared
+        (awaiting the user) and possibly-submitted (needs verification)
+        outcomes keep ``applied_at`` empty and move the match to
+        ``applying`` — out of the new-match queue, not counted as applied.
 
         Parameters
         ----------
@@ -94,6 +103,8 @@ class ApplicationRecorder:
                 app.status = persisted_status
                 app.applied_at = applied_at_value
                 app.notes = result_message or None
+                app.confirmation_source = "destination" if is_success else None
+                app.confirmation_evidence = evidence or None
             else:
                 app = Application(
                     job_match_id=job_match_id,
@@ -101,6 +112,8 @@ class ApplicationRecorder:
                     status=persisted_status,
                     applied_at=applied_at_value,
                     notes=result_message or None,
+                    confirmation_source="destination" if is_success else None,
+                    confirmation_evidence=evidence or None,
                 )
                 db.add(app)
                 await db.flush()
@@ -109,16 +122,22 @@ class ApplicationRecorder:
             event = ApplicationEvent(
                 application_id=app.id,
                 event_type=result_status,
-                details=result_message or None,
+                details=" — ".join(p for p in (result_message, evidence) if p) or None,
             )
             db.add(event)
 
-            # Flip JobMatch.status for every success outcome.
-            if is_success:
+            new_match_status = (
+                "applied"
+                if is_success
+                else "applying"
+                if result_status in (RESULT_AWAITING_USER, RESULT_NEEDS_VERIFICATION)
+                else None
+            )
+            if new_match_status is not None:
                 stmt = select(JobMatch).where(JobMatch.id == job_match_id)
                 match = (await db.execute(stmt)).scalar_one_or_none()
                 if match is not None:
-                    match.status = "applied"
+                    match.status = new_match_status
 
             await db.commit()
             logger.info(

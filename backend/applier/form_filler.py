@@ -257,11 +257,8 @@ class PlaywrightFormFiller:
             # best-effort — a single failing re-fill must not abort the submit.
             await self._apply_patches(page, job_id)
 
-            submit_sel = mapping.get("submit_selector", "button[type=submit]")
-            await page.click(submit_sel, timeout=5_000)
-            logger.info("[Tier 1] Submitted application for job_id=%d", job_id)
-
-            return {"status": "applied", "filled_fields": filled_fields, "screenshot_b64": screenshot_b64}
+            outcome = await self._submit_and_verify(page, mapping, job_id)
+            return {**outcome, "filled_fields": filled_fields, "screenshot_b64": screenshot_b64}
 
         finally:
             if context:
@@ -273,6 +270,27 @@ class PlaywrightFormFiller:
                 await pw.stop()
             except Exception:
                 pass
+
+    async def _submit_and_verify(self, page, mapping: dict, job_id: int) -> dict:
+        """Click submit once, then classify the destination page (W06 / F02).
+
+        Returns ``confirmed`` / ``rejected`` / ``needs_verification`` with
+        evidence. Never raises after the click: the caller must not mistake
+        a possible submission for a failure it can retry on another tier.
+        """
+        from backend.applier.verification import verify_page
+
+        submit_sel = mapping.get("submit_selector", "button[type=submit]")
+        await page.click(submit_sel, timeout=5_000)
+        logger.info("[Tier 1] Clicked submit for job_id=%d — verifying destination", job_id)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:  # noqa: BLE001 — a slow page is still inspected below
+            pass
+        check = await verify_page(page)
+        status = {"confirmed": "confirmed", "rejected": "rejected"}.get(check.outcome, "needs_verification")
+        logger.info("[Tier 1] job_id=%d submission %s: %s", job_id, status, check.evidence)
+        return {"status": status, "evidence": check.evidence}
 
     async def _apply_patches(self, page, job_id: int) -> None:
         """Re-fill any user-edited review fields for *job_id* before submit.

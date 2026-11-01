@@ -28,9 +28,11 @@ Writers MUST emit only members of :data:`APPLICATION_STATUSES`.
 from __future__ import annotations
 
 # ── Strategy result statuses (in-memory, on ApplicationResult.status) ──
-RESULT_APPLIED = "applied"
-RESULT_MANUAL = "manual"
-RESULT_ASSISTED = "assisted"
+# W06 / F02, F12: preparation is not submission, and submission needs
+# destination evidence. Only CONFIRMED becomes an applied application.
+RESULT_CONFIRMED = "confirmed"  # destination confirmed the submission
+RESULT_AWAITING_USER = "awaiting_user_submission"  # opened/prefilled; the user submits
+RESULT_NEEDS_VERIFICATION = "needs_verification"  # a submit may have happened; no evidence
 RESULT_CANCELLED = "cancelled"
 RESULT_FAILED = "failed"
 
@@ -39,6 +41,8 @@ STATUS_PENDING = "pending"
 STATUS_APPLIED = "applied"
 STATUS_CANCELLED = "cancelled"
 STATUS_FAILED = "failed"
+STATUS_AWAITING_SUBMISSION = "awaiting_submission"
+STATUS_NEEDS_VERIFICATION = "needs_verification"
 # Post-submission lifecycle states. No writer persists these yet; they are
 # part of the canonical vocabulary so that PATCH validators
 # (CreateApplicationRequest / update_application) can accept them once the
@@ -53,6 +57,8 @@ APPLICATION_STATUSES: frozenset[str] = frozenset({
     STATUS_APPLIED,
     STATUS_CANCELLED,
     STATUS_FAILED,
+    STATUS_AWAITING_SUBMISSION,
+    STATUS_NEEDS_VERIFICATION,
     STATUS_INTERVIEW,
     STATUS_OFFER,
     STATUS_REJECTED,
@@ -77,11 +83,10 @@ SUCCESS_STATUSES: frozenset[str] = frozenset({STATUS_APPLIED}) | LEGACY_APPLIED_
 #: Strategy-outcome strings that mean the engine should mark the row as
 #: a successful application when persisting (i.e. set ``applied_at`` and
 #: flip ``JobMatch.status`` to ``"applied"``).
-SUCCESS_RESULT_STATUSES: frozenset[str] = frozenset({
-    RESULT_APPLIED,
-    RESULT_MANUAL,
-    RESULT_ASSISTED,
-})
+SUCCESS_RESULT_STATUSES: frozenset[str] = frozenset({RESULT_CONFIRMED})
+
+#: How an ``applied`` row's submission is known (``Application.confirmation_source``).
+CONFIRMATION_SOURCES: frozenset[str] = frozenset({"destination", "user", "legacy_unknown"})
 
 
 class ApplicationRecordError(RuntimeError):
@@ -106,6 +111,10 @@ def normalize_result_status(result_status: str) -> str:
     """
     if result_status in SUCCESS_RESULT_STATUSES:
         return STATUS_APPLIED
+    if result_status == RESULT_AWAITING_USER:
+        return STATUS_AWAITING_SUBMISSION
+    if result_status == RESULT_NEEDS_VERIFICATION:
+        return STATUS_NEEDS_VERIFICATION
     if result_status == RESULT_CANCELLED:
         return STATUS_CANCELLED
     if result_status == RESULT_FAILED:
@@ -141,15 +150,18 @@ __all__ = [
     "LEGACY_APPLIED_ALIASES",
     "SUCCESS_STATUSES",
     "SUCCESS_RESULT_STATUSES",
-    "RESULT_APPLIED",
-    "RESULT_MANUAL",
-    "RESULT_ASSISTED",
+    "CONFIRMATION_SOURCES",
+    "RESULT_CONFIRMED",
+    "RESULT_AWAITING_USER",
+    "RESULT_NEEDS_VERIFICATION",
     "RESULT_CANCELLED",
     "RESULT_FAILED",
     "STATUS_PENDING",
     "STATUS_APPLIED",
     "STATUS_CANCELLED",
     "STATUS_FAILED",
+    "STATUS_AWAITING_SUBMISSION",
+    "STATUS_NEEDS_VERIFICATION",
     "STATUS_INTERVIEW",
     "STATUS_OFFER",
     "STATUS_REJECTED",

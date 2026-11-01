@@ -34,7 +34,12 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED, STATUS_PENDING
+from backend.applier import (
+    LEGACY_APPLIED_ALIASES,
+    STATUS_APPLIED,
+    STATUS_NEEDS_VERIFICATION,
+    STATUS_PENDING,
+)
 from backend.models.application import Application
 from backend.utils.time import utc_now
 
@@ -43,8 +48,10 @@ logger = logging.getLogger(__name__)
 # Statuses that count against today's quota. Includes the canonical
 # ``"applied"`` plus legacy ``"manual"`` / ``"assisted"`` for backward
 # compatibility with rows persisted before the vocabulary consolidation.
+# W06: a possible-but-unverified submission still counts — retrying it
+# must not evade the guard. Prepared (awaiting the user) work does not.
 COUNTABLE_STATUSES: list[str] = sorted(
-    {STATUS_APPLIED, STATUS_PENDING} | LEGACY_APPLIED_ALIASES
+    {STATUS_APPLIED, STATUS_PENDING, STATUS_NEEDS_VERIFICATION} | LEGACY_APPLIED_ALIASES
 )
 
 

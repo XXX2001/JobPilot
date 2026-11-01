@@ -244,7 +244,13 @@ class ApplicationEngine:
             self._pending_reviews.pop(job_match_id, None)
             self._pending_patches.pop(job_match_id, None)
 
-        return ApplicationResult(status=status, method=method, message=message or "")
+        sr = ctx.strategy_result
+        extra = (
+            {"evidence": sr.evidence, "next_action_url": sr.next_action_url}
+            if isinstance(sr, ApplicationResult) and sr.status == status
+            else {}
+        )
+        return ApplicationResult(status=status, method=method, message=message or "", **extra)
 
     # ------------------------------------------------------------------ #
     #  FSM transition table builder                                        #
@@ -349,6 +355,7 @@ class ApplicationEngine:
                     result_method=result.method,
                     result_message=result.message or None,
                     reserved_app_id=c.reserved_app_id,
+                    evidence=result.evidence,
                 )
             except Exception as exc:
                 logger.exception("record() failed after strategy returned %s", result.status)

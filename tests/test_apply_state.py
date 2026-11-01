@@ -22,7 +22,7 @@ from backend.applier.state import (
     Transition,
     Statechart,
 )
-from backend.applier import RESULT_APPLIED, RESULT_CANCELLED, RESULT_FAILED
+from backend.applier import RESULT_CONFIRMED, RESULT_CANCELLED, RESULT_FAILED
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ async def _noop(ctx: ApplyContext) -> None:
 
 
 async def _next_applied(ctx: ApplyContext) -> State:
-    ctx.outcome_status = RESULT_APPLIED
+    ctx.outcome_status = RESULT_CONFIRMED
     return State.APPLIED
 
 
@@ -101,10 +101,10 @@ def test_terminals_contains_all_terminal_states():
 @pytest.mark.asyncio
 async def test_statechart_forward_to_applied():
     """Linear path RESERVED → RECORDING → APPLIED returns APPLIED outcome."""
-    ctx = _make_ctx(outcome_status=RESULT_APPLIED)
+    ctx = _make_ctx(outcome_status=RESULT_CONFIRMED)
 
     async def recording_enter(c: ApplyContext) -> None:
-        c.outcome_status = RESULT_APPLIED
+        c.outcome_status = RESULT_CONFIRMED
         c.outcome_method = "auto"
 
     async def reserved_next(c: ApplyContext) -> State:
@@ -122,7 +122,7 @@ async def test_statechart_forward_to_applied():
     chart = Statechart(transitions=transitions, initial=State.RESERVED)
     status, method, message = await chart.run(ctx)
 
-    assert status == RESULT_APPLIED
+    assert status == RESULT_CONFIRMED
     assert chart.state == State.APPLIED
 
 
@@ -242,7 +242,7 @@ async def test_statechart_on_exit_failure_does_not_prevent_transition():
         return State.RECORDING
 
     async def recording_next(c: ApplyContext) -> State:
-        c.outcome_status = RESULT_APPLIED
+        c.outcome_status = RESULT_CONFIRMED
         return State.APPLIED
 
     applied_entered = []
@@ -462,7 +462,7 @@ async def test_full_linear_pipeline_visits_all_middle_states():
         return State.RECORDING
 
     async def next_recording(c: ApplyContext) -> State:
-        c.outcome_status = RESULT_APPLIED
+        c.outcome_status = RESULT_CONFIRMED
         return State.APPLIED
 
     async def reserved_next(c: ApplyContext) -> State:
@@ -486,7 +486,7 @@ async def test_full_linear_pipeline_visits_all_middle_states():
     status, _method, _msg = await chart.run(ctx)
 
     assert chart.state == State.APPLIED
-    assert status == RESULT_APPLIED
+    assert status == RESULT_CONFIRMED
     # All four middle states must have been entered, in the correct order
     assert visited == [
         State.CAPTCHA_CHECK,
@@ -531,7 +531,7 @@ async def test_dispatch_copies_strategy_browser_onto_ctx(monkeypatch):
     fake = _FakeBrowser()
     engine._auto._active_browser = fake
     engine._auto.apply = AsyncMock(
-        return_value=ApplicationResult(status="applied", method="auto")
+        return_value=ApplicationResult(status="confirmed", method="auto")
     )
 
     ctx = ApplyContext(

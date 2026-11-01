@@ -161,7 +161,7 @@ graph TD
 
 9. **CV pre-generation** — `DailyLimitGuard.remaining_today()` determines how many CV slots remain for the day. The top N matches (N = remaining slots) receive pre-generated CVs: `CVPipeline.generate_tailored_cv()` is called for each, with up to 3 concurrent LLM calls (controlled by `asyncio.Semaphore(3)`). Inside the pipeline, `JobAnalyzer.analyze()` calls the LLM to extract a `JobContext`, `CVModifier.modify()` calls the LLM to suggest ≤3 surgical LaTeX replacements, `CVApplicator.apply()` validates and applies them, and Tectonic compiles the resulting `.tex` to PDF. The resulting paths and diff are stored as `TailoredDocument` rows. WebSocket progress climbs from 65% to 95%.
 
-10. **Dashboard notification** — A final WebSocket broadcast (`progress=1.0`, message "N applications ready for review") signals the frontend to reload the queue. The UI's queue page re-fetches `GET /api/queue` and displays the new matches.
+10. **Dashboard notification** — A final WebSocket broadcast (`progress=1.0`, message "N ready for review[, M failed]", counting persisted documents, not selected matches) signals the frontend to reload the queue. The UI's queue page re-fetches `GET /api/queue` and displays the new matches.
 
 ---
 

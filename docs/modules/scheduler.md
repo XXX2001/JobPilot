@@ -98,7 +98,7 @@ Public entry point for the full pipeline. Opens a DB session via `db_factory`, d
 | `_load_settings` | `(db: AsyncSession) -> SearchSettings` *(async)* | Fetches the first `SearchSettings` row; returns safe defaults if none exists. |
 | `_load_profile` | `(db: AsyncSession) -> UserProfile \| None` *(async)* | Fetches the first `UserProfile` row. |
 | `_load_sources` | `(db: AsyncSession) -> list[JobSource]` *(async)* | Fetches all `JobSource` rows where `enabled = True`. |
-| `_store_matches` | `(db, ranked) -> list[int]` *(async)* | Upserts `Job` rows and creates `JobMatch` rows; returns their IDs in ranked order. |
+| `_store_matches` | `(db, ranked, filters) -> list[StoredMatch]` *(async)* | Upserts `Job` rows and creates `JobMatch` rows; returns `StoredMatch(match_id, job)` records in ranked order, omitting already applied/skipped jobs and collapsing a job scraped twice. `job.id` is the persisted `Job.id`. Downstream steps use the record's own job — never the position in `ranked`. |
 | `_store_tailored_doc` | `(db, match_id, tailored, doc_type) -> None` *(async)* | Persists a `TailoredDocument` row for a generated CV or letter. |
 | `_raw_to_details` | `(raw: Any) -> JobDetails` *(static)* | Converts a `RawJob` (from the scraper) into a `JobDetails` schema object used by the matcher. |
 
@@ -134,7 +134,7 @@ Step 3 — STORE MATCHES
     Upsert JobMatch row with batch_date=today, status="new", score
       (if match already exists today, update score only if improved)
   DB.commit()
-  → list[int] match_ids (in ranked order)      [WebSocket: 55% progress]
+  → list[StoredMatch] (match_id + its own job, ranked order)      [WebSocket: 55% progress]
 
         │
         ▼
@@ -150,7 +150,7 @@ Step 4 — FIT ASSESS  (only when embedder + fit_engine are wired)
         ▼
 Step 5 — PRE-GENERATE TAILORED CVs
   DailyLimitGuard(db, limit=daily_limit).remaining_today() → int remaining
-  top_ids = match_ids[:remaining]
+  selected = stored[:remaining]
   For each (match_id, JobDetails) — up to CONCURRENCY_LLM concurrently:
     CVPipeline.generate_tailored_cv(base_cv_path, job, output_dir,
                                     fit_assessment=fit_assessment_or_none)
@@ -161,7 +161,7 @@ Step 5 — PRE-GENERATE TAILORED CVs
         │
         ▼
 Step 6 — NOTIFY DASHBOARD
-  broadcast_status("N applications ready for review", progress=1.0)
+  broadcast_status("N ready for review[, M failed]", progress=1.0)  # persisted docs, not selected matches
   [WebSocket: 100% progress]
 ```
 

@@ -86,3 +86,24 @@ __all__ = [
     "build_browser",
     "PHONE_NUMBER_NOTE",
 ]
+
+
+#: W08: actions the preparation/submit browser agents never get — page text
+#: cannot redirect the attempt, run scripts, or write files.
+_FORBIDDEN_ACTIONS = ("navigate", "search", "go_back", "switch", "close", "evaluate",
+                      "write_file", "replace_file", "read_file", "save_as_pdf")
+
+
+def restricted_tools(*, allow_upload: bool):
+    """browser-use ``Tools`` without navigation/script/file actions.
+
+    Uploads stay limited to the Agent's ``available_file_paths``; the submit
+    agent gets no upload action at all. ``click`` cannot be narrowed to "not
+    the submit button", so preparation is additionally checked by
+    ``submitted_during_preparation``.
+    """
+    from browser_use.tools.service import Tools  # type: ignore
+
+    excluded = list(_FORBIDDEN_ACTIONS) + ([] if allow_upload else ["upload_file"])
+    return Tools(exclude_actions=excluded)
+

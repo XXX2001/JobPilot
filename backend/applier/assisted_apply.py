@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from backend.applier import RESULT_AWAITING_USER, RESULT_FAILED
+from backend.applier._strategy_common import restricted_tools
 from backend.applier._strategy_common import (
     PHONE_NUMBER_NOTE,
     build_browser,
@@ -191,12 +192,19 @@ class AssistedApplyStrategy:
             agent = Agent(
                 task=task, llm=llm, browser=browser,
                 available_file_paths=file_paths or None,
+                # W08: no navigation, scripts or file writes while preparing.
+                tools=restricted_tools(allow_upload=True),
                 # Retry malformed action-JSON (common with local reasoning
                 # models) on a fresh client instead of aborting the run.
                 fallback_llm=make_browser_llm(),
             )
             await agent.run()
             logger.info("[Tier 2 assisted] Agent completed for %s", apply_url)
+            from backend.applier.auto_apply import submitted_during_preparation
+
+            early = await submitted_during_preparation(browser)
+            if early is not None:  # W08: the agent clicked submit on its own
+                return early.model_copy(update={"method": "assisted"})
         except Exception as exc:
             logger.exception(
                 "Assisted apply agent failed for %s: %s", apply_url, exc

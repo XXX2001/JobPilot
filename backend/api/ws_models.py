@@ -88,6 +88,8 @@ class ApplyReview(BaseModel):
     # W07: the snapshot an approval must name (POST .../review-decision).
     review_id: str | None = None
     revision: int | None = None
+    # W08: why a new review round was opened (failed correction, page change…).
+    note: str | None = None
 
 
 class ApplyResult(BaseModel):

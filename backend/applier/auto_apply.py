@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 from typing import Callable, Optional
 
+from backend.applier._strategy_common import restricted_tools
 from backend.applier._strategy_common import (
     PHONE_NUMBER_NOTE,
     build_browser,
@@ -336,6 +337,8 @@ class AutoApplyStrategy:
             agent = Agent(
                 task=fill_task, llm=llm, browser=browser,
                 available_file_paths=file_paths or None,
+                # W08: no navigation, scripts or file writes while preparing.
+                tools=restricted_tools(allow_upload=True),
                 # Retry malformed action-JSON (common with local reasoning
                 # models) on a fresh client instead of aborting the run.
                 fallback_llm=make_browser_llm(),
@@ -375,79 +378,182 @@ class AutoApplyStrategy:
                 message=f"Fill-out phase failed: {exc}",
             )
 
-        # Record the review snapshot (engine assigns review_id/revision), then broadcast it.
-        snapshot = (
-            self._on_review(job_id, filled_fields=filled_fields, screenshot_b64=screenshot_b64)
-            if self._on_review is not None
-            else None
-        ) or {}
-        try:
-            from backend.api.ws import manager as ws_manager  # type: ignore
-            from backend.api.ws_models import ApplyReview  # type: ignore
-            await ws_manager.broadcast(
-                ApplyReview(
-                    type="apply_review",
-                    job_id=job_id,
-                    filled_fields=filled_fields,
-                    screenshot_base64=screenshot_b64,
-                    review_id=snapshot.get("review_id"),
-                    revision=snapshot.get("revision"),
-                )
-            )
-            logger.info("[Tier 2] Broadcast apply_review for job_id=%d — waiting for confirmation", job_id)
-        except Exception as exc:
-            logger.warning("Could not broadcast apply_review: %s", exc)
+        # W08: the fill agent must not have submitted on its own.
+        early = await submitted_during_preparation(browser)
+        if early is not None:
+            return early
 
-        # Wait for user
-        if confirm_event is None:
-            confirm_event = asyncio.Event()
-        if cancel_event is None:
-            cancel_event = asyncio.Event()
-
-        done, _ = await asyncio.wait(
-            [
-                asyncio.ensure_future(confirm_event.wait()),
-                asyncio.ensure_future(cancel_event.wait()),
-            ],
-            timeout=1800,
-            return_when=asyncio.FIRST_COMPLETED,
+        return await self._review_and_submit_tier2(
+            browser,
+            job_id=job_id,
+            filled_fields=filled_fields,
+            screenshot_b64=screenshot_b64,
+            documents=[p for p in (cv_pdf, letter_pdf) if p and p.exists()],
+            confirm_event=confirm_event or asyncio.Event(),
+            cancel_event=cancel_event or asyncio.Event(),
         )
 
-        if not done:
-            logger.warning("Auto-apply confirmation timed out for job_id=%d", job_id)
-            return ApplicationResult(
-                status="cancelled",
-                method="auto",
-                message="Confirmation timed out after 30 minutes.",
-            )
+    async def _review_and_submit_tier2(
+        self,
+        browser,
+        *,
+        job_id: int,
+        filled_fields: dict[str, str],
+        screenshot_b64: str | None,
+        documents: list[Path],
+        confirm_event: asyncio.Event,
+        cancel_event: asyncio.Event,
+    ) -> ApplicationResult:
+        """Tier-2 review rounds (W08): corrections are applied by a no-submit
+        agent and re-reviewed; only an approval that changes nothing, on the
+        same host with unchanged documents, reaches the submit agent."""
+        from urllib.parse import urlsplit
 
-        if not confirm_event.is_set():
-            logger.info("User cancelled auto-apply for job_id=%d", job_id)
-            return ApplicationResult(
-                status="cancelled", method="auto", message="Cancelled by user."
-            )
+        from backend.applier._strategy_common import restricted_tools
+        from backend.applier.form_filler import _MAX_REVIEW_ROUNDS, PlaywrightFormFiller
+        from backend.latex.artifacts import sha256_file
+        from backend.llm.factory import make_browser_llm
 
-        # Submit
-        try:
-            submit_task = (
-                "The application form is already filled out. "
-                "Click the final Submit / Send Application / Submit application button "
-                "to complete the application. If there is a 'Review' step, click through "
-                "it and then click the final submit button."
-            )
-            from backend.llm.factory import make_browser_llm
-            llm2 = make_browser_llm()
-            submit_agent = Agent(
-                task=submit_task, llm=llm2, browser=browser,
-                fallback_llm=make_browser_llm(),
-            )
-            history = await submit_agent.run()
-        except Exception as exc:
-            logger.error("Submit phase failed for job_id=%d: %s", job_id, exc)
-            return outcome_after_agent_error(exc)
-        result = await outcome_after_agent(browser, history)
-        logger.info("Auto-apply job_id=%d submit outcome=%s (%s)", job_id, result.status, result.evidence)
-        return result
+        agent_cls = Agent
+        if agent_cls is None:
+            return ApplicationResult(status="failed", method="auto", message="browser-use is not installed.")
+        doc_hashes = {p: sha256_file(p) for p in documents}
+        fields = dict(filled_fields)
+        note = ""
+        for _round in range(_MAX_REVIEW_ROUNDS):
+            reviewed_host = urlsplit(await _current_url(browser)).hostname
+            snapshot = (
+                self._on_review(job_id, filled_fields=fields, screenshot_b64=screenshot_b64)
+                if self._on_review is not None
+                else None
+            ) or {}
+            try:
+                from backend.api.ws import manager as ws_manager  # type: ignore
+                from backend.api.ws_models import ApplyReview  # type: ignore
+
+                await ws_manager.broadcast(
+                    ApplyReview(
+                        type="apply_review",
+                        job_id=job_id,
+                        filled_fields=fields,
+                        screenshot_base64=screenshot_b64,
+                        review_id=snapshot.get("review_id"),
+                        revision=snapshot.get("revision"),
+                        note=note or None,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not broadcast apply_review: %s", exc)
+
+            confirm_event.clear()
+            try:
+                approved = await PlaywrightFormFiller._wait_decision(confirm_event, cancel_event)
+            except RuntimeError:
+                return ApplicationResult(
+                    status="cancelled", method="auto", message="Confirmation timed out after 30 minutes."
+                )
+            if not approved:
+                return ApplicationResult(status="cancelled", method="auto", message="Cancelled by user.")
+
+            patches = (self._on_get_patches(job_id) if self._on_get_patches else None) or {}
+            if patches:
+                task = (
+                    "Change these form fields to exactly these values, then STOP. "
+                    "Do NOT click Submit/Send/Apply and do not navigate away:\n"
+                    + "\n".join(f"- field {sel!r} → {val!r}" for sel, val in patches.items())
+                )
+                try:
+                    await agent_cls(
+                        task=task, llm=make_browser_llm(), browser=browser,
+                        tools=restricted_tools(allow_upload=False), fallback_llm=make_browser_llm(),
+                    ).run()
+                except Exception as exc:  # noqa: BLE001 — the re-review shows the result
+                    logger.warning("[Tier 2] correction agent failed for job_id=%d: %s", job_id, exc)
+                early = await submitted_during_preparation(browser)
+                if early is not None:
+                    return early
+                # ponytail: Tier 2 cannot read field values back; the new
+                # screenshot is what the user re-approves.
+                fields.update(patches)
+                screenshot_b64 = await _screenshot_b64(browser) or screenshot_b64
+                note = "Corrections were applied by the browser agent — check the screenshot."
+                continue
+
+            host = urlsplit(await _current_url(browser)).hostname
+            if host != reviewed_host:
+                note = f"The page moved to {host} — check it again."
+                screenshot_b64 = await _screenshot_b64(browser) or screenshot_b64
+                continue
+            changed = [p.name for p, h in doc_hashes.items() if not p.exists() or sha256_file(p) != h]
+            if changed:
+                return ApplicationResult(
+                    status="failed", method="auto",
+                    evidence=f"attached document(s) changed after review: {', '.join(changed)}",
+                    message="An attached document changed after review — nothing was submitted.",
+                )
+            try:
+                submit_agent = agent_cls(
+                    task=(
+                        "The application form is already filled out and approved. Do not change any "
+                        "field and do not upload files. Click the final Submit / Send application "
+                        "button; if there is a 'Review' step, click through it to the final submit."
+                    ),
+                    llm=make_browser_llm(), browser=browser,
+                    tools=restricted_tools(allow_upload=False), fallback_llm=make_browser_llm(),
+                )
+                history = await submit_agent.run()
+            except Exception as exc:
+                logger.error("Submit phase failed for job_id=%d: %s", job_id, exc)
+                return outcome_after_agent_error(exc)
+            result = await outcome_after_agent(browser, history)
+            logger.info("Auto-apply job_id=%d submit outcome=%s (%s)", job_id, result.status, result.evidence)
+            return result
+        return ApplicationResult(
+            status="failed", method="auto",
+            message=f"No stable approved state after {_MAX_REVIEW_ROUNDS} review rounds — nothing was submitted.",
+        )
+
+
+async def _current_url(browser) -> str:
+    try:
+        return await browser.get_current_page_url()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+async def _screenshot_b64(browser) -> str | None:
+    try:
+        page = await browser.get_current_page()
+        ss = await page.screenshot() if page else None
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(ss, bytes):
+        import base64
+
+        return base64.b64encode(ss).decode()
+    return ss if isinstance(ss, str) and len(ss) < 5_000_000 else None
+
+
+async def submitted_during_preparation(browser) -> ApplicationResult | None:
+    """W08 safety net: the preparation agent can click anything, including
+    submit. If the page already shows a confirmation, record it as a possible
+    unapproved submission instead of continuing (and never submit again)."""
+    from backend.applier.verification import verify_page
+
+    try:
+        page = await browser.get_current_page()
+    except Exception:  # noqa: BLE001
+        return None
+    if page is None:
+        return None
+    check = await verify_page(page)
+    if check.outcome != "confirmed":
+        return None
+    logger.error("Browser agent appears to have submitted before approval: %s", check.evidence)
+    return ApplicationResult(
+        status="needs_verification", method="auto", evidence=check.evidence,
+        message="The browser agent appears to have submitted before your approval — check the site.",
+    )
 
 
 def _tier1_result(result: dict) -> ApplicationResult:

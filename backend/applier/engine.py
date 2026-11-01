@@ -132,7 +132,15 @@ class ApplicationEngine:
         if pending.get("review_id") != review_id or pending.get("revision") != revision:
             raise ReviewConflict("This review is out of date; reload it and review the current values.")
         if decision == "approve":
-            self.signal_patch_fields(job_id, fields)
+            # W08: corrections may only target fields of the server's own
+            # snapshot (no client-chosen selectors), and only real changes
+            # count — an unchanged echo is not a correction.
+            inventory = pending.get("filled_fields") or {}
+            unknown = sorted(set(fields) - set(inventory))
+            if unknown:
+                raise ReviewConflict(f"Unknown review field(s): {', '.join(unknown[:5])}.")
+            changed = {k: v for k, v in fields.items() if inventory.get(k) != v}
+            self.signal_patch_fields(job_id, changed)
             self.signal_confirm(job_id)
         elif decision == "cancel":
             self.signal_cancel(job_id)

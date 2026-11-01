@@ -61,6 +61,8 @@ export interface ApplyReviewMsg {
 	/** W07: identity of this review snapshot; send it back on approval. */
 	review_id: string | null;
 	revision: number | null;
+	/** W08: why this is a new review round (failed correction, page changed…). */
+	note?: string | null;
 }
 
 export interface ApplyResultMsg {

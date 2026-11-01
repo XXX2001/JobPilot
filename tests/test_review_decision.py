@@ -126,3 +126,19 @@ def test_legacy_ws_confirm_no_longer_approves(test_app: TestClient):
         assert not eng._confirm_events[MID].is_set()
     finally:
         eng._confirm_events.pop(MID, None)
+
+
+# ── W08: corrections are bound to the server's field inventory ───────────────
+
+
+def test_correction_to_a_field_outside_the_snapshot_is_rejected(engine):
+    snap = _review(engine)  # inventory: {"#name"}
+    with pytest.raises(ReviewConflict):
+        _approve(engine, snap, fields={"input[type=file]": "/etc/passwd"})
+    assert not engine._confirm_events[MID].is_set()
+
+
+def test_only_changed_values_become_corrections(engine):
+    snap = _review(engine)
+    _approve(engine, snap, fields={"#name": "Ada"})  # unchanged echo of the snapshot
+    assert engine.get_pending_patches(MID) == {}

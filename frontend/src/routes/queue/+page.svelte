@@ -44,6 +44,7 @@
 		screenshot?: string;
 		reviewId?: string;
 		revision?: number;
+		note?: string;
 	} | null>(null);
 	/** W07: the decision is in flight; the modal stays until it is acknowledged. */
 	let deciding = $state(false);
@@ -68,7 +69,8 @@
 				fields: lastMsg.filled_fields,
 				screenshot: lastMsg.screenshot_base64 ?? undefined,
 				reviewId: lastMsg.review_id ?? undefined,
-				revision: lastMsg.revision ?? undefined
+				revision: lastMsg.revision ?? undefined,
+				note: lastMsg.note ?? undefined
 			};
 			decisionError = '';
 			// Mirror the awaiting job id so the review survives a WS reconnect/reload.
@@ -546,6 +548,11 @@
 				<h2 id="confirm-apply-title" class="font-semibold">Confirm Auto Apply</h2>
 				<p id="confirm-apply-desc" class="text-muted-foreground mt-1 text-xs">Review the filled fields before submitting.</p>
 			</div>
+			{#if confirmModal.note}
+				<p class="mx-4 mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300" role="status">
+					{confirmModal.note}
+				</p>
+			{/if}
 			{#if confirmModal.screenshot}
 				<div class="px-5 pt-4">
 					<img

@@ -6,6 +6,7 @@
  * or already decided, 401…) are not retried — the caller shows them.
  */
 import { ApiError, apiFetch } from '$lib/api';
+import { reviewStateToModal, type ReviewModal } from '$lib/utils/pendingReview';
 
 export interface ReviewIdentity {
 	jobId: number;
@@ -44,5 +45,17 @@ export async function submitReviewDecision(
 			if (e instanceof ApiError || i >= attempts) throw e;
 			await new Promise((r) => setTimeout(r, delayMs * i));
 		}
+	}
+}
+
+/**
+ * After a 409: the review that is waiting now, or null when none is — the
+ * modal must then close instead of offering buttons that can only fail (I8).
+ */
+export async function reviewAfterConflict(jobId: number): Promise<ReviewModal | null> {
+	try {
+		return reviewStateToModal(await apiFetch(`/api/applications/${jobId}/review-state`));
+	} catch {
+		return null;
 	}
 }

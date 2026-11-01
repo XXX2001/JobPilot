@@ -47,19 +47,22 @@ class SubmissionCheck:
     evidence: str
 
 
-def classify_page(*, text: str, invalid_count: int, url: str) -> SubmissionCheck:
-    if invalid_count > 0:
-        return SubmissionCheck("rejected", f"{invalid_count} form field(s) failed validation at {url}")
+def classify_page(*, text: str, invalid_count: int, url: str, before_url: str | None = None) -> SubmissionCheck:
+    """Confirmation first. ``rejected`` (= nothing was submitted) only when
+    the page did not navigate and still has invalid fields; everything else
+    without a confirmation is ``unknown`` → needs verification, because a
+    false "rejected" invites a duplicate submission."""
     if m := _CONFIRMED.search(text):
         start = max(0, m.start() - 80)
         snippet = " ".join(text[start : m.end() + 120].split())
         return SubmissionCheck("confirmed", f"{snippet} @ {url}"[:_EVIDENCE_CHARS])
-    if m := _REJECTED.search(text):
-        return SubmissionCheck("rejected", f"validation message {m.group(0)!r} at {url}"[:_EVIDENCE_CHARS])
-    return SubmissionCheck("unknown", f"no confirmation found at {url}"[:_EVIDENCE_CHARS])
+    if invalid_count > 0 and before_url is not None and url == before_url:
+        return SubmissionCheck("rejected", f"{invalid_count} form field(s) failed validation at {url}")
+    hint = f"; validation text {m.group(0)!r}" if (m := _REJECTED.search(text)) else ""
+    return SubmissionCheck("unknown", f"no confirmation found at {url}{hint}"[:_EVIDENCE_CHARS])
 
 
-async def verify_page(page: Any) -> SubmissionCheck:
+async def verify_page(page: Any, *, before_url: str | None = None) -> SubmissionCheck:
     """Inspect the current page; any failure to read it is ``unknown``, never confirmed."""
     try:
         raw = await page.evaluate(PROBE_JS)
@@ -68,6 +71,7 @@ async def verify_page(page: Any) -> SubmissionCheck:
             text=str(data.get("text", "")),
             invalid_count=int(data.get("invalid", 0)),
             url=str(data.get("url", "")),
+            before_url=before_url,
         )
     except Exception as exc:  # noqa: BLE001 — unreadable page = no evidence
         return SubmissionCheck("unknown", f"could not inspect the page: {exc}"[:_EVIDENCE_CHARS])

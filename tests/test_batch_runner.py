@@ -542,7 +542,7 @@ class _RecordingPipeline:
         self._fail = set(fail_titles)
 
     async def _gen(self, job, output_dir):
-        self.calls.append((output_dir.name, job.id, job.title))
+        self.calls.append((output_dir.parent.name, job.id, job.title))
         if job.title in self._fail:
             raise RuntimeError("compile error")
         result = MagicMock()
@@ -641,3 +641,31 @@ async def test_batch_preserves_job_identity_when_first_ranked_job_is_skipped(
     assert titles[matches[docs[0].job_match_id].job_id] == "Rust Engineer"
     # Readiness counts actual artifacts, not selected matches.
     assert any("1 ready" in m and "1 failed" in m for m in messages), messages
+
+
+@pytest.mark.asyncio
+async def test_same_day_rerun_does_not_overwrite_the_previous_version(sqlite_factory, tmp_path):
+    """Review I6: each run writes its own directory, so earlier documents stay intact."""
+    from backend.models.document import TailoredDocument
+
+    pipeline = _RecordingPipeline()
+    runner = BatchRunner(
+        scraper=MockScraper(jobs=[RawJob(title="Solo", company="ACME", url="https://e.x/solo")]),
+        matcher=_TitleScoreMatcher({"Solo": 90.0}),
+        cv_pipeline=pipeline,
+        db_factory=sqlite_factory,
+    )
+    cv = tmp_path / "base.tex"
+    cv.write_text("x")
+    with (
+        patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=cv),
+        patch("backend.scheduler.batch_runner.settings") as cfg,
+    ):
+        cfg.jobpilot_data_dir = str(tmp_path)
+        await runner.run_batch()
+        await runner.run_batch()
+
+    async with sqlite_factory() as db:
+        paths = [d.pdf_path for d in (await db.execute(select(TailoredDocument))).scalars()]
+    assert len(paths) == 2 and len(set(paths)) == 2

@@ -98,7 +98,9 @@ class AccessBoundary:
         )
         if guarded:
             origin = h(b"origin").rstrip("/")
-            if origin and origin not in self.origins:
+            scheme = {"ws": "http", "wss": "https"}.get(scope.get("scheme", "http"), scope.get("scheme", "http"))
+            same_origin = origin == f"{scheme}://{h(b'host')}".lower()  # Host validated above
+            if origin and origin not in self.origins and not same_origin:
                 return await self._deny(kind, scope, send, 403, "Origin not allowed")
             if h(b"sec-fetch-site") == "cross-site":
                 return await self._deny(kind, scope, send, 403, "Cross-site request refused")

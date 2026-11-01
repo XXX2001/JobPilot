@@ -31,3 +31,27 @@ describe('applyRequestBody', () => {
 		).toEqual({ method: 'manual', cv_document_id: 5 });
 	});
 });
+
+describe('review fixes', () => {
+	it('I9: refuses to approve a tailored CV whose review failed to load', () => {
+		expect(
+			applyRequestBody('manual', 'approved', {
+				cvDocumentId: null,
+				letterDocumentId: null,
+				attachLetter: false,
+				loadFailed: true
+			})
+		).toBeNull();
+	});
+
+	it('I9: an explicit "Use base CV" still works when the diff failed to load', () => {
+		expect(
+			applyRequestBody('manual', 'base_cv', {
+				cvDocumentId: null,
+				letterDocumentId: null,
+				attachLetter: false,
+				loadFailed: true
+			})
+		).toEqual({ method: 'manual', use_base_cv: true });
+	});
+});

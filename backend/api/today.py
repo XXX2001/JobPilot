@@ -30,10 +30,10 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from backend.api.deps import DBSession
-from backend.applier.daily_limit import COUNTABLE_STATUSES
+from backend.applier import STATUS_AWAITING_SUBMISSION, STATUS_NEEDS_VERIFICATION, SUCCESS_STATUSES
 from backend.models.application import Application
 from backend.models.job import Job, JobMatch
-from backend.models.user import SearchSettings, SiteCredential, UserProfile
+from backend.models.user import SiteCredential, UserProfile
 from backend.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
@@ -193,9 +193,10 @@ async def get_today(db: DBSession) -> TodayOut:
     except Exception as _exc:
         logger.warning("Could not check browser sessions for blocked actions: %s", _exc)
 
-    # Signal 2: applications in pending / awaiting_submit
+    # Signal 2: prepared or possibly-submitted applications the user must
+    # finish or check (W06 statuses; "awaiting_submit" never existed).
     pending_stmt = select(func.count(Application.id)).where(
-        Application.status.in_(["pending", "awaiting_submit"])
+        Application.status.in_([STATUS_AWAITING_SUBMISSION, STATUS_NEEDS_VERIFICATION])
     )
     pending_count: int = (await db.execute(pending_stmt)).scalar_one_or_none() or 0
     if pending_count:
@@ -240,27 +241,18 @@ async def get_today(db: DBSession) -> TodayOut:
     # ── 4. Week stats (7-day rolling) ──────────────────────────────────────
     week_ago = now - timedelta(days=7)
 
-    # Applications submitted this week
+    # Applications submitted this week (confirmed: applied_at is set only then)
     submitted_stmt = select(func.count(Application.id)).where(
         Application.applied_at >= week_ago,
-        Application.status.in_(COUNTABLE_STATUSES),
+        Application.status.in_(SUCCESS_STATUSES),
     )
     apps_submitted: int = (await db.execute(submitted_stmt)).scalar_one_or_none() or 0
 
-    # Daily limit usage today
-    today = datetime.now(timezone.utc).date()
-    used_today_stmt = select(func.count(Application.id)).where(
-        Application.applied_at >= today,  # type: ignore[operator]
-        Application.status.in_(COUNTABLE_STATUSES),
-    )
-    used_today: int = (await db.execute(used_today_stmt)).scalar_one_or_none() or 0
+    # Daily limit usage today — the engine's own guard (review I7 / W11).
+    from backend.applier.daily_limit import DailyLimitGuard
 
-    # Resolve daily limit from settings
-    from backend.defaults import DAILY_LIMIT
-
-    ss_result = await db.execute(select(SearchSettings).where(SearchSettings.id == 1))
-    ss = ss_result.scalar_one_or_none()
-    daily_limit_total = (ss.daily_limit if ss is not None else None) or DAILY_LIMIT
+    guard = await DailyLimitGuard.from_settings(db)
+    used_today, daily_limit_total = await guard.used_today(), guard.limit
 
     week_stats = WeekStatsSection(
         applications_submitted=apps_submitted,

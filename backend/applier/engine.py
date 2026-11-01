@@ -20,7 +20,7 @@ from typing import Optional, cast
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.applier import RESULT_CANCELLED, RESULT_FAILED
+from backend.applier import RESULT_CANCELLED, RESULT_CONFIRMED, RESULT_FAILED, RESULT_NEEDS_VERIFICATION
 from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
 from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
@@ -444,25 +444,25 @@ class ApplicationEngine:
                 )
             except Exception as exc:
                 logger.exception("record() failed after strategy returned %s", result.status)
-                # EH-03: remote may have submitted but local record failed.
-                # Release the reserved slot (best-effort).
-                if c.reserved_app_id is not None:
+                possibly_submitted = result.status in (RESULT_CONFIRMED, RESULT_NEEDS_VERIFICATION)
+                # Review I5: a remote submission that may have happened keeps
+                # its reservation (the pending row still counts) — releasing it
+                # would let a retry duplicate the submission. Only an outcome
+                # that cannot have submitted (prepared for the user) releases.
+                if c.reserved_app_id is not None and not possibly_submitted:
                     try:
                         await recorder.release_reserved_slot(c.db, c.reserved_app_id)
                     except Exception:
                         pass  # Already logged inside release_reserved_slot.
-                # EH-03: remote submit succeeded but local record failed.
                 # ANY exception here routes to REMOTE_SUBMITTED_LOCAL_FAILED so the
                 # db_write_failed audit event is always persisted (and the caller is
-                # told to verify on the job site).  Previously only ApplicationRecordError
-                # was checked — that left generic exceptions silently routing to FAILED
-                # and losing the audit trail.
-                c.outcome_status = RESULT_FAILED
+                # told to verify on the job site).
+                c.outcome_status = RESULT_NEEDS_VERIFICATION if possibly_submitted else RESULT_FAILED
                 c.outcome_method = result.method
                 c.outcome_message = (
                     "Application may have been submitted to the remote site, "
                     "but recording it locally failed: "
-                    f"{exc}. Please verify on the job site and retry if needed."
+                    f"{exc}. Check the job site before applying again."
                 )
                 return State.REMOTE_SUBMITTED_LOCAL_FAILED
 

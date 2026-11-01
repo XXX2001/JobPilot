@@ -11,6 +11,8 @@ export interface ReviewedDocuments {
 	/** `letter_document_id` from the same response. */
 	letterDocumentId: number | null;
 	attachLetter: boolean;
+	/** The diff could not be loaded (not a 404): what the user saw is unknown. */
+	loadFailed?: boolean;
 }
 
 export interface ApplyBody {
@@ -20,7 +22,13 @@ export interface ApplyBody {
 	letter_document_id?: number;
 }
 
-export function applyRequestBody(method: string, decision: ReviewDecision, docs: ReviewedDocuments): ApplyBody {
+/** Returns null when an approval cannot name what was reviewed (review I9). */
+export function applyRequestBody(
+	method: string,
+	decision: ReviewDecision,
+	docs: ReviewedDocuments
+): ApplyBody | null {
+	if (decision === 'approved' && docs.loadFailed) return null;
 	const body: ApplyBody = { method };
 	// No tailored version means the review showed "base CV will be used as-is".
 	if (decision === 'approved' && docs.cvDocumentId !== null) body.cv_document_id = docs.cvDocumentId;

@@ -139,7 +139,7 @@ def test_explicit_tailored_document_is_used_not_a_newer_one(client):
     resp = _apply(client, mid, cv_document_id=reviewed_id)
 
     assert resp.status_code == 200, resp.text
-    assert _uploaded(client)[0] == reviewed
+    assert _uploaded(client)[0].read_bytes() == reviewed.read_bytes()  # pinned copy (I6)
 
 
 def test_document_of_another_match_is_rejected(client):
@@ -180,7 +180,7 @@ def test_explicit_letter_is_attached_and_validated(client):
     assert (
         _apply(client, mid, cv_document_id=cv_id, letter_document_id=letter_id).status_code == 200
     )
-    assert _uploaded(client)[1] == letter
+    assert _uploaded(client)[1].read_bytes() == letter.read_bytes()  # pinned copy (I6)
     # A CV document cannot be passed off as the letter.
     assert _apply(client, mid, cv_document_id=cv_id, letter_document_id=cv_id).status_code == 409
 
@@ -250,3 +250,16 @@ def test_explicit_base_cv_without_a_base_source_is_rejected(client, monkeypatch)
 
     assert resp.status_code == 409 and "base CV" in resp.json()["detail"]
     client.engine_spy.apply.assert_not_awaited()
+
+
+def test_selected_pdf_is_pinned_so_a_later_overwrite_is_not_uploaded(client):
+    """Review I6: the engine gets an attempt-owned copy verified against the stored hash."""
+    mid = asyncio.run(_seed())
+    src = _pdf(DATA_DIR / "cvs" / f"{mid}_pin" / "cv.pdf", "REVIEWED")
+    doc_id = asyncio.run(_add_doc(mid, "cv", src))
+
+    assert _apply(client, mid, cv_document_id=doc_id).status_code == 200
+    cv, _ = _uploaded(client)
+    _pdf(src, "OVERWRITTEN LATER")
+
+    assert cv != src and b"REVIEWED" in cv.read_bytes()

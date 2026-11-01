@@ -138,3 +138,23 @@ def diff_to_json(tailored) -> list | None:
     except Exception:
         logger.warning("Could not serialize document diff", exc_info=True)
         return None
+
+
+def pin_for_attempt(path: Path, expected_sha256: str, data_dir: Path) -> Path:
+    """Copy a selected PDF into an attempt-owned, read-only file (review I6).
+
+    The copy is verified against the hash the selection was validated with,
+    so the bytes uploaded are exactly the reviewed bytes even if the source
+    file is overwritten later (e.g. by a same-day batch re-run).
+    """
+    # ponytail: attempt copies accumulate until retention lands (W15).
+    dest_dir = data_dir / "attempts" / uuid.uuid4().hex[:12]
+    dest_dir.mkdir(parents=True)
+    dest = dest_dir / path.name
+    shutil.copyfile(path, dest)
+    if sha256_file(dest) != expected_sha256:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise ArtifactError("The selected document changed while the application was being prepared; review it again.")
+    dest.chmod(0o444)
+    return dest
+

@@ -178,7 +178,7 @@ class AssistedApplyStrategy:
         else:
             logger.warning("[Tier 2 assisted] No saved session — browser will not be logged in")
 
-        browser = build_browser(browser_kwargs, state_path)
+        browser = build_browser(browser_kwargs, state_path, apply_url=apply_url)
         self._active_browser = browser
         try:
             from backend.llm.factory import make_browser_llm
@@ -209,6 +209,12 @@ class AssistedApplyStrategy:
             logger.exception(
                 "Assisted apply agent failed for %s: %s", apply_url, exc
             )
+            # Review I3: the agent may have clicked submit before it crashed.
+            from backend.applier.auto_apply import submitted_during_preparation
+
+            early = await submitted_during_preparation(browser)
+            if early is not None:
+                return early.model_copy(update={"method": "assisted"})
             # Do NOT return a success "assisted" result — the agent
             # never finished pre-filling, so there is nothing for the
             # user to review. Surface the failure to the caller. This

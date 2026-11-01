@@ -431,6 +431,8 @@ async def _select_documents(
     from backend.latex.artifacts import (
         ArtifactError,
         ensure_base_cv_pdf,
+        pdf_sha256,
+        pin_for_attempt,
         resolve_base_source,
         validate_document,
     )
@@ -444,11 +446,18 @@ async def _select_documents(
         pipeline = getattr(request.app.state, "cv_pipeline", None)
         if pipeline is None:
             raise ArtifactError("The document pipeline is not available.")
-        return await ensure_base_cv_pdf(source, data_dir, pipeline.compile_base_cv)
+        published = await ensure_base_cv_pdf(source, data_dir, pipeline.compile_base_cv)
+        digest = pdf_sha256(published)
+        if digest is None:
+            raise ArtifactError("The compiled base CV is not a valid PDF.")
+        return pin_for_attempt(published, digest, data_dir)
+
+    def checked(doc, doc_type: str) -> Path:
+        path = validate_document(doc, match_id=match_id, doc_type=doc_type, data_dir=data_dir)
+        return pin_for_attempt(path, doc.pdf_sha256, data_dir)
 
     async def pick(doc_id: int, doc_type: str) -> Path:
-        doc = await db.get(TailoredDocument, doc_id)
-        return validate_document(doc, match_id=match_id, doc_type=doc_type, data_dir=data_dir)
+        return checked(await db.get(TailoredDocument, doc_id), doc_type)
 
     explicit = body.use_base_cv or body.cv_document_id is not None
     if explicit:
@@ -468,7 +477,7 @@ async def _select_documents(
         ).scalars()
         for doc in rows:
             try:
-                return validate_document(doc, match_id=match_id, doc_type=doc_type, data_dir=data_dir)
+                return checked(doc, doc_type)
             except ArtifactError as exc:
                 logger.warning("Skipping document id=%d for match_id=%d: %s", doc.id, match_id, exc)
         return None
@@ -604,6 +613,27 @@ async def apply_to_job(
         mode = ApplyMode(body.method)
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid apply method: {body.method!r}")
+
+    # No replay of a job that was, or may have been, submitted (review C2).
+    replay = (
+        await db.execute(
+            select(Application.id, Application.status)
+            .join(JobMatch, Application.job_match_id == JobMatch.id)
+            .where(
+                JobMatch.job_id == select(JobMatch.job_id).where(JobMatch.id == match_id).scalar_subquery(),
+                Application.status.in_([STATUS_APPLIED, STATUS_NEEDS_VERIFICATION]),
+            )
+            .limit(1)
+        )
+    ).first()
+    if replay is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Application {replay.id} for this job is {replay.status!r}. Check it on the job site "
+                "and resolve it in the tracker before applying again."
+            ),
+        )
 
     from backend.config import settings as app_settings
 

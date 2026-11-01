@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
@@ -318,6 +319,7 @@ class BatchRunner:
             )
 
         done = failed = 0
+        run_id = uuid.uuid4().hex[:12]
         if cv_path and cv_path.exists():
             _additional_context = additional_context(profile_row)
 
@@ -330,7 +332,9 @@ class BatchRunner:
                     import re as _re
                     slug = _re.sub(r"[^\w]+", "_", (jd.title or "job").lower()).strip("_")[:50]
                     dir_name = f"{mid}_{slug}"
-                    out_dir = Path(settings.jobpilot_data_dir) / "cvs" / dir_name
+                    # Review I6: one directory per run — a same-day re-run
+                    # never overwrites a PDF an earlier row points at.
+                    out_dir = Path(settings.jobpilot_data_dir) / "cvs" / dir_name / run_id
                     out_dir.mkdir(parents=True, exist_ok=True)
 
                     # Sub-step feedback: a single tailoring call on a local
@@ -526,8 +530,11 @@ class BatchRunner:
                 await db.execute(
                     select(JobMatch).where(
                         JobMatch.job_id == job_row.id,
-                        JobMatch.status.in_(["applied", "skipped"]),
+                        # "applying" = prepared for the user or possibly
+                        # submitted (W06): re-queueing it invites a duplicate.
+                        JobMatch.status.in_(["applied", "skipped", "applying"]),
                     )
+                    .limit(1)
                 )
             ).scalar_one_or_none()
 

@@ -322,7 +322,7 @@ class AutoApplyStrategy:
         else:
             logger.warning("[Tier 2] No saved session at %s — browser will not be logged in", state_path)
 
-        browser = build_browser(browser_kwargs, state_path)
+        browser = build_browser(browser_kwargs, state_path, apply_url=apply_url)
         self._active_browser = browser
         try:
             from backend.llm.factory import make_browser_llm
@@ -372,6 +372,10 @@ class AutoApplyStrategy:
 
         except Exception as exc:
             logger.error("Auto-apply fill phase failed for job_id=%d: %s", job_id, exc, exc_info=True)
+            # Review I3: the agent may have clicked submit before it crashed.
+            early = await submitted_during_preparation(browser)
+            if early is not None:
+                return early
             return ApplicationResult(
                 status="cancelled",
                 method="auto",
@@ -422,6 +426,7 @@ class AutoApplyStrategy:
         note = ""
         for _round in range(_MAX_REVIEW_ROUNDS):
             reviewed_host = urlsplit(await _current_url(browser)).hostname
+            confirm_event.clear()  # before publishing: an instant approval must not be erased
             snapshot = (
                 self._on_review(job_id, filled_fields=fields, screenshot_b64=screenshot_b64)
                 if self._on_review is not None
@@ -445,7 +450,6 @@ class AutoApplyStrategy:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Could not broadcast apply_review: %s", exc)
 
-            confirm_event.clear()
             try:
                 approved = await PlaywrightFormFiller._wait_decision(confirm_event, cancel_event)
             except RuntimeError:

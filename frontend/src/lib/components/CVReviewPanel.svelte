@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { apiFetch } from '$lib/api';
+	import { ApiError, apiFetch } from '$lib/api';
 	import {
 		ArrowLeft,
 		Zap,
@@ -16,6 +16,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import type { QueueMatch, DiffEntry } from '$lib/types/api';
 	import { applyRequestBody, type ReviewedDocuments } from '$lib/utils/documentSelection';
+	import { describeApplyResult, type ApplyResultLike } from '$lib/utils/applyOutcome';
 
 	type ApplyMode = 'auto' | 'manual' | 'skip';
 	type Decision = 'approved' | 'base_cv' | 'skip';
@@ -87,12 +88,19 @@
 			});
 			cvToastMessage = getCvToast();
 			setTimeout(() => (cvToastMessage = null), 4000);
-		} catch {
+		} catch (e) {
 			const d = new Map(diffs);
 			d.set(matchId, []);
 			diffs = d;
-			// No tailored CV: the review shows the base CV, so that is what is sent.
-			setReviewed(matchId, { cvDocumentId: null, letterDocumentId: null, attachLetter: false });
+			// Only a 404 means "no tailored CV" (the base CV is shown and sent).
+			// Any other error leaves what the user saw unknown: block approval (I9).
+			const missing = e instanceof ApiError && e.status === 404;
+			setReviewed(matchId, {
+				cvDocumentId: null,
+				letterDocumentId: null,
+				attachLetter: false,
+				loadFailed: !missing
+			});
 		} finally {
 			diffLoading = false;
 		}
@@ -153,16 +161,22 @@
 			const method = modes.get(match.id) ?? 'manual';
 			const decision = decisions.get(match.id) === 'approved' ? 'approved' : 'base_cv';
 			const docs = reviewed.get(match.id) ?? { cvDocumentId: null, letterDocumentId: null, attachLetter: false };
-			try {
-				await apiFetch(`/api/applications/${match.id}/apply`, {
-					method: 'POST',
-					body: JSON.stringify(applyRequestBody(method, decision, docs))
-				});
+			const body = applyRequestBody(method, decision, docs);
+			if (body === null) {
 				results.push({
 					matchId: match.id,
-					ok: true,
-					msg: `${match.job.title} — queued (${method})`
+					ok: false,
+					msg: `${match.job.title} — the tailored CV could not be loaded for review; go back and review it again`
 				});
+				continue;
+			}
+			try {
+				const res = await apiFetch<ApplyResultLike>(`/api/applications/${match.id}/apply`, {
+					method: 'POST',
+					body: JSON.stringify(body)
+				});
+				const outcome = describeApplyResult(res);
+				results.push({ matchId: match.id, ok: outcome.ok, msg: `${match.job.title} — ${outcome.text}` });
 			} catch (e: any) {
 				results.push({ matchId: match.id, ok: false, msg: e.message ?? 'Failed' });
 			}

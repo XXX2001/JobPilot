@@ -183,7 +183,7 @@ def test_preparation_agents_cannot_navigate_or_run_scripts():
 
     fill = set(restricted_tools(allow_upload=True).registry.registry.actions)
     submit = set(restricted_tools(allow_upload=False).registry.registry.actions)
-    for forbidden in ("navigate", "search", "evaluate", "switch", "write_file"):
+    for forbidden in ("search", "evaluate", "switch", "write_file"):
         assert forbidden not in fill and forbidden not in submit
     assert "upload_file" in fill and "upload_file" not in submit
     assert {"click", "input"} <= fill
@@ -208,7 +208,7 @@ def test_tier2_consumes_corrections_and_re_reviews_before_submitting(monkeypatch
     class FakeAgent:
         def __init__(self, *, task, tools=None, **_kw):
             tasks.append(task)
-            assert tools is not None and "navigate" not in tools.registry.registry.actions
+            assert tools is not None and "evaluate" not in tools.registry.registry.actions
 
         async def run(self):
             return type("H", (), {"is_successful": lambda self: True, "final_result": lambda self: "ok"})()

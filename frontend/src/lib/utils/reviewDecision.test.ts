@@ -50,3 +50,19 @@ describe('submitReviewDecision', () => {
 		expect(bodies).toHaveLength(1);
 	});
 });
+
+describe('reviewAfterConflict (I8)', () => {
+	it('returns null when no review is waiting any more, so the modal can close', async () => {
+		const { reviewAfterConflict } = await import('./reviewDecision');
+		globalThis.fetch = vi.fn(async () => new Response('{"detail":"No pending review"}', { status: 404 })) as typeof fetch;
+		expect(await reviewAfterConflict(7)).toBeNull();
+	});
+
+	it('returns the current snapshot when a newer review exists', async () => {
+		const { reviewAfterConflict } = await import('./reviewDecision');
+		globalThis.fetch = vi.fn(
+			async () => new Response(JSON.stringify({ job_id: 7, filled_fields: {}, review_id: 'r9', revision: 3 }))
+		) as typeof fetch;
+		expect((await reviewAfterConflict(7))?.reviewId).toBe('r9');
+	});
+});

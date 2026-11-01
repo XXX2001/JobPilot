@@ -236,13 +236,18 @@ class PlaywrightFormFiller:
         from backend.applier.verification import verify_page
 
         submit_sel = mapping.get("submit_selector", "button[type=submit]")
-        await page.click(submit_sel, timeout=5_000)
+        before_url = page.url
+        try:
+            await page.click(submit_sel, timeout=5_000)
+        except Exception as exc:  # noqa: BLE001 — the click may have been dispatched
+            logger.warning("[Tier 1] submit click raised for job_id=%d: %s", job_id, exc)
+            return {"status": "needs_verification", "evidence": f"submit click raised: {exc}"[:300]}
         logger.info("[Tier 1] Clicked submit for job_id=%d — verifying destination", job_id)
         try:
             await page.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:  # noqa: BLE001 — a slow page is still inspected below
             pass
-        check = await verify_page(page)
+        check = await verify_page(page, before_url=before_url)
         status = {"confirmed": "confirmed", "rejected": "rejected"}.get(check.outcome, "needs_verification")
         logger.info("[Tier 1] job_id=%d submission %s: %s", job_id, status, check.evidence)
         return {"status": status, "evidence": check.evidence}
@@ -279,8 +284,8 @@ class PlaywrightFormFiller:
         for _round in range(_MAX_REVIEW_ROUNDS):
             reviewed_host = urlsplit(page.url).hostname
             screenshot_b64 = await self._screenshot(page)
+            confirm_event.clear()  # before publishing: an instant approval must not be erased
             await self._publish_review(job_id, fields, screenshot_b64, note)
-            confirm_event.clear()
             if not await self._wait_decision(confirm_event, cancel_event):
                 return {"status": "cancelled", "filled_fields": fields, "screenshot_b64": screenshot_b64}
 

@@ -18,7 +18,7 @@
 		reviewStateToModal,
 		savePendingReviewIds
 	} from '$lib/utils/pendingReview';
-	import { submitReviewDecision } from '$lib/utils/reviewDecision';
+	import { reviewAfterConflict, submitReviewDecision } from '$lib/utils/reviewDecision';
 
 	type ApplyMode = 'auto' | 'manual' | 'skip';
 	type Phase = 'select' | 'review';
@@ -227,6 +227,13 @@
 		const modal = confirmModal;
 		if (!modal || deciding) return;
 		if (!modal.reviewId || !modal.revision) {
+			if (decision === 'cancel') {
+				// No review identity to name: abort the attempt itself (I8).
+				send({ type: 'cancel_apply', job_id: modal.jobId });
+				confirmModal = null;
+				savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), modal.jobId));
+				return;
+			}
 			decisionError = 'This review has no identity yet — reload it before deciding.';
 			return;
 		}
@@ -243,12 +250,14 @@
 		} catch (e: any) {
 			decisionError = e?.message ?? 'The decision was not acknowledged';
 			if (e?.status === 409) {
-				// Stale or already decided: show the current snapshot, if any.
-				try {
-					const fresh = reviewStateToModal(await apiFetch(`/api/applications/${modal.jobId}/review-state`));
-					if (fresh) confirmModal = fresh;
-				} catch {
-					/* no current review — keep the error visible */
+				// Stale or already decided: show the review waiting now, or close
+				// when none is (its buttons could only fail) (I8).
+				const fresh = await reviewAfterConflict(modal.jobId);
+				if (fresh) {
+					confirmModal = fresh;
+				} else {
+					confirmModal = null;
+					savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), modal.jobId));
 				}
 			}
 		} finally {

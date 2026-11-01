@@ -31,15 +31,14 @@ def test_confirmation_text_confirms(text):
 
 
 def test_invalid_fields_mean_the_site_rejected_the_submission():
-    check = classify_page(text="Thank you for applying", invalid_count=2, url="u")
-    assert check.outcome == "rejected"
+    # Review I4: invalid fields on the unchanged page reject; confirmation still wins.
+    assert classify_page(text="Apply", invalid_count=2, url="u", before_url="u").outcome == "rejected"
+    assert classify_page(text="Thank you for applying", invalid_count=2, url="u", before_url="u").outcome == "confirmed"
 
 
-def test_validation_error_text_rejects():
-    assert (
-        classify_page(text="Email: this field is required", invalid_count=0, url="u").outcome
-        == "rejected"
-    )
+def test_validation_error_text_alone_is_unknown():
+    # Review I4: validation-looking text alone is not proof nothing was sent.
+    assert classify_page(text="Email: this field is required", invalid_count=0, url="u").outcome == "unknown"
 
 
 def test_a_page_without_evidence_is_unknown():
@@ -68,6 +67,7 @@ class _FakePage:
     def __init__(self, probe: dict):
         self.clicked: list[str] = []
         self._probe = probe
+        self.url = probe.get("url", "u")
 
     async def click(self, sel, timeout=None):  # noqa: ARG002
         self.clicked.append(sel)

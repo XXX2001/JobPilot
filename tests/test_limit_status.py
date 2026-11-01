@@ -37,62 +37,40 @@ def test_limit_status_fresh_day(test_app: TestClient) -> None:
     assert "T" in data["resets_at"]
 
 
-def test_limit_status_mid_day(test_app: TestClient) -> None:
-    """Adding 3 applied applications today increases used by exactly 3."""
-    # Read baseline before inserting
-    baseline_resp = test_app.get("/api/applications/limit-status")
-    assert baseline_resp.status_code == 200
-    baseline_used: int = baseline_resp.json()["used"]
-
-    today_iso = _today_utc_naive().isoformat()
-    for _ in range(3):
-        resp = test_app.post(
-            "/api/applications",
-            json={"method": "manual", "status": "applied"},
-        )
+def test_hand_recorded_applications_do_not_consume_the_quota(test_app: TestClient) -> None:
+    """W11: the quota guards automated submissions; a manual tracker entry is not one."""
+    baseline: int = test_app.get("/api/applications/limit-status").json()["used"]
+    for status in ("applied", "pending"):
+        resp = test_app.post("/api/applications", json={"method": "manual", "status": status})
         assert resp.status_code == 201
-        app_id = resp.json()["id"]
-        # Set applied_at to today so the endpoint counts it
-        patch = test_app.patch(
-            f"/api/applications/{app_id}",
-            json={"applied_at": today_iso},
-        )
-        assert patch.status_code == 200
-
-    resp = test_app.get("/api/applications/limit-status")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["used"] == baseline_used + 3
+    assert test_app.get("/api/applications/limit-status").json()["used"] == baseline
 
 
-def test_limit_status_at_cap(test_app: TestClient) -> None:
-    """When used reaches the configured limit, used == limit."""
-    # Read current usage and the configured limit
-    baseline_resp = test_app.get("/api/applications/limit-status")
-    assert baseline_resp.status_code == 200
-    baseline_used: int = baseline_resp.json()["used"]
-    limit: int = baseline_resp.json()["limit"]
+def test_limit_status_counts_reservations_up_to_the_cap(test_app: TestClient) -> None:
+    """Engine reservations (the only thing the guard counts) show up in ``used``."""
+    import asyncio
+    import uuid
 
-    needed = max(0, limit - baseline_used)
-    today_iso = _today_utc_naive().isoformat()
-    for _ in range(needed):
-        # ``method='manual'`` so each row satisfies the N2-T3 conditional CHECK
-        # without a match (the daily-limit counter keys off ``status``, not
-        # ``method``, so this still fills the cap as intended).
-        resp = test_app.post(
-            "/api/applications",
-            json={"method": "manual", "status": "pending"},
-        )
-        assert resp.status_code == 201
-        app_id = resp.json()["id"]
-        patch = test_app.patch(
-            f"/api/applications/{app_id}",
-            json={"applied_at": today_iso},
-        )
-        assert patch.status_code == 200
+    from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
+    from backend.database import AsyncSessionLocal
+    from backend.models.job import Job, JobMatch
 
-    resp = test_app.get("/api/applications/limit-status")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["used"] == limit
-    assert data["limit"] == limit
+    async def fill_to_cap() -> int:
+        async with AsyncSessionLocal() as db:
+            tag = uuid.uuid4().hex[:8]
+            job = Job(title="t", company=f"L{tag}", url=f"https://l/{tag}", dedup_hash=f"lim-{tag}")
+            db.add(job)
+            await db.flush()
+            match = JobMatch(job_id=job.id, score=1.0, status="new")
+            db.add(match)
+            await db.commit()
+            guard = await DailyLimitGuard.from_settings(db)
+            while True:
+                try:
+                    await guard.reserve_slot(job_match_id=match.id, method="auto")
+                except DailyLimitExceeded:
+                    return guard.limit
+
+    limit = asyncio.run(fill_to_cap())
+    data = test_app.get("/api/applications/limit-status").json()
+    assert data["used"] == limit == data["limit"]

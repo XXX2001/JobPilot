@@ -18,9 +18,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import TypeAdapter, ValidationError
 
-from backend.api.ws_models import ClientMessage, PatchFields
 from backend.applier.engine import ApplicationEngine
 from backend.applier.form_filler import PlaywrightFormFiller
 
@@ -30,21 +28,8 @@ from backend.applier.form_filler import PlaywrightFormFiller
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def test_client_message_accepts_patch_fields():
-    adapter = TypeAdapter(ClientMessage)
-    msg = adapter.validate_python(
-        {"type": "patch_fields", "job_id": 7, "fields": {"#name": "Alice"}}
-    )
-    assert isinstance(msg, PatchFields)
-    assert msg.job_id == 7
-    assert msg.fields == {"#name": "Alice"}
-
-
-def test_client_message_rejects_malformed_patch_fields():
-    adapter = TypeAdapter(ClientMessage)
-    # Missing the required ``fields`` mapping.
-    with pytest.raises(ValidationError):
-        adapter.validate_python({"type": "patch_fields", "job_id": 7})
+# W07: the WS patch_fields/confirm_submit messages were replaced by the
+# acknowledged review-decision command (tests/test_review_decision.py).
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -168,99 +153,5 @@ def _no_captcha(monkeypatch) -> None:
     monkeypatch.setattr(cap, "check_and_handle_captcha", AsyncMock(return_value=False))
 
 
-@pytest.mark.asyncio
-async def test_patches_refilled_before_submit(monkeypatch):
-    """When patches exist for the job, ``page.fill`` is called with the
-    patched selector/value before ``page.click(submit)``."""
-    _no_captcha(monkeypatch)
-
-    page = MagicMock()
-    page.goto = AsyncMock()
-    page.content = AsyncMock(return_value="<form><input name='name'/></form>")
-    page.fill = AsyncMock()
-    page.set_input_files = AsyncMock()
-    page.screenshot = AsyncMock(return_value=b"img")
-    page.click = AsyncMock()
-    _patch_playwright(monkeypatch, page)
-
-    llm = _llm_returning(
-        '{"fields": [{"selector": "#name", "value": "Auto"}],'
-        ' "file_inputs": [], "submit_selector": "#submit"}'
-    )
-
-    filler = PlaywrightFormFiller(
-        llm_client=llm,
-        on_get_patches=lambda job_id: {"#name": "Edited", "#phone": "123"},
-    )
-
-    confirm = asyncio.Event()
-    confirm.set()
-    cancel = asyncio.Event()
-
-    result = await filler.fill_and_submit(
-        apply_url="https://example.com/job",
-        job_id=42,
-        confirm_event=confirm,
-        cancel_event=cancel,
-    )
-
-    assert result["status"] == "applied"
-
-    # Both patched selectors must have been re-filled.
-    fill_calls = [c for c in page.fill.await_args_list]
-    patched = {(c.args[0], c.args[1]) for c in fill_calls if c.args and c.args[0] in ("#name", "#phone")}
-    assert ("#name", "Edited") in patched
-    assert ("#phone", "123") in patched
-
-    # Patch fills must happen before the submit click. Inspect the unified
-    # call log on the shared mock to assert ordering.
-    names = [c[0] for c in page.mock_calls]
-    assert "click" in names
-    last_fill_idx = max(i for i, c in enumerate(page.mock_calls) if c[0] == "fill")
-    click_idx = next(i for i, c in enumerate(page.mock_calls) if c[0] == "click")
-    assert last_fill_idx < click_idx
-
-
-@pytest.mark.asyncio
-async def test_failing_patch_logs_warning_but_still_submits(monkeypatch, caplog):
-    """A failing ``page.fill`` for one patch logs a warning but the submit
-    click still fires."""
-    _no_captcha(monkeypatch)
-
-    def fill_side_effect(selector, value, **kwargs):
-        if selector == "#broken":
-            raise RuntimeError("element not found")
-        return None
-
-    page = MagicMock()
-    page.goto = AsyncMock()
-    page.content = AsyncMock(return_value="<form></form>")
-    page.fill = AsyncMock(side_effect=fill_side_effect)
-    page.set_input_files = AsyncMock()
-    page.screenshot = AsyncMock(return_value=b"img")
-    page.click = AsyncMock()
-    _patch_playwright(monkeypatch, page)
-
-    llm = _llm_returning(
-        '{"fields": [], "file_inputs": [], "submit_selector": "#submit"}'
-    )
-
-    filler = PlaywrightFormFiller(
-        llm_client=llm,
-        on_get_patches=lambda job_id: {"#broken": "x", "#ok": "y"},
-    )
-
-    confirm = asyncio.Event()
-    confirm.set()
-
-    with caplog.at_level(logging.WARNING):
-        result = await filler.fill_and_submit(
-            apply_url="https://example.com/job",
-            job_id=99,
-            confirm_event=confirm,
-            cancel_event=asyncio.Event(),
-        )
-
-    assert result["status"] == "applied"
-    page.click.assert_awaited_once()
-    assert any("#broken" in rec.getMessage() for rec in caplog.records)
+# W08: Tier-1 correction handling (re-fill, read-back, re-review, never submit
+# on a failed correction) is covered end to end in tests/test_submission_boundary.py.

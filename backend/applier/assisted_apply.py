@@ -7,7 +7,8 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-from backend.applier import RESULT_ASSISTED, RESULT_FAILED
+from backend.applier import RESULT_AWAITING_USER, RESULT_FAILED
+from backend.applier._strategy_common import restricted_tools
 from backend.applier._strategy_common import (
     PHONE_NUMBER_NOTE,
     build_browser,
@@ -50,7 +51,7 @@ class AssistedApplyStrategy:
 
     def __init__(
         self,
-        on_review: Optional[Callable[..., None]] = None,
+        on_review: Optional[Callable[..., Optional[dict]]] = None,
         on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
         # Engine callback invoked at apply_review broadcast time so the
@@ -115,8 +116,9 @@ class AssistedApplyStrategy:
                     letter_pdf=letter_pdf,
                 )
                 return ApplicationResult(
-                    status="assisted",
+                    status=RESULT_AWAITING_USER,
                     method="assisted",
+                    next_action_url=apply_url,
                     message=(
                         "Form pre-filled. Please review the open browser window "
                         "and submit manually when ready."
@@ -134,8 +136,9 @@ class AssistedApplyStrategy:
             import webbrowser
             webbrowser.open(apply_url)
             return ApplicationResult(
-                status="assisted",
+                status=RESULT_AWAITING_USER,
                 method="assisted",
+                next_action_url=apply_url,
                 message=f"browser-use not installed. Opened {apply_url} manually.",
             )
 
@@ -175,7 +178,7 @@ class AssistedApplyStrategy:
         else:
             logger.warning("[Tier 2 assisted] No saved session — browser will not be logged in")
 
-        browser = build_browser(browser_kwargs, state_path)
+        browser = build_browser(browser_kwargs, state_path, apply_url=apply_url)
         self._active_browser = browser
         try:
             from backend.llm.factory import make_browser_llm
@@ -189,16 +192,29 @@ class AssistedApplyStrategy:
             agent = Agent(
                 task=task, llm=llm, browser=browser,
                 available_file_paths=file_paths or None,
+                # W08: no navigation, scripts or file writes while preparing.
+                tools=restricted_tools(allow_upload=True),
                 # Retry malformed action-JSON (common with local reasoning
                 # models) on a fresh client instead of aborting the run.
                 fallback_llm=make_browser_llm(),
             )
             await agent.run()
             logger.info("[Tier 2 assisted] Agent completed for %s", apply_url)
+            from backend.applier.auto_apply import submitted_during_preparation
+
+            early = await submitted_during_preparation(browser)
+            if early is not None:  # W08: the agent clicked submit on its own
+                return early.model_copy(update={"method": "assisted"})
         except Exception as exc:
             logger.exception(
                 "Assisted apply agent failed for %s: %s", apply_url, exc
             )
+            # Review I3: the agent may have clicked submit before it crashed.
+            from backend.applier.auto_apply import submitted_during_preparation
+
+            early = await submitted_during_preparation(browser)
+            if early is not None:
+                return early.model_copy(update={"method": "assisted"})
             # Do NOT return a success "assisted" result — the agent
             # never finished pre-filling, so there is nothing for the
             # user to review. Surface the failure to the caller. This
@@ -215,8 +231,9 @@ class AssistedApplyStrategy:
 
         # Browser stays open — user reviews and submits manually
         return ApplicationResult(
-            status=RESULT_ASSISTED,
+            status=RESULT_AWAITING_USER,
             method="assisted",
+            next_action_url=apply_url,
             message=(
                 "Form pre-filled via the LLM agent. Please review the open browser "
                 "window and submit manually when ready."

@@ -14,6 +14,8 @@
 | [File Map](file-map.md) | Developers | Every backend file, its responsibility, internal deps, callers |
 | [File Map (frontend)](frontend-file-map.md) | Developers | Every SvelteKit file, its responsibility, internal deps, backend endpoints used |
 | [Code Review](code-review.md) | Developers | How to run a code review: quality gates and what reviewers check |
+| [Software Review](reviews/2026-11-01-software-review.md) | Maintainers | Findings at the reviewed revision, technology critique, and intelligence, latency, and token improvements |
+| [Engineering Improvement and Cleanup Plan](reviews/2026-11-01-improvement-plan.md) | Maintainers / Contributors | Phased implementation backlog, acceptance criteria, migrations, cleanup, evaluation, and release gates |
 
 ## Module Reference
 

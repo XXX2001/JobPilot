@@ -36,6 +36,17 @@
 		}
 	}
 
+	async function handleConfirm(e: CustomEvent<{ id: number }>) {
+		try {
+			const updated = await apiFetch<Application>(`/api/applications/${e.detail.id}/confirm-submitted`, {
+				method: 'POST'
+			});
+			applications = applications.map((a) => (a.id === updated.id ? { ...a, ...updated } : a));
+		} catch (err: any) {
+			error = err.message ?? 'Failed to confirm submission';
+		}
+	}
+
 	async function handleUpdate(e: CustomEvent<{ id: number; status: string }>) {
 		const { id, status } = e.detail;
 		// Optimistic update
@@ -193,6 +204,7 @@
 				{applications}
 				on:update={handleUpdate}
 				on:addEvent={handleAddEvent}
+				on:confirm={handleConfirm}
 			/>
 		</div>
 	{/if}
@@ -218,6 +230,7 @@
 				applications={followUpApplications}
 				on:update={handleUpdate}
 				on:addEvent={handleAddEvent}
+				on:confirm={handleConfirm}
 			/>
 		</div>
 	{/if}

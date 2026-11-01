@@ -21,6 +21,9 @@ export interface ReviewModal {
 	method: string;
 	fields: Record<string, string>;
 	screenshot?: string;
+	/** W07: the snapshot an approval must name. */
+	reviewId?: string;
+	revision?: number;
 }
 
 /** Resolve `sessionStorage` only when running in a browser context. */
@@ -93,6 +96,8 @@ export function reviewStateToModal(payload: unknown): ReviewModal | null {
 		job_id?: unknown;
 		filled_fields?: unknown;
 		screenshot_b64?: unknown;
+		review_id?: unknown;
+		revision?: unknown;
 	};
 	if (typeof snapshot.job_id !== 'number') return null;
 	const fields =
@@ -103,6 +108,8 @@ export function reviewStateToModal(payload: unknown): ReviewModal | null {
 		jobId: snapshot.job_id,
 		method: 'auto',
 		fields,
-		screenshot: (snapshot.screenshot_b64 as string | null) ?? undefined
+		screenshot: (snapshot.screenshot_b64 as string | null) ?? undefined,
+		reviewId: typeof snapshot.review_id === 'string' ? snapshot.review_id : undefined,
+		revision: typeof snapshot.revision === 'number' ? snapshot.revision : undefined
 	};
 }

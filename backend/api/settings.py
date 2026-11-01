@@ -162,6 +162,7 @@ class SetupStatus(BaseModel):
     tectonic_found: bool
     base_cv_uploaded: bool
     setup_complete: bool
+    auto_submit_enabled: bool = False
 
 
 class CvUploadResponse(BaseModel):
@@ -510,6 +511,7 @@ async def get_setup_status(db: DBSession):
         tectonic_found=bool(tectonic_found),
         base_cv_uploaded=base_cv_uploaded,
         setup_complete=setup_complete,
+        auto_submit_enabled=settings.jobpilot_auto_submit_enabled,
     )
 
 

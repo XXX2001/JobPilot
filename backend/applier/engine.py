@@ -10,6 +10,8 @@ unchanged.
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+import uuid
 import logging
 from enum import Enum
 from pathlib import Path
@@ -18,14 +20,15 @@ from typing import Optional, cast
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.applier import RESULT_CANCELLED, RESULT_FAILED
+from backend.applier import RESULT_CANCELLED, RESULT_CONFIRMED, RESULT_FAILED, RESULT_NEEDS_VERIFICATION
 from backend.applier.assisted_apply import AssistedApplyStrategy
 from backend.applier.auto_apply import AutoApplyStrategy
 from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
 from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
+from backend.utils.time import utc_now
 from backend.applier.recorder import ApplicationRecorder
 from backend.applier.state import ApplyContext, State, Statechart, Transition
-from backend.defaults import DAILY_LIMIT, MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
+from backend.defaults import MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,10 @@ class ApplicantInfo(BaseModel):
     additional_answers_json: str = Field(default="", max_length=MAX_LEN_ADDITIONAL_ANSWERS)
 
 
+class ReviewConflict(Exception):
+    """A review decision does not match the review currently awaiting one (W07)."""
+
+
 class ApplicationEngine:
     """Routes application requests to AUTO / ASSISTED / MANUAL strategies.
 
@@ -53,7 +60,7 @@ class ApplicationEngine:
 
     def __init__(
         self,
-        daily_limit: int = DAILY_LIMIT,
+        daily_limit: int | None = None,
     ) -> None:
         self._daily_limit = daily_limit
 
@@ -77,6 +84,11 @@ class ApplicationEngine:
         # Per-job user edits to mis-filled review fields (selector→new value),
         # applied by the form filler right before submit.
         self._pending_patches: dict[int, dict[str, str]] = {}
+        # W07: per-job review revision counter and acknowledged decisions
+        # (idempotency key → (fingerprint, ack)); bounded, survives the attempt
+        # so a client retrying a lost response still gets its ack.
+        self._review_revisions: dict[int, int] = {}
+        self._decisions: "OrderedDict[tuple[int, str], tuple[tuple, dict]]" = OrderedDict()
         # T4a: guard the re-entrancy check (read-then-write of the events
         # dicts) so two concurrent apply() calls for the same job_match_id
         # cannot both pass the membership check before either one inserts.
@@ -90,8 +102,65 @@ class ApplicationEngine:
     #  WS signal handlers (called by ws.py on incoming client messages)  #
     # ------------------------------------------------------------------ #
 
+    def decide(
+        self,
+        job_id: int,
+        *,
+        review_id: str,
+        revision: int,
+        decision: str,
+        fields: dict[str, str],
+        idempotency_key: str,
+    ) -> dict:
+        """Apply one review decision to the review awaiting it (W07 / F11).
+
+        Approval (with its field corrections) is accepted only for the
+        current snapshot of an attempt that is waiting; premature, stale,
+        unknown or already-consumed reviews raise :class:`ReviewConflict`.
+        A repeated identical command returns the saved acknowledgment.
+        """
+        fingerprint = (review_id, revision, decision, tuple(sorted(fields.items())))
+        saved = self._decisions.get((job_id, idempotency_key))
+        if saved is not None:
+            if saved[0] != fingerprint:
+                raise ReviewConflict("This idempotency key was already used for a different decision.")
+            return saved[1]
+
+        pending = self._pending_reviews.get(job_id)
+        if pending is None or job_id not in self._confirm_events:
+            raise ReviewConflict("No review is awaiting a decision for this job (not ready, or already decided).")
+        if pending.get("review_id") != review_id or pending.get("revision") != revision:
+            raise ReviewConflict("This review is out of date; reload it and review the current values.")
+        if decision == "approve":
+            # W08: corrections may only target fields of the server's own
+            # snapshot (no client-chosen selectors), and only real changes
+            # count — an unchanged echo is not a correction.
+            inventory = pending.get("filled_fields") or {}
+            unknown = sorted(set(fields) - set(inventory))
+            if unknown:
+                raise ReviewConflict(f"Unknown review field(s): {', '.join(unknown[:5])}.")
+            changed = {k: v for k, v in fields.items() if inventory.get(k) != v}
+            self.signal_patch_fields(job_id, changed)
+            self.signal_confirm(job_id)
+        elif decision == "cancel":
+            self.signal_cancel(job_id)
+        else:
+            raise ReviewConflict(f"Unknown decision {decision!r}.")
+
+        ack = {
+            "job_id": job_id,
+            "review_id": review_id,
+            "revision": revision,
+            "decision": decision,
+            "accepted_at": utc_now().isoformat(),
+        }
+        self._decisions[(job_id, idempotency_key)] = (fingerprint, ack)
+        while len(self._decisions) > 256:  # ponytail: in-memory; durable decisions are W14/W15
+            self._decisions.popitem(last=False)
+        return ack
+
     def signal_confirm(self, job_id: int) -> None:
-        """Trigger confirmation for *job_id* (``confirm_submit`` WS message)."""
+        """Release the waiting strategy for *job_id*. Callers go through :meth:`decide`."""
         if job_id in self._confirm_events:
             self._confirm_events[job_id].set()
         self._pending_reviews.pop(job_id, None)
@@ -119,13 +188,23 @@ class ApplicationEngine:
 
     def record_pending_review(
         self, job_id: int, *, filled_fields: dict, screenshot_b64: Optional[str]
-    ) -> None:
-        """Cache the review snapshot so a reconnecting client can fetch it."""
-        self._pending_reviews[job_id] = {
+    ) -> dict:
+        """Record a new review snapshot (new ``review_id`` and next revision) and return it.
+
+        The snapshot is cached so a reconnecting client can fetch it; the
+        strategy broadcasts the returned identity, and approval must name it.
+        """
+        revision = self._review_revisions.get(job_id, 0) + 1
+        self._review_revisions[job_id] = revision
+        snapshot = {
             "job_id": job_id,
+            "review_id": uuid.uuid4().hex,
+            "revision": revision,
             "filled_fields": filled_fields,
             "screenshot_b64": screenshot_b64,
         }
+        self._pending_reviews[job_id] = snapshot
+        return snapshot
 
     def get_pending_review(self, job_id: int) -> Optional[dict]:
         """Return the cached snapshot for *job_id*, or None."""
@@ -160,7 +239,13 @@ class ApplicationEngine:
         # ── Daily-limit reservation (non-MANUAL only) ───────────────────
         reserved_app_id: Optional[int] = None
         if mode != ApplyMode.MANUAL:
-            guard = DailyLimitGuard(db=db, limit=self._daily_limit)
+            # W11: the configured limit is resolved at reservation time (the
+            # constructor value only overrides it, e.g. in tests).
+            guard = (
+                DailyLimitGuard(db=db, limit=self._daily_limit)
+                if self._daily_limit is not None
+                else await DailyLimitGuard.from_settings(db)
+            )
             try:
                 reserved_app_id = await guard.reserve_slot(
                     job_match_id=job_match_id,
@@ -244,7 +329,13 @@ class ApplicationEngine:
             self._pending_reviews.pop(job_match_id, None)
             self._pending_patches.pop(job_match_id, None)
 
-        return ApplicationResult(status=status, method=method, message=message or "")
+        sr = ctx.strategy_result
+        extra = (
+            {"evidence": sr.evidence, "next_action_url": sr.next_action_url}
+            if isinstance(sr, ApplicationResult) and sr.status == status
+            else {}
+        )
+        return ApplicationResult(status=status, method=method, message=message or "", **extra)
 
     # ------------------------------------------------------------------ #
     #  FSM transition table builder                                        #
@@ -349,28 +440,29 @@ class ApplicationEngine:
                     result_method=result.method,
                     result_message=result.message or None,
                     reserved_app_id=c.reserved_app_id,
+                    evidence=result.evidence,
                 )
             except Exception as exc:
                 logger.exception("record() failed after strategy returned %s", result.status)
-                # EH-03: remote may have submitted but local record failed.
-                # Release the reserved slot (best-effort).
-                if c.reserved_app_id is not None:
+                possibly_submitted = result.status in (RESULT_CONFIRMED, RESULT_NEEDS_VERIFICATION)
+                # Review I5: a remote submission that may have happened keeps
+                # its reservation (the pending row still counts) — releasing it
+                # would let a retry duplicate the submission. Only an outcome
+                # that cannot have submitted (prepared for the user) releases.
+                if c.reserved_app_id is not None and not possibly_submitted:
                     try:
                         await recorder.release_reserved_slot(c.db, c.reserved_app_id)
                     except Exception:
                         pass  # Already logged inside release_reserved_slot.
-                # EH-03: remote submit succeeded but local record failed.
                 # ANY exception here routes to REMOTE_SUBMITTED_LOCAL_FAILED so the
                 # db_write_failed audit event is always persisted (and the caller is
-                # told to verify on the job site).  Previously only ApplicationRecordError
-                # was checked — that left generic exceptions silently routing to FAILED
-                # and losing the audit trail.
-                c.outcome_status = RESULT_FAILED
+                # told to verify on the job site).
+                c.outcome_status = RESULT_NEEDS_VERIFICATION if possibly_submitted else RESULT_FAILED
                 c.outcome_method = result.method
                 c.outcome_message = (
                     "Application may have been submitted to the remote site, "
                     "but recording it locally failed: "
-                    f"{exc}. Please verify on the job site and retry if needed."
+                    f"{exc}. Check the job site before applying again."
                 )
                 return State.REMOTE_SUBMITTED_LOCAL_FAILED
 

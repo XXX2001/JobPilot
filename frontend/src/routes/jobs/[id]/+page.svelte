@@ -23,7 +23,8 @@
 		Sparkles,
 		Target
 	} from 'lucide-svelte';
-	import type { QueueMatch, DiffEntry } from '$lib/types/api';
+	import type { QueueMatch, DiffEntry, SetupStatus } from '$lib/types/api';
+	import { describeApplyResult, type ApplyResultLike } from '$lib/utils/applyOutcome';
 
 	interface JobScoreResponse {
 		job_id: number;
@@ -127,9 +128,15 @@
 		return `${Math.floor(hrs / 24)}d ago`;
 	};
 
+	/** W02: Auto apply is offered only when the server enables automatic submission. */
+	let autoSubmitEnabled = $state(false);
+
 	async function load() {
 		loading = true;
 		error = '';
+		apiFetch<SetupStatus>('/api/settings/status')
+			.then((s) => (autoSubmitEnabled = s.auto_submit_enabled))
+			.catch(() => (autoSubmitEnabled = false));
 		try {
 			matchData = await apiFetch<QueueMatch>(`/api/queue/${matchId}`);
 			try {
@@ -202,20 +209,25 @@
 		}
 	}
 
+	let nextActionUrl = $state('');
+
 	async function applyWith(method: string) {
 		applyLoading = method;
 		error = '';
 		successMsg = '';
 		try {
-			const res = await apiFetch<{ status: string; method: string; message: string }>(`/api/applications/${matchId}/apply`, {
+			const res = await apiFetch<ApplyResultLike>(`/api/applications/${matchId}/apply`, {
 				method: 'POST',
 				body: JSON.stringify({ method })
 			});
-			successMsg = method === 'manual'
-				? (res.message || 'Job opened — apply manually. Tailored CV copied to ~/Downloads.')
-				: method === 'assisted'
-				? 'Assisted apply started — follow the browser instructions.'
-				: 'Auto-apply queued — confirm in the pop-up when ready.';
+			// Review I10: show the domain outcome, not "HTTP 200 = applied".
+			const outcome = describeApplyResult(res);
+			if (outcome.ok) {
+				successMsg = outcome.text;
+				nextActionUrl = outcome.url ?? '';
+			} else {
+				error = outcome.text;
+			}
 		} catch (e: any) {
 			error = e.message ?? 'Apply failed';
 		} finally {
@@ -295,6 +307,9 @@
 		<div class="flex items-center gap-2 text-xs text-green-400 bg-green-500/10 border border-green-500/20 rounded-md px-3 py-2 mb-4">
 			<CheckCircle2 size={13} />
 			{successMsg}
+			{#if nextActionUrl}
+				<a href={nextActionUrl} target="_blank" rel="noopener" class="underline">Open the application page</a>
+			{/if}
 			<button onclick={() => (successMsg = '')} class="ml-auto hover:text-green-300">✕</button>
 		</div>
 	{/if}
@@ -304,6 +319,7 @@
 	<div class="flex items-center gap-2 mb-6 p-4 bg-card border border-border rounded-lg">
 		<span class="text-xs text-muted-foreground mr-2">Apply via:</span>
 
+		{#if autoSubmitEnabled}
 		<button
 			onclick={() => applyWith('auto')}
 			disabled={!!applyLoading}
@@ -312,6 +328,7 @@
 			<Zap size={12} />
 			{applyLoading === 'auto' ? 'Starting…' : 'Auto Apply'}
 		</button>
+		{/if}
 
 		<button
 			onclick={() => applyWith('assisted')}

@@ -44,7 +44,9 @@ def is_multi_step_site(url: str) -> bool:
     return hostname.lstrip("www.") in {h.lstrip("www.") for h in _MULTI_STEP_DOMAINS}
 
 
-def build_browser(browser_kwargs: dict, saved_session_path: Path | None) -> "Browser":
+def build_browser(
+    browser_kwargs: dict, saved_session_path: Path | None, *, apply_url: str | None = None
+) -> "Browser":
     """Construct a browser-use ``Browser``, loading a saved session if present.
 
     Mutates *browser_kwargs* in place to add ``storage_state`` /
@@ -62,6 +64,15 @@ def build_browser(browser_kwargs: dict, saved_session_path: Path | None) -> "Bro
     # flags the browser process dies before its CDP port comes up and the
     # whole apply run fails at launch. They are harmless on a desktop, so we
     # set them unconditionally rather than trying to detect the environment.
+    if apply_url:
+        # W08: page text cannot send the agent elsewhere — navigation is
+        # limited to the apply site (and its parent domain for SSO/ATS hops).
+        host = (urlparse(apply_url).hostname or "").lower()
+        parent = ".".join(host.split(".")[-2:])  # ponytail: no public-suffix list (co.uk etc. widen to *.co.uk)
+        browser_kwargs["allowed_domains"] = sorted({host, parent, f"*.{parent}"})
+    # W08: a site-delivered download must never become an uploadable file.
+    browser_kwargs["accept_downloads"] = False
+    browser_kwargs["auto_download_pdfs"] = False
     browser_kwargs.setdefault("chromium_sandbox", False)
     extra_args = ["--no-sandbox", "--disable-dev-shm-usage"]
     existing_args = list(browser_kwargs.get("args") or [])
@@ -86,3 +97,26 @@ __all__ = [
     "build_browser",
     "PHONE_NUMBER_NOTE",
 ]
+
+
+#: W08: actions the preparation/submit browser agents never get — page text
+#: cannot redirect the attempt, run scripts, or write files.
+# ``navigate`` stays (browser-use opens the task URL through it); where it can
+# go is limited by ``allowed_domains`` in build_browser.
+_FORBIDDEN_ACTIONS = ("search", "switch", "close", "evaluate",
+                      "write_file", "replace_file", "read_file", "save_as_pdf")
+
+
+def restricted_tools(*, allow_upload: bool):
+    """browser-use ``Tools`` without navigation/script/file actions.
+
+    Uploads stay limited to the Agent's ``available_file_paths``; the submit
+    agent gets no upload action at all. ``click`` cannot be narrowed to "not
+    the submit button", so preparation is additionally checked by
+    ``submitted_during_preparation``.
+    """
+    from browser_use.tools.service import Tools  # type: ignore
+
+    excluded = list(_FORBIDDEN_ACTIONS) + ([] if allow_upload else ["upload_file"])
+    return Tools(exclude_actions=excluded)
+

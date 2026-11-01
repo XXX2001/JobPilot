@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from backend.applier.manual_apply import ApplicationResult
 
-VALID_STATUSES = ["applied", "assisted", "manual", "cancelled", "failed"]
+VALID_STATUSES = ["confirmed", "awaiting_user_submission", "needs_verification", "cancelled", "failed"]
 VALID_METHODS = ["auto", "assisted", "manual"]
 
 
@@ -27,7 +27,7 @@ def test_typo_status_raises() -> None:
 
 def test_invalid_method_raises() -> None:
     with pytest.raises(ValidationError):
-        ApplicationResult(status="applied", method="robot")
+        ApplicationResult(status="confirmed", method="robot")
 
 
 @pytest.mark.parametrize(
@@ -42,6 +42,6 @@ def test_all_valid_combinations_construct(status: str, method: str) -> None:
 
 
 def test_message_defaults_and_overrides() -> None:
-    assert ApplicationResult(status="applied", method="auto").message == ""
-    result = ApplicationResult(status="manual", method="manual", message="hello")
+    assert ApplicationResult(status="confirmed", method="auto").message == ""
+    result = ApplicationResult(status="awaiting_user_submission", method="manual", message="hello")
     assert result.message == "hello"

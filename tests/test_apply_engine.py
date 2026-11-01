@@ -69,7 +69,7 @@ async def test_manual_apply_calls_webbrowser_open():
     with patch("backend.applier.manual_apply.webbrowser.open") as mock_open:
         result = await strategy.apply(apply_url="https://jobs.example.com/42")
     mock_open.assert_called_once_with("https://jobs.example.com/42")
-    assert result.status == "manual"
+    assert result.status == "awaiting_user_submission"
     assert result.method == "manual"
 
 
@@ -78,8 +78,8 @@ async def test_manual_apply_browser_fail_returns_message():
     strategy = ManualApplyStrategy()
     with patch("backend.applier.manual_apply.webbrowser.open", side_effect=OSError("no browser")):
         result = await strategy.apply(apply_url="https://jobs.example.com/43")
-    assert result.status == "manual"
-    assert "Could not open browser" in result.message
+    assert result.status == "awaiting_user_submission"
+    assert "Could not open a browser" in result.message
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -98,7 +98,7 @@ async def test_assisted_apply_fallback_when_no_browser_use(monkeypatch):
     with patch("webbrowser.open") as mock_open:
         strategy = AssistedApplyStrategy()
         result = await strategy.apply(apply_url="https://example.com/job")
-    assert result.status == "assisted"
+    assert result.status == "awaiting_user_submission"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -120,7 +120,7 @@ async def test_auto_apply_fallback_when_no_browser_use(monkeypatch):
             job_id=99,
             apply_url="https://example.com/job",
         )
-    assert result.status == "manual"
+    assert result.status == "awaiting_user_submission"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -154,7 +154,7 @@ async def test_engine_manual_apply_records_application():
             apply_url="https://jobs.example.com/1",
         )
 
-    assert result.status == "manual"
+    assert result.status == "awaiting_user_submission"
     assert result.method == "manual"
     db.commit.assert_called()
 
@@ -284,7 +284,7 @@ async def test_auto_apply_tier1_success_no_tier2():
     from unittest.mock import AsyncMock, patch
 
     strategy = AutoApplyStrategy()
-    fake_result = {"status": "applied", "filled_fields": {}, "screenshot_b64": None}
+    fake_result = {"status": "confirmed", "evidence": "Thanks for applying", "filled_fields": {}, "screenshot_b64": None}
 
     with patch(_SANITIZE, side_effect=lambda u: u), \
          patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock(return_value=fake_result)) as mock_t1, \
@@ -293,7 +293,7 @@ async def test_auto_apply_tier1_success_no_tier2():
 
     mock_t1.assert_awaited_once()
     mock_t2.assert_not_awaited()
-    assert result.status == "applied"
+    assert result.status == "confirmed"
 
 
 @pytest.mark.asyncio
@@ -307,12 +307,12 @@ async def test_auto_apply_tier1_failure_falls_back_to_tier2():
 
     with patch(_SANITIZE, side_effect=lambda u: u), \
          patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock(side_effect=RuntimeError("preflight failed"))) as mock_t1, \
-         patch.object(strategy, "_browser_use_apply", new=AsyncMock(return_value=ApplicationResult(status="applied", method="auto"))) as mock_t2:
+         patch.object(strategy, "_browser_use_apply", new=AsyncMock(return_value=ApplicationResult(status="confirmed", method="auto"))) as mock_t2:
         result = await strategy.apply(job_id=2, apply_url="https://example.com/job")
 
     mock_t1.assert_awaited_once()
     mock_t2.assert_awaited_once()
-    assert result.status == "applied"
+    assert result.status == "confirmed"
 
 
 @pytest.mark.asyncio
@@ -346,7 +346,7 @@ async def test_auto_apply_tier1_disabled_goes_straight_to_tier2(monkeypatch):
 
     with patch(_SANITIZE, side_effect=lambda u: u), \
          patch.object(strategy._form_filler, "fill_and_submit", new=AsyncMock()) as mock_t1, \
-         patch.object(strategy, "_browser_use_apply", new=AsyncMock(return_value=ApplicationResult(status="applied", method="auto"))) as mock_t2:
+         patch.object(strategy, "_browser_use_apply", new=AsyncMock(return_value=ApplicationResult(status="confirmed", method="auto"))) as mock_t2:
         result = await strategy.apply(job_id=4, apply_url="https://example.com/job")
 
     mock_t1.assert_not_awaited()
@@ -413,7 +413,7 @@ async def test_assisted_apply_tier1_success():
         result = await strategy.apply(apply_url="https://example.com/job", full_name="Alice")
 
     mock_t1.assert_awaited_once()
-    assert result.status == "assisted"
+    assert result.status == "awaiting_user_submission"
     assert "pre-filled" in result.message.lower()
 
 
@@ -435,40 +435,7 @@ async def test_assisted_apply_tier1_failure_falls_back():
          patch.object(mod, "Browser", MagicMock()):
         result = await strategy.apply(apply_url="https://example.com/job")
 
-    assert result.status == "assisted"
+    assert result.status == "awaiting_user_submission"
 
 
-@pytest.mark.asyncio
-async def test_resolve_documents_returns_cv_and_letter_paths():
-    """_resolve_documents queries tailored_documents and returns Path objects."""
-    from backend.api.applications import _resolve_documents
-    from backend.models.document import TailoredDocument
-    from unittest.mock import AsyncMock, MagicMock
-    from pathlib import Path
-
-    cv_doc = MagicMock(spec=TailoredDocument)
-    cv_doc.pdf_path = "/data/cvs/cv.pdf"
-    letter_doc = MagicMock(spec=TailoredDocument)
-    letter_doc.pdf_path = "/data/letters/letter.pdf"
-
-    db = AsyncMock()
-    # Each .execute() call returns an object whose .scalar_one_or_none() gives the doc
-    db.execute.return_value.scalar_one_or_none = MagicMock(side_effect=[cv_doc, letter_doc])
-
-    cv_path, letter_path = await _resolve_documents(match_id=42, db=db)
-    assert cv_path == Path("/data/cvs/cv.pdf")
-    assert letter_path == Path("/data/letters/letter.pdf")
-
-
-@pytest.mark.asyncio
-async def test_resolve_documents_returns_none_when_no_docs():
-    """_resolve_documents returns (None, None) when no tailored docs exist."""
-    from backend.api.applications import _resolve_documents
-    from unittest.mock import AsyncMock, MagicMock
-
-    db = AsyncMock()
-    db.execute.return_value.scalar_one_or_none = MagicMock(return_value=None)
-
-    cv_path, letter_path = await _resolve_documents(match_id=99, db=db)
-    assert cv_path is None
-    assert letter_path is None
+# _resolve_documents was replaced by W04 explicit selection; see tests/test_document_selection.py.

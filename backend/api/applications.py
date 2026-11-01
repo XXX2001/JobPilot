@@ -6,18 +6,22 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import exists, func, select
 
 from backend.api.deps import DBSession
-from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED
-from backend.applier.daily_limit import COUNTABLE_STATUSES
+from backend.applier import (
+    LEGACY_APPLIED_ALIASES,
+    STATUS_APPLIED,
+    STATUS_AWAITING_SUBMISSION,
+    STATUS_NEEDS_VERIFICATION,
+)
 from backend.applier.manual_apply import ApplicationResult
-from backend.defaults import DAILY_LIMIT
+from backend.config import DATA_DIR
+from backend.utils.time import utc_now
 from backend.models.application import Application, ApplicationEvent
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch
-from backend.models.user import SearchSettings
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +50,9 @@ class ApplicationOut(BaseModel):
     notes: Optional[str]
     error_log: Optional[str]
     created_at: datetime
+    # W06: "destination" | "user" | "legacy_unknown" for applied rows.
+    confirmation_source: Optional[str] = None
+    confirmation_evidence: Optional[str] = None
     events: list[ApplicationEventOut] = []
     # Denormalized job fields for display
     job_title: Optional[str] = None
@@ -67,7 +74,8 @@ class ApplicationListOut(BaseModel):
 # them (deep-dive HIGH-2 in
 # docs/reports/2026-05-23-codebase-deep-dive/01-app-shell-and-api.md).
 ApplicationStatus = Literal[
-    "pending", "applied", "cancelled", "failed", "interview", "offer", "rejected"
+    "pending", "applied", "cancelled", "failed", "awaiting_submission",
+    "needs_verification", "interview", "offer", "rejected",
 ]
 
 
@@ -244,28 +252,15 @@ async def list_applications(
 async def get_limit_status(db: DBSession) -> LimitStatusOut:
     """Return today's application usage against the configured daily limit.
 
-    Reads the same counter as :class:`~backend.applier.daily_limit.DailyLimitGuard`:
-    Application rows whose ``applied_at`` is today (UTC date) and whose
-    ``status`` is in ``{"applied", "pending"}`` (plus legacy aliases).
-
-    The ``daily_limit`` is read from :class:`~backend.models.user.SearchSettings`
-    row id=1; falls back to :data:`~backend.defaults.DAILY_LIMIT` (10) if
-    no settings row exists.
+    Uses :class:`~backend.applier.daily_limit.DailyLimitGuard` itself — the
+    same configured limit, reservation count and UTC day as the engine.
 
     ``resets_at`` is the next UTC midnight in ISO 8601 format.
     """
-    # ── Resolve the configured limit ──────────────────────────────────────────
-    ss_result = await db.execute(select(SearchSettings).where(SearchSettings.id == 1))
-    ss = ss_result.scalar_one_or_none()
-    limit = (ss.daily_limit if ss is not None else None) or DAILY_LIMIT
+    from backend.applier.daily_limit import DailyLimitGuard
 
-    # ── Count today's applications (same SQL as DailyLimitGuard.remaining_today) ──
-    today = datetime.now(timezone.utc).date()
-    stmt = select(func.count(Application.id)).where(
-        Application.applied_at >= today,  # type: ignore[operator]
-        Application.status.in_(COUNTABLE_STATUSES),
-    )
-    used: int = (await db.execute(stmt)).scalar_one_or_none() or 0
+    guard = await DailyLimitGuard.from_settings(db)  # W11: same policy as the engine
+    limit, used = guard.limit, await guard.used_today()
 
     # ── Compute next UTC midnight ──────────────────────────────────────────────
     now_utc = datetime.now(timezone.utc)
@@ -322,6 +317,10 @@ async def update_application(application_id: int, body: UpdateApplicationRequest
         raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
 
     if body.status is not None:
+        if body.status == STATUS_APPLIED and app.status != STATUS_APPLIED:
+            # Marking a row applied by hand is a user attestation (W06).
+            app.confirmation_source = "user"
+            app.applied_at = app.applied_at or utc_now()
         app.status = body.status
     if body.notes is not None:
         app.notes = body.notes
@@ -364,6 +363,33 @@ async def update_application(application_id: int, body: UpdateApplicationRequest
     return out
 
 
+@router.post("/{application_id}/confirm-submitted", response_model=ApplicationOut)
+async def confirm_submitted(application_id: int, db: DBSession):
+    """The user attests they submitted a prepared or unverified application (W06).
+
+    Only ``awaiting_submission`` / ``needs_verification`` rows can be
+    confirmed; the result is ``applied`` with ``confirmation_source='user'``,
+    distinct from destination-verified submissions.
+    """
+    app = await db.get(Application, application_id)
+    if app is None:
+        raise HTTPException(status_code=404, detail=f"Application {application_id} not found")
+    if app.status not in (STATUS_AWAITING_SUBMISSION, STATUS_NEEDS_VERIFICATION):
+        raise HTTPException(
+            status_code=409, detail=f"Application {application_id} is {app.status!r}; nothing to confirm."
+        )
+    app.status = STATUS_APPLIED
+    app.applied_at = utc_now()
+    app.confirmation_source = "user"
+    db.add(ApplicationEvent(application_id=app.id, event_type="applied", details="Confirmed submitted by the user"))
+    if app.job_match_id is not None:
+        match = await db.get(JobMatch, app.job_match_id)
+        if match is not None:
+            match.status = "applied"
+    await db.commit()
+    return await get_application(application_id, db)
+
+
 @router.post("/{application_id}/events", response_model=ApplicationEventOut, status_code=201)
 async def add_application_event(application_id: int, body: CreateEventRequest, db: DBSession):
     """Add a lifecycle event to an application."""
@@ -390,46 +416,88 @@ async def add_application_event(application_id: int, body: CreateEventRequest, d
 # ─── Apply endpoint ───────────────────────────────────────────────────────────
 
 
-async def _resolve_documents(match_id: int, db) -> tuple[Path | None, Path | None]:
-    """Return (cv_pdf, letter_pdf) Paths for the latest tailored docs for match_id.
+async def _select_documents(
+    *, match_id: int, body: "ApplyRequest", profile, db, request: Request
+) -> tuple[Path | None, Path | None]:
+    """Resolve the CV/letter to upload. W04: what the user selected is what is uploaded.
 
-    Returns (None, None) if no documents have been generated yet.
-    Note: engine.apply() already accepts cv_pdf/letter_pdf — no changes to engine.py needed.
+    Explicit selection (``cv_document_id`` or ``use_base_cv``): exactly those
+    documents, validated against the match, type, file and content hash; the
+    letter is attached only if ``letter_document_id`` is given. Without one
+    (legacy callers): the newest *valid* tailored CV/letter for the match, else
+    the base CV compiled to PDF. A ``.tex`` source is never returned.
+    Raises :class:`ArtifactError` with a user-facing reason.
     """
-    cv_path: Path | None = None
-    letter_path: Path | None = None
-
-    cv_stmt = (
-        select(TailoredDocument)
-        .where(
-            TailoredDocument.job_match_id == match_id,
-            TailoredDocument.doc_type == "cv",
-        )
-        .order_by(TailoredDocument.created_at.desc())
-        .limit(1)
+    from backend.latex.artifacts import (
+        ArtifactError,
+        ensure_base_cv_pdf,
+        pdf_sha256,
+        pin_for_attempt,
+        resolve_base_source,
+        validate_document,
     )
-    cv_row = (await db.execute(cv_stmt)).scalar_one_or_none()
-    if cv_row and cv_row.pdf_path:
-        cv_path = Path(cv_row.pdf_path)
 
-    letter_stmt = (
-        select(TailoredDocument)
-        .where(
-            TailoredDocument.job_match_id == match_id,
-            TailoredDocument.doc_type == "letter",
-        )
-        .order_by(TailoredDocument.created_at.desc())
-        .limit(1)
-    )
-    letter_row = (await db.execute(letter_stmt)).scalar_one_or_none()
-    if letter_row and letter_row.pdf_path:
-        letter_path = Path(letter_row.pdf_path)
+    data_dir = DATA_DIR
 
-    return cv_path, letter_path
+    async def base_cv() -> Path:
+        source = resolve_base_source(profile.base_cv_path if profile else None, data_dir, "*.tex")
+        if source is None:
+            raise ArtifactError("No base CV is configured; upload one in Settings → Profile.")
+        pipeline = getattr(request.app.state, "cv_pipeline", None)
+        if pipeline is None:
+            raise ArtifactError("The document pipeline is not available.")
+        published = await ensure_base_cv_pdf(source, data_dir, pipeline.compile_base_cv)
+        digest = pdf_sha256(published)
+        if digest is None:
+            raise ArtifactError("The compiled base CV is not a valid PDF.")
+        return pin_for_attempt(published, digest, data_dir)
+
+    def checked(doc, doc_type: str) -> Path:
+        path = validate_document(doc, match_id=match_id, doc_type=doc_type, data_dir=data_dir)
+        return pin_for_attempt(path, doc.pdf_sha256, data_dir)
+
+    async def pick(doc_id: int, doc_type: str) -> Path:
+        return checked(await db.get(TailoredDocument, doc_id), doc_type)
+
+    explicit = body.use_base_cv or body.cv_document_id is not None
+    if explicit:
+        if body.use_base_cv and body.cv_document_id is not None:
+            raise ArtifactError("Choose either the base CV or a tailored CV, not both.")
+        cv = await base_cv() if body.use_base_cv else await pick(body.cv_document_id, "cv")  # type: ignore[arg-type]
+        letter = await pick(body.letter_document_id, "letter") if body.letter_document_id else None
+        return cv, letter
+
+    async def newest_valid(doc_type: str) -> Path | None:
+        rows = (
+            await db.execute(
+                select(TailoredDocument)
+                .where(TailoredDocument.job_match_id == match_id, TailoredDocument.doc_type == doc_type)
+                .order_by(TailoredDocument.created_at.desc(), TailoredDocument.id.desc())
+            )
+        ).scalars()
+        for doc in rows:
+            try:
+                return checked(doc, doc_type)
+            except ArtifactError as exc:
+                logger.warning("Skipping document id=%d for match_id=%d: %s", doc.id, match_id, exc)
+        return None
+
+    cv = await newest_valid("cv")
+    if cv is None and resolve_base_source(profile.base_cv_path if profile else None, data_dir, "*.tex"):
+        cv = await base_cv()
+    # No CV at all stays None (legacy manual apply just opens the job link).
+    return cv, await newest_valid("letter")
 
 
 class ApplyRequest(BaseModel):
     method: Literal["auto", "assisted", "manual"] = "manual"
+    # W04 explicit document selection (from the review UI). Set either
+    # cv_document_id (a reviewed tailored CV) or use_base_cv; the letter is
+    # attached only when letter_document_id is given. Omit all three for the
+    # legacy "newest valid document" behaviour.
+    cv_document_id: int | None = None
+    use_base_cv: bool = False
+    letter_document_id: int | None = None
     apply_url: str = ""
     full_name: str = ""
     email: str = ""
@@ -475,6 +543,52 @@ async def get_review_state(job_id: int, request: Request) -> dict:
     return payload
 
 
+class ReviewDecisionRequest(BaseModel):
+    """W07: an acknowledged decision on one review snapshot."""
+
+    review_id: str = Field(min_length=1, max_length=64)
+    revision: int = Field(ge=1)
+    decision: Literal["approve", "cancel"]
+    #: Corrections to apply before submit (selector → value), part of the approval.
+    fields: dict[str, str] = Field(default_factory=dict, max_length=200)
+    #: Client-generated; a retry of a lost response reuses it.
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+class ReviewDecisionAck(BaseModel):
+    job_id: int
+    review_id: str
+    revision: int
+    decision: Literal["approve", "cancel"]
+    accepted_at: str
+
+
+@router.post("/{job_id}/review-decision", response_model=ReviewDecisionAck)
+async def decide_review(job_id: int, body: ReviewDecisionRequest, request: Request) -> ReviewDecisionAck:
+    """Approve (with corrections) or cancel the review currently awaiting a decision.
+
+    409 when the review is unknown, not yet ready, already decided, or not
+    the current revision; an identical retry returns the original ack.
+    """
+    from backend.applier.engine import ReviewConflict
+
+    engine = getattr(request.app.state, "apply_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="ApplicationEngine not initialised")
+    try:
+        ack = engine.decide(
+            job_id,
+            review_id=body.review_id,
+            revision=body.revision,
+            decision=body.decision,
+            fields=body.fields,
+            idempotency_key=body.idempotency_key,
+        )
+    except ReviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return ReviewDecisionAck(**ack)
+
+
 @router.post("/{match_id}/apply", status_code=200, response_model=ApplicationResult)
 async def apply_to_job(
     match_id: int, body: ApplyRequest, db: DBSession, request: Request
@@ -499,6 +613,39 @@ async def apply_to_job(
         mode = ApplyMode(body.method)
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid apply method: {body.method!r}")
+
+    # No replay of a job that was, or may have been, submitted (review C2).
+    replay = (
+        await db.execute(
+            select(Application.id, Application.status)
+            .join(JobMatch, Application.job_match_id == JobMatch.id)
+            .where(
+                JobMatch.job_id == select(JobMatch.job_id).where(JobMatch.id == match_id).scalar_subquery(),
+                Application.status.in_([STATUS_APPLIED, STATUS_NEEDS_VERIFICATION]),
+            )
+            .limit(1)
+        )
+    ).first()
+    if replay is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Application {replay.id} for this job is {replay.status!r}. Check it on the job site "
+                "and resolve it in the tracker before applying again."
+            ),
+        )
+
+    from backend.config import settings as app_settings
+
+    if mode == ApplyMode.AUTO and not app_settings.jobpilot_auto_submit_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Automatic submission is disabled: JobPilot cannot yet verify that a "
+                "site accepted an application. Use the assisted method (prefill, then "
+                "you submit) or set JOBPILOT_AUTO_SUBMIT_ENABLED=true to accept the risk."
+            ),
+        )
 
     # ── Auto-populate applicant info from UserProfile when not provided ──
     profile = (
@@ -583,31 +730,15 @@ async def apply_to_job(
         additional_answers_json=additional_answers,
     )
 
-    # Resolve tailored CV and cover letter for this job match
-    cv_pdf, letter_pdf = await _resolve_documents(match_id=match_id, db=db)
+    from backend.latex.artifacts import ArtifactError
 
-    # Fall back to base CV/letter from user profile if no tailored docs exist
-    if cv_pdf is None and profile and profile.base_cv_path:
-        base_cv = Path(profile.base_cv_path)
-        if base_cv.exists():
-            cv_pdf = base_cv
-            logger.info("Using base CV as fallback: %s", cv_pdf)
-    if letter_pdf is None and profile and profile.base_letter_path:
-        base_letter = Path(profile.base_letter_path)
-        if base_letter.exists():
-            letter_pdf = base_letter
-            logger.info("Using base cover letter as fallback: %s", letter_pdf)
-
-    # Last resort: scan templates directory for a .tex-compiled PDF
-    if cv_pdf is None:
-        from backend.config import settings as app_settings
-
-        templates_dir = Path(app_settings.jobpilot_data_dir) / "templates"
-        if templates_dir.is_dir():
-            pdf_candidates = sorted(templates_dir.glob("*.pdf"))
-            if pdf_candidates:
-                cv_pdf = pdf_candidates[0]
-                logger.info("Using auto-detected base CV PDF: %s", cv_pdf)
+    try:
+        cv_pdf, letter_pdf = await _select_documents(
+            match_id=match_id, body=body, profile=profile, db=db, request=request
+        )
+    except ArtifactError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    await db.commit()  # persists hashes pinned on first use of legacy rows
 
     if cv_pdf:
         logger.info("Resolved cv_pdf=%s for match_id=%d", cv_pdf, match_id)

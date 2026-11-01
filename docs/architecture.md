@@ -161,7 +161,7 @@ graph TD
 
 9. **CV pre-generation** — `DailyLimitGuard.remaining_today()` determines how many CV slots remain for the day. The top N matches (N = remaining slots) receive pre-generated CVs: `CVPipeline.generate_tailored_cv()` is called for each, with up to 3 concurrent LLM calls (controlled by `asyncio.Semaphore(3)`). Inside the pipeline, `JobAnalyzer.analyze()` calls the LLM to extract a `JobContext`, `CVModifier.modify()` calls the LLM to suggest ≤3 surgical LaTeX replacements, `CVApplicator.apply()` validates and applies them, and Tectonic compiles the resulting `.tex` to PDF. The resulting paths and diff are stored as `TailoredDocument` rows. WebSocket progress climbs from 65% to 95%.
 
-10. **Dashboard notification** — A final WebSocket broadcast (`progress=1.0`, message "N applications ready for review") signals the frontend to reload the queue. The UI's queue page re-fetches `GET /api/queue` and displays the new matches.
+10. **Dashboard notification** — A final WebSocket broadcast (`progress=1.0`, message "N ready for review[, M failed]", counting persisted documents, not selected matches) signals the frontend to reload the queue. The UI's queue page re-fetches `GET /api/queue` and displays the new matches.
 
 ---
 
@@ -177,7 +177,7 @@ graph TD
 
 5. **Strategy selection** — Based on `ApplyMode`, the engine dispatches to one of three strategies:
 
-   - **AUTO (`AutoApplyStrategy`)**: If `APPLY_TIER1_ENABLED`, attempts `PlaywrightFormFiller.fill_and_submit()` (Tier 1). The form filler launches a persistent Chromium context (with per-domain saved cookies), optionally applies stealth patches, navigates to the apply URL, checks for CAPTCHA, cleans the page HTML to a ≤15,000-character form skeleton, calls the LLM once to get a JSON field mapping (selectors → values), fills all fields, takes a screenshot, and broadcasts an `apply_review` WebSocket message. Execution then blocks waiting for the user to send `confirm_submit` or `cancel_apply` over the WebSocket (30-minute timeout). If confirmed, the submit button is clicked. If Tier 1 raises at any point, execution falls through to the Tier 2 browser-use agent path, which similarly pauses for review before submitting.
+   - **AUTO (`AutoApplyStrategy`)**: If `APPLY_TIER1_ENABLED`, attempts `PlaywrightFormFiller.fill_and_submit()` (Tier 1). The form filler launches a persistent Chromium context (with per-domain saved cookies), optionally applies stealth patches, navigates to the apply URL, checks for CAPTCHA, cleans the page HTML to a ≤15,000-character form skeleton, calls the LLM once to get a JSON field mapping (selectors → values), fills all fields, takes a screenshot, and broadcasts an `apply_review` WebSocket message. Execution then blocks waiting for the user's acknowledged review decision (`POST /api/applications/{id}/review-decision`, naming the snapshot's `review_id`/`revision`) or a `cancel_apply` WS message (30-minute timeout). If confirmed, the submit button is clicked. If Tier 1 raises at any point, execution falls through to the Tier 2 browser-use agent path, which similarly pauses for review before submitting.
 
    - **ASSISTED (`AssistedApplyStrategy`)**: Tier 1 calls `PlaywrightFormFiller.fill_only()`, which fills all fields but intentionally leaves the browser open (context is set to `None` before cleanup). Tier 2 runs a browser-use agent with explicit instructions not to submit. The browser remains visible for the user to review and submit manually.
 

@@ -91,7 +91,7 @@ async def test_reserve_slot_raises_when_at_limit(sqlite_factory):
                     job_match_id=i,
                     method="auto",
                     status="applied",
-                    applied_at=datetime.utcnow(),
+                    quota_reserved_at=datetime.utcnow(),
                 )
             )
         await session.commit()
@@ -132,7 +132,7 @@ async def test_concurrent_reservations_never_exceed_limit(sqlite_factory):
                     job_match_id=i,
                     method="auto",
                     status="applied",
-                    applied_at=datetime.utcnow(),
+                    quota_reserved_at=datetime.utcnow(),
                 )
             )
         await session.commit()

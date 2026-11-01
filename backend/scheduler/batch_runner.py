@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import date
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier.daily_limit import DailyLimitGuard  # noqa: PLC0415
 from backend.config import settings
+from backend.latex.artifacts import diff_to_json, pdf_sha256, resolve_base_source
+from backend.latex.regeneration import additional_context
 from backend.defaults import CONCURRENCY_LLM, DAILY_LIMIT, MIN_JOB_SKILLS_FOR_FIT_ENGINE, MIN_MATCH_SCORE
 from backend.matching.cv_parser import CVParser
 from backend.matching.embedder import Embedder
@@ -31,6 +34,17 @@ from backend.models.user import SearchSettings, UserProfile
 logger = logging.getLogger(__name__)
 
 from backend.api.ws_models import Status
+
+
+class StoredMatch(NamedTuple):
+    """A persisted match and the job it belongs to (W03 / F01).
+
+    Carried through assessment and generation so a match is never paired
+    with another job's details by list position.
+    """
+
+    match_id: int
+    job: JobDetails  # job.id is the persisted Job.id
 
 try:
     from backend.api.ws import broadcast_job_assessment, broadcast_status  # type: ignore
@@ -58,31 +72,8 @@ def _extract_json_list(value: Any, key: str) -> list[str]:
 
 
 def _resolve_cv_path(profile_row: Any, data_dir: Path) -> Path | None:
-    """Return the CV path to use for this batch run.
-
-    Resolution order:
-    1. ``profile_row.base_cv_path`` — if set *and* the file exists, use it.
-    2. Auto-detect: scan ``<data_dir>/templates/`` for ``*.tex`` files and pick
-       the alphabetically first one (deterministic across runs).
-    3. Return ``None`` if no CV can be found.
-
-    A warning is logged whenever we fall back to auto-detection.
-    """
-    if profile_row and profile_row.base_cv_path:
-        raw = Path(profile_row.base_cv_path)
-        candidate = raw if raw.is_absolute() else data_dir / raw
-        if candidate.exists():
-            return candidate
-
-    # Fallback: scan the templates directory
-    templates_dir = data_dir / "templates"
-    candidates = sorted(templates_dir.glob("*.tex")) if templates_dir.is_dir() else []
-    if candidates:
-        cv_path = candidates[0]
-        logger.warning("No base_cv_path in profile — using auto-detected CV: %s", cv_path)
-        return cv_path
-
-    return None
+    """Base CV source for this batch: the profile path, else ``templates/*.tex``."""
+    return resolve_base_source(getattr(profile_row, "base_cv_path", None), data_dir, "*.tex")
 
 
 class BatchRunner:
@@ -169,7 +160,6 @@ class BatchRunner:
         sources = await self._load_sources(db)
 
         keywords: list[str] = _extract_json_list(settings_row.keywords, "include")
-        daily_limit: int = settings_row.daily_limit or DAILY_LIMIT
         max_results_per_source: int = getattr(settings_row, "max_results_per_source", 20) or 20
         max_age_days: int | None = getattr(settings_row, "max_job_age_days", None)
         cv_path = _resolve_cv_path(
@@ -248,8 +238,8 @@ class BatchRunner:
 
         # ── Step 3: Store new matches ────────────────────────────────────
         await self._broadcast_and_track("Storing new matches…", progress=0.55)
-        new_match_ids = await self._store_matches(db, ranked, filters)
-        logger.info("Stored %d new job matches", len(new_match_ids))
+        stored = await self._store_matches(db, ranked, filters)
+        logger.info("Stored %d new job matches", len(stored))
 
         # ── Step 3.5: Fit Assessment ─────────────────────────────────────
         await self._broadcast_and_track("Analyzing job fit…", progress=0.58)
@@ -261,14 +251,6 @@ class BatchRunner:
             cv_tex = cv_path.read_text(encoding="utf-8")
             cv_profile = self._cv_parser.build_profile(cv_tex)
             cv_profile = await self._embedder.embed_cv_profile(cv_profile)
-
-        # Build match_id -> JobDetails mapping
-        match_to_jd: dict[int, Any] = {}
-        _ranked_iter = iter(ranked)
-        for mid in new_match_ids:
-            jd_pair = next(_ranked_iter, None)
-            if jd_pair:
-                match_to_jd[mid] = jd_pair[0]
 
         assessments: dict[int, Any] = {}  # match_id -> FitAssessment or None
         if cv_profile and self._embedder:
@@ -282,9 +264,7 @@ class BatchRunner:
                 async with sem:
                     return await self._assess_one(mid, jd, cv_profile, sensitivity)
 
-            assess_pairs = [
-                (mid, match_to_jd[mid]) for mid in new_match_ids if mid in match_to_jd
-            ]
+            assess_pairs = [(sm.match_id, sm.job) for sm in stored]
             results = await asyncio.gather(
                 *[_gated_assess(mid, jd) for mid, jd in assess_pairs],
                 return_exceptions=True,
@@ -324,9 +304,10 @@ class BatchRunner:
 
         # ── Step 4: Pre-generate CVs for top N ──────────────────────────
         cv_tailoring_enabled = getattr(settings_row, "cv_tailoring_enabled", True)
-        guard = DailyLimitGuard(db=db, limit=daily_limit)
+        guard = await DailyLimitGuard.from_settings(db)
         remaining = await guard.remaining_today()
-        top_ids = new_match_ids[:remaining]
+        selected = stored[:remaining]
+        top_ids = [sm.match_id for sm in selected]
 
         if cv_tailoring_enabled:
             await self._broadcast_and_track(
@@ -337,20 +318,12 @@ class BatchRunner:
                 f"Compiling base CV for top {len(top_ids)} matches (AI tailoring disabled)…", progress=0.65
             )
 
+        done = failed = 0
+        run_id = uuid.uuid4().hex[:12]
         if cv_path and cv_path.exists():
-            # Build additional context from user profile for the CV modifier
-            _additional_parts: list[str] = []
-            if profile_row:
-                if profile_row.driver_license:
-                    _additional_parts.append(f"Driver license: {profile_row.driver_license}")
-                if profile_row.mobility:
-                    _additional_parts.append(f"Mobility / relocation: {profile_row.mobility}")
-                if profile_row.additional_info and isinstance(profile_row.additional_info, dict):
-                    for k, v in profile_row.additional_info.items():
-                        _additional_parts.append(f"{k}: {v}")
-            _additional_context = "\n".join(_additional_parts)
+            _additional_context = additional_context(profile_row)
 
-            pairs = list(zip(top_ids, [jd for jd, _ in ranked[: len(top_ids)]]))
+            pairs = [(sm.match_id, sm.job) for sm in selected]
             sem = asyncio.Semaphore(CONCURRENCY_LLM)
 
             async def _gen_one(mid: int, jd: Any) -> tuple[int, Any]:
@@ -359,7 +332,9 @@ class BatchRunner:
                     import re as _re
                     slug = _re.sub(r"[^\w]+", "_", (jd.title or "job").lower()).strip("_")[:50]
                     dir_name = f"{mid}_{slug}"
-                    out_dir = Path(settings.jobpilot_data_dir) / "cvs" / dir_name
+                    # Review I6: one directory per run — a same-day re-run
+                    # never overwrites a PDF an earlier row points at.
+                    out_dir = Path(settings.jobpilot_data_dir) / "cvs" / dir_name / run_id
                     out_dir.mkdir(parents=True, exist_ok=True)
 
                     # Sub-step feedback: a single tailoring call on a local
@@ -412,22 +387,26 @@ class BatchRunner:
                 *[_gen_one(mid, jd) for mid, jd in pairs],
                 return_exceptions=True,
             )
-            done = 0
             for i, outcome in enumerate(raw_results):
                 if isinstance(outcome, BaseException):
+                    failed += 1
                     logger.error("CV generation failed for match_id=%d: %s", pairs[i][0], outcome)
                     continue
                 mid, tailored = outcome
                 await self._store_tailored_doc(db, mid, tailored, doc_type="cv")
                 done += 1
-                progress = 0.65 + 0.30 * (done / max(len(top_ids), 1))
+                progress = 0.65 + 0.30 * ((done + failed) / max(len(top_ids), 1))
                 await self._broadcast_and_track(f"CV {done}/{len(top_ids)} generated", progress=progress)
         else:
             logger.warning("No base CV path configured — skipping CV pre-generation")
 
         # ── Step 5: Notify dashboard ─────────────────────────────────────
-        await self._broadcast_and_track(f"{len(top_ids)} applications ready for review", progress=1.0)
-        logger.info("Batch complete — %d jobs ready", len(top_ids))
+        # Report persisted artifacts, not selected matches (W03).
+        summary = f"{done} ready for review"
+        if failed:
+            summary += f", {failed} failed"
+        await self._broadcast_and_track(summary, progress=1.0)
+        logger.info("Batch complete — %d ready, %d failed of %d selected", done, failed, len(top_ids))
 
     async def _assess_one(
         self,
@@ -493,8 +472,12 @@ class BatchRunner:
         db: AsyncSession,
         ranked: list[tuple[JobDetails, float]],
         filters: JobFilters,
-    ) -> list[int]:
-        """Persist new job matches and return their DB IDs.
+    ) -> list[StoredMatch]:
+        """Persist new job matches; return each match with its own job.
+
+        Already-actioned jobs are omitted and a job scraped twice in one batch
+        yields one entry, so callers must use the returned job, never the
+        position in ``ranked``.
 
         Jobs are deduplicated by a hash of (company, title, location) so
         repeated batch runs do not create duplicate Job rows.  If a job
@@ -503,7 +486,8 @@ class BatchRunner:
         import hashlib
 
         today = date.today()
-        match_ids: list[int] = []
+        stored: list[StoredMatch] = []
+        seen: set[int] = set()
 
         for jd, score in ranked:
             # Compute dedup hash — same logic as /api/jobs/search
@@ -546,8 +530,11 @@ class BatchRunner:
                 await db.execute(
                     select(JobMatch).where(
                         JobMatch.job_id == job_row.id,
-                        JobMatch.status.in_(["applied", "skipped"]),
+                        # "applying" = prepared for the user or possibly
+                        # submitted (W06): re-queueing it invites a duplicate.
+                        JobMatch.status.in_(["applied", "skipped", "applying"]),
                     )
+                    .limit(1)
                 )
             ).scalar_one_or_none()
 
@@ -571,7 +558,7 @@ class BatchRunner:
                 # Update score if it improved
                 if score > existing_match.score:
                     existing_match.score = score
-                match_ids.append(existing_match.id)
+                match_id = existing_match.id
             else:
                 # Persist the matched include-keywords so the "Why this score"
                 # panel can render the keyword breakdown. Stored as a dict of
@@ -587,10 +574,15 @@ class BatchRunner:
                 )
                 db.add(match_row)
                 await db.flush()
-                match_ids.append(match_row.id)
+                match_id = match_row.id
+
+            if match_id in seen:
+                continue
+            seen.add(match_id)
+            stored.append(StoredMatch(match_id, jd.model_copy(update={"id": job_row.id})))
 
         await db.commit()
-        return match_ids
+        return stored
 
     async def _store_tailored_doc(
         self,
@@ -599,20 +591,14 @@ class BatchRunner:
         tailored: Any,
         doc_type: str,
     ) -> None:
-        diff_json = None
-        if hasattr(tailored, "diff") and tailored.diff:
-            try:
-                diff_json = [
-                    d.__dict__ if hasattr(d, "__dict__") else str(d) for d in tailored.diff
-                ]
-            except Exception:
-                pass
-
+        diff_json = diff_to_json(tailored)
+        pdf_path = getattr(tailored, "pdf_path", None)
         doc = TailoredDocument(
             job_match_id=match_id,
             doc_type=doc_type,
             tex_path=str(tailored.tex_path) if hasattr(tailored, "tex_path") else None,
-            pdf_path=str(tailored.pdf_path) if hasattr(tailored, "pdf_path") else None,
+            pdf_path=str(pdf_path) if pdf_path else None,
+            pdf_sha256=pdf_sha256(Path(pdf_path)) if pdf_path else None,
             diff_json=diff_json,
         )
         db.add(doc)

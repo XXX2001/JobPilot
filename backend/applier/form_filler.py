@@ -36,6 +36,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: W08: correction/re-review rounds before an attempt gives up without submitting.
+_MAX_REVIEW_ROUNDS = 5
+
 _MAX_FORM_CHARS = 15_000
 
 # Tags to strip — keep form skeleton only
@@ -53,7 +56,7 @@ class PlaywrightFormFiller:
     def __init__(
         self,
         llm_client: "LLMClient",
-        on_review: Optional[Callable[..., None]] = None,
+        on_review: Optional[Callable[..., Optional[dict]]] = None,
         on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
         self._llm = llm_client
@@ -200,68 +203,17 @@ class PlaywrightFormFiller:
                         except Exception as exc:
                             logger.warning("Letter upload failed: selector=%r: %s", fi["selector"], exc)
 
-            # Phase 5: screenshot
-            screenshot_b64: str | None = None
-            try:
-                raw_ss = await page.screenshot(full_page=False)
-                import base64
-                screenshot_b64 = base64.b64encode(raw_ss).decode()
-            except Exception:
-                pass
-
-            # Phase 6: broadcast apply_review for user inspection
-            try:
-                from backend.api.ws import manager as ws_manager  # type: ignore
-                from backend.api.ws_models import ApplyReview  # type: ignore
-                await ws_manager.broadcast(
-                    ApplyReview(
-                        type="apply_review",
-                        job_id=job_id,
-                        filled_fields=filled_fields,
-                        screenshot_base64=screenshot_b64,
-                    )
-                )
-            except Exception as exc:
-                logger.warning("Could not broadcast apply_review: %s", exc)
-
-            # Cache the same snapshot the WS broadcast just sent so a
-            # reconnecting client can re-fetch it over HTTP.
-            if self._on_review is not None:
-                self._on_review(
-                    job_id,
-                    filled_fields=filled_fields,
-                    screenshot_b64=screenshot_b64,
-                )
-
-            # Phase 7: wait for confirm or cancel
-            if confirm_event is None:
-                confirm_event = asyncio.Event()
-            if cancel_event is None:
-                cancel_event = asyncio.Event()
-
-            done, _ = await asyncio.wait(
-                [
-                    asyncio.ensure_future(confirm_event.wait()),
-                    asyncio.ensure_future(cancel_event.wait()),
-                ],
-                timeout=1800,
-                return_when=asyncio.FIRST_COMPLETED,
+            # Phases 5–8: review rounds until an approval changes nothing on a
+            # page whose values read back; then submit once (W08 / F03).
+            return await self._review_and_submit(
+                page,
+                job_id=job_id,
+                mapping=mapping,
+                filled_fields=filled_fields,
+                documents=[p for p in (cv_pdf, letter_pdf) if p and p.exists()],
+                confirm_event=confirm_event,
+                cancel_event=cancel_event,
             )
-            if not done:
-                raise RuntimeError("Confirmation timed out after 30 minutes")
-
-            if not confirm_event.is_set():
-                return {"status": "cancelled", "filled_fields": filled_fields, "screenshot_b64": screenshot_b64}
-
-            # Phase 8: apply user edits (patch_fields) then submit. Patches are
-            # best-effort — a single failing re-fill must not abort the submit.
-            await self._apply_patches(page, job_id)
-
-            submit_sel = mapping.get("submit_selector", "button[type=submit]")
-            await page.click(submit_sel, timeout=5_000)
-            logger.info("[Tier 1] Submitted application for job_id=%d", job_id)
-
-            return {"status": "applied", "filled_fields": filled_fields, "screenshot_b64": screenshot_b64}
 
         finally:
             if context:
@@ -274,22 +226,172 @@ class PlaywrightFormFiller:
             except Exception:
                 pass
 
-    async def _apply_patches(self, page, job_id: int) -> None:
-        """Re-fill any user-edited review fields for *job_id* before submit.
+    async def _submit_and_verify(self, page, mapping: dict, job_id: int) -> dict:
+        """Click submit once, then classify the destination page (W06 / F02).
 
-        Best-effort: a single failing ``page.fill`` is logged as a WARNING
-        (mirroring the Phase-3 fill failures) and never aborts the submit.
+        Returns ``confirmed`` / ``rejected`` / ``needs_verification`` with
+        evidence. Never raises after the click: the caller must not mistake
+        a possible submission for a failure it can retry on another tier.
         """
-        if self._on_get_patches is None:
-            return
-        patches = self._on_get_patches(job_id) or {}
-        for sel, val in patches.items():
-            if not sel:
+        from backend.applier.verification import verify_page
+
+        submit_sel = mapping.get("submit_selector", "button[type=submit]")
+        before_url = page.url
+        try:
+            await page.click(submit_sel, timeout=5_000)
+        except Exception as exc:  # noqa: BLE001 — the click may have been dispatched
+            logger.warning("[Tier 1] submit click raised for job_id=%d: %s", job_id, exc)
+            return {"status": "needs_verification", "evidence": f"submit click raised: {exc}"[:300]}
+        logger.info("[Tier 1] Clicked submit for job_id=%d — verifying destination", job_id)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=10_000)
+        except Exception:  # noqa: BLE001 — a slow page is still inspected below
+            pass
+        check = await verify_page(page, before_url=before_url)
+        status = {"confirmed": "confirmed", "rejected": "rejected"}.get(check.outcome, "needs_verification")
+        logger.info("[Tier 1] job_id=%d submission %s: %s", job_id, status, check.evidence)
+        return {"status": status, "evidence": check.evidence}
+
+    async def _review_and_submit(
+        self,
+        page,
+        *,
+        job_id: int,
+        mapping: dict,
+        filled_fields: dict[str, str],
+        documents: list[Path],
+        confirm_event: asyncio.Event | None,
+        cancel_event: asyncio.Event | None,
+    ) -> dict:
+        """Review → (correct → re-review)* → checks → submit (W08 / F03).
+
+        Submission happens only after an approval that changed nothing, for a
+        snapshot whose field values still read back from the page, on the same
+        destination host, with no invalid fields, and with the attached files
+        unchanged since the attempt began. Any correction, failed read-back,
+        page mutation or redirect starts a new review round instead.
+        """
+        from urllib.parse import urlsplit
+
+        from backend.applier.verification import PROBE_JS
+        from backend.latex.artifacts import sha256_file
+
+        confirm_event = confirm_event or asyncio.Event()
+        cancel_event = cancel_event or asyncio.Event()
+        doc_hashes = {p: sha256_file(p) for p in documents}
+        fields = dict(filled_fields)
+        note = ""
+        for _round in range(_MAX_REVIEW_ROUNDS):
+            reviewed_host = urlsplit(page.url).hostname
+            screenshot_b64 = await self._screenshot(page)
+            confirm_event.clear()  # before publishing: an instant approval must not be erased
+            await self._publish_review(job_id, fields, screenshot_b64, note)
+            if not await self._wait_decision(confirm_event, cancel_event):
+                return {"status": "cancelled", "filled_fields": fields, "screenshot_b64": screenshot_b64}
+
+            patches = (self._on_get_patches(job_id) if self._on_get_patches else None) or {}
+            if patches:
+                for sel, val in patches.items():
+                    try:
+                        await page.fill(sel, val, timeout=3_000)
+                    except Exception as exc:  # noqa: BLE001 — read-back below decides
+                        logger.warning("Correction fill failed: selector=%r: %s", sel, exc)
+                fields = await self._read_back(page, fields)
+                failed = [s for s, v in patches.items() if fields.get(s) != v]
+                note = (
+                    f"{len(failed)} correction(s) could not be applied: {', '.join(failed[:5])}"
+                    if failed
+                    else "Corrections applied — review the result."
+                )
+                continue
+
+            current = await self._read_back(page, fields)
+            if current != fields:
+                fields, note = current, "The page changed after your review — check it again."
+                continue
+            if urlsplit(page.url).hostname != reviewed_host:
+                note = f"The page moved to {urlsplit(page.url).hostname} — check it again."
                 continue
             try:
-                await page.fill(sel, val, timeout=3_000)
-            except Exception as exc:
-                logger.warning("Patch fill failed: selector=%r: %s", sel, exc)
+                invalid = int(json.loads(await page.evaluate(PROBE_JS)).get("invalid", 0))
+            except Exception:  # noqa: BLE001
+                invalid = 0
+            if invalid:
+                note = f"{invalid} field(s) are still invalid or required — fix them first."
+                continue
+            changed = [p.name for p, h in doc_hashes.items() if not p.exists() or sha256_file(p) != h]
+            if changed:
+                return {
+                    "status": "rejected",
+                    "evidence": f"attached document(s) changed after review: {', '.join(changed)} — nothing was submitted",
+                    "filled_fields": fields,
+                    "screenshot_b64": screenshot_b64,
+                }
+            outcome = await self._submit_and_verify(page, mapping, job_id)
+            return {**outcome, "filled_fields": fields, "screenshot_b64": screenshot_b64}
+        return {
+            "status": "rejected",
+            "evidence": f"no stable approved state after {_MAX_REVIEW_ROUNDS} review rounds — nothing was submitted",
+            "filled_fields": fields,
+            "screenshot_b64": None,
+        }
+
+    @staticmethod
+    async def _read_back(page, fields: dict[str, str]) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for sel, val in fields.items():
+            try:
+                out[sel] = await page.input_value(sel, timeout=2_000)
+            except Exception:  # noqa: BLE001 — not an input we can read: keep what we filled
+                out[sel] = val
+        return out
+
+    @staticmethod
+    async def _screenshot(page) -> str | None:
+        try:
+            import base64
+
+            return base64.b64encode(await page.screenshot(full_page=False)).decode()
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _publish_review(self, job_id: int, fields: dict, screenshot_b64: str | None, note: str) -> None:
+        """Record the snapshot (engine assigns review_id/revision), then broadcast it."""
+        snapshot = (
+            self._on_review(job_id, filled_fields=fields, screenshot_b64=screenshot_b64)
+            if self._on_review is not None
+            else None
+        ) or {}
+        try:
+            from backend.api.ws import manager as ws_manager  # type: ignore
+            from backend.api.ws_models import ApplyReview  # type: ignore
+
+            await ws_manager.broadcast(
+                ApplyReview(
+                    type="apply_review",
+                    job_id=job_id,
+                    filled_fields=fields,
+                    screenshot_base64=screenshot_b64,
+                    review_id=snapshot.get("review_id"),
+                    revision=snapshot.get("revision"),
+                    note=note or None,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not broadcast apply_review: %s", exc)
+
+    @staticmethod
+    async def _wait_decision(confirm_event: asyncio.Event, cancel_event: asyncio.Event) -> bool:
+        """True on approval, False on cancel; raises after the review timeout."""
+        waiters = [asyncio.ensure_future(confirm_event.wait()), asyncio.ensure_future(cancel_event.wait())]
+        try:
+            done, _ = await asyncio.wait(waiters, timeout=1800, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for w in waiters:
+                w.cancel()
+        if not done:
+            raise RuntimeError("Confirmation timed out after 30 minutes")
+        return confirm_event.is_set() and not cancel_event.is_set()
 
     async def fill_only(
         self,

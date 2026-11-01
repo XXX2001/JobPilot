@@ -62,7 +62,7 @@ Auto and assisted modes respect your daily application limit.
 
 In **auto** mode, once the form is filled, JobPilot takes a screenshot and opens a **review modal** in the UI showing what it filled. Before you confirm:
 
-- **Edit any mis-filled field** directly in the modal. Your edits are sent back to the live browser (a `patch_fields` action) so the form is corrected before submission.
+- **Edit any mis-filled field** directly in the modal. Your edits travel with your approval in one acknowledged request, so the form is corrected before submission; the dialog stays open until JobPilot confirms it received the decision.
 - **Confirm** to submit the application, or **Cancel** to abort.
 
 This gives you a final human checkpoint on every automated submission.

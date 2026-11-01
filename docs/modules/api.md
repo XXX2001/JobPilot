@@ -957,7 +957,6 @@ Persistent bidirectional connection for real-time push notifications and interac
 
 | Type | Fields | Description |
 |---|---|---|
-| `confirm_submit` | `job_id: int` | User confirms that the pre-filled apply form should be submitted |
 | `cancel_apply` | `job_id: int` | User cancels the pending apply review |
 | `login_done` | `site: str` | User signals they have completed manual login for a site |
 | `login_cancel` | `site: str` | User cancels the login flow for a site |

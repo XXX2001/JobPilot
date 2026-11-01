@@ -89,6 +89,9 @@ export interface Application {
 	notes?: string;
 	error_log?: string;
 	created_at: string;
+	/** W06: 'destination' | 'user' | 'legacy_unknown' for applied rows. */
+	confirmation_source?: string | null;
+	confirmation_evidence?: string | null;
 	events?: ApplicationEvent[];
 	// Denormalised fields for display (injected by parent components).
 	job_title?: string | null;
@@ -108,6 +111,8 @@ export interface SetupStatus {
 	tectonic_found: boolean;
 	base_cv_uploaded: boolean;
 	setup_complete: boolean;
+	/** False until submission verification exists; the UI must not offer Auto apply. */
+	auto_submit_enabled: boolean;
 }
 
 // ─── Documents ──────────────────────────────────────────────────────────────

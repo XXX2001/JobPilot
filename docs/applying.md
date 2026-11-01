@@ -53,7 +53,21 @@ Most middle states (`CaptchaCheck`, `Filling`, `AwaitingConfirm`, `Submitting`) 
 
 - `RESULT_CANCELLED` → `CANCELLED`
 - `RESULT_FAILED` → `FAILED`
-- success → call `ApplicationRecorder.record`; on success → `APPLIED`, on any record exception → `REMOTE_SUBMITTED_LOCAL_FAILED` (the remote submit may have succeeded while the local DB write failed).
+- success → call ### Submission outcomes and evidence (W06)
+
+Opening a link, pre-filling a form, clicking submit and an agent saying "done" are not proof that an employer received an application. Strategies return one of:
+
+| Outcome | Persisted `Application.status` | Meaning |
+| --- | --- | --- |
+| `confirmed` | `applied`, `confirmation_source=destination` | The destination page showed a confirmation (`backend/applier/verification.py`); the matched text and URL are stored in `confirmation_evidence`. |
+| `awaiting_user_submission` | `awaiting_submission` | Manual opened the link / assisted pre-filled the form; the user submits. `next_action_url` carries the link (also when no browser could be opened). |
+| `needs_verification` | `needs_verification` | Submit was clicked (or the submit agent was interrupted) but no confirmation was seen. Never retried automatically; counts against the daily cap. |
+| `failed` | `failed` | Only when nothing can have been submitted — e.g. the page did not navigate and still shows invalid fields after the click. Validation-looking text alone, or invalid fields after navigating, is `needs_verification`. |
+| `cancelled` | `cancelled` | Cancelled before submission. |
+
+After a Tier-1 submit click the outcome is final for that attempt — it never falls back to Tier 2, which could submit twice; an exception from the click itself is `needs_verification`. A preparation agent that crashes is checked for a confirmation page too. If recording a confirmed or unverified outcome fails locally, the attempt becomes `needs_verification` and keeps its quota slot. Applying again to a job with an `applied` or `needs_verification` application returns 409, and such jobs (match status `applying`) are not re-queued by later batches. The user turns a prepared or unverified row into `applied` with **Mark submitted** in the tracker (`POST /api/applications/{id}/confirm-submitted`, `confirmation_source=user`); marking a row applied by hand via `PATCH` is recorded the same way. Rows that were `applied` before this change carry `confirmation_source=legacy_unknown`.
+
+`ApplicationRecorder.record`; on success → `APPLIED`, on any record exception → `REMOTE_SUBMITTED_LOCAL_FAILED` (the remote submit may have succeeded while the local DB write failed).
 
 Terminal `on_enter` handlers (`engine.py:380`–`435`) perform compensation:
 
@@ -98,23 +112,23 @@ When Tier 1 is skipped or raises, `auto_apply._browser_use_apply` (`auto_apply.p
 
 ## The `apply_review` confirm/cancel flow
 
-Both tiers pause before submitting and emit an `ApplyReview` WS message (`backend/api/ws_models.py:84`) containing `job_id`, `filled_fields`, and an optional `screenshot_base64`. The frontend renders this for the user, who responds with one of three WS messages, routed by handlers registered in `backend/main.py:228`–`250`:
+Both tiers pause before submitting. The strategy calls the engine's `record_pending_review`, which assigns the snapshot a fresh `review_id` and the next `revision`, caches it for `GET .../review-state`, and the strategy then broadcasts an `ApplyReview` WS message carrying `job_id`, `filled_fields`, `screenshot_base64`, `review_id` and `revision`.
 
-| WS message | Handler | Engine method |
-|------------|---------|---------------|
-| `confirm_submit` | `_handle_confirm_submit` | `signal_confirm(job_id)` (`engine.py:93`) |
-| `cancel_apply` | `_handle_cancel_apply` | `signal_cancel(job_id)` (`engine.py:134`) |
-| `patch_fields` | `_handle_patch_fields` | `signal_patch_fields(job_id, fields)` (`engine.py:106`) |
+The user's decision is an acknowledged HTTP command, `POST /api/applications/{job_id}/review-decision` (W07), handled by `ApplicationEngine.decide`. It must name the current `review_id`/`revision` of a review that is actually waiting; premature, stale, unknown or already-consumed decisions get **409** and change nothing. An approval carries the user's field corrections (`fields`, selector → value) in the same command, so corrections and approval cannot arrive out of order. A retry with the same `idempotency_key` returns the original acknowledgment (one effect); reusing a key with different content is a 409. The queue modal stays open until the acknowledgment arrives and retries network failures with the same key. Only `cancel_apply` remains a WebSocket message (used to abort a running fill).
 
-`signal_confirm` / `signal_cancel` just `.set()` the per-job `asyncio.Event` the strategy is awaiting.
+**Submission boundary (W08).** Corrections may only name fields of the server's own snapshot (unknown selectors → 409), and only values that differ from the snapshot count. Each review round then works like this, in both tiers:
 
-**Field patching.** The client may send `patch_fields` (a `selector → new value` map) *before* `confirm_submit` to correct mis-filled values. `signal_patch_fields` stores them in `_pending_patches`; the Tier-1 form filler re-applies them in `_apply_patches` right before clicking submit (best-effort — a failing re-fill logs a warning, never aborts). Critically, `signal_confirm` does **not** purge the patches (`engine.py:97`): `event.set()` only schedules the waiter wakeup, so the filler reads the patches *after* it resumes. Patches are purged on cancel and in `apply()`'s `finally`.
+1. Any correction is applied (Tier 1: `page.fill`, then every field is read back; Tier 2: a no-submit browser agent) and a **new snapshot** with the values actually on the page is sent for review, with a `note` such as "2 correction(s) could not be applied". A failed correction therefore never reaches submit.
+2. An approval that changes nothing is re-checked immediately before the click: field values must still read back, the page must be on the same host, no field may be `:invalid`/`aria-invalid`, and the attached PDFs must hash to what they were when the attempt started. A mismatch opens another round (or, for a changed document, fails without submitting).
+3. Only then is submit clicked, once, followed by destination verification. After 5 rounds without a stable approved state the attempt fails without submitting.
+
+Browser agents get restricted tools (`restricted_tools` in `_strategy_common.py`): no `search`, `evaluate`, tab switching or file writes, and `navigate` only within the apply site's domain (`allowed_domains`); downloads are disabled so a site-delivered file can never become an upload; uploads only from `available_file_paths`, and the submit agent cannot upload at all. Because `click` cannot be narrowed to "not the submit button", the page is checked after every preparation/correction run, and a confirmation found there is recorded as `needs_verification` (submitted before approval) instead of continuing. Patches are purged on cancel and in `apply()`'s `finally`.
 
 **Reconnect recovery.** Each broadcast also calls `on_review` → `record_pending_review` (`engine.py:120`), caching the snapshot in `_pending_reviews`. A client that lost its WS connection can re-fetch it over HTTP via `GET /api/applications/{job_id}/review-state` (`backend/api/applications.py:462`).
 
 ## Daily limit (`daily_limit.py`)
 
-`DailyLimitGuard` (`daily_limit.py:55`) enforces a configurable N-applications/day cap (default `DAILY_LIMIT`, 10). Statuses counted toward the quota (`COUNTABLE_STATUSES`, `daily_limit.py:46`) are `applied` + `pending` plus the legacy aliases.
+`DailyLimitGuard` (`daily_limit.py`) is the **automated-submission guard** (W11). There is one policy: `DailyLimitGuard.from_settings(db)` reads `SearchSettings.daily_limit` (default `DAILY_LIMIT`, 10) at reservation time, and the engine, the batch planner and `GET /api/applications/limit-status` all use it, so changing the setting changes enforcement immediately. A row counts when it holds a reservation for the current **UTC day** (`quota_reserved_at >= quota_day_start()`, the same midnight shown as `resets_at`) and its status is `pending`, `needs_verification` or `applied`. `reserve_slot` inserts the reservation and recounts inside one write transaction, so two connections cannot both take the last slot. The recorder clears `quota_reserved_at` once non-submission is established (prepared for the user, cancelled, failed before submit); it keeps it for confirmed and possibly-submitted attempts, so retries cannot evade the cap. Hand-recorded tracker entries and manual/assisted preparation never consume the quota. Lowering the limit blocks new reservations without touching existing rows; a reservation keeps the day it was made on.
 
 The only safe gate is `reserve_slot` (`daily_limit.py:98`), which is **atomic**:
 
@@ -128,7 +142,7 @@ The reserved placeholder is later updated in place by the recorder, or released 
 
 ## Recording the outcome (`recorder.py`)
 
-`ApplicationRecorder.record` (`recorder.py:46`) persists the result. If `reserved_app_id` is set (the AUTO/ASSISTED path) it **updates the placeholder in place** — never inserts a duplicate (which would double-count the limit); for MANUAL it inserts a fresh row. It also writes an `ApplicationEvent` lifecycle row, and on a success outcome flips the parent `JobMatch.status` to `"applied"`. Strategy outcome strings are mapped to the canonical persisted status via `normalize_result_status` (`backend/applier/__init__.py:100`); the status vocabulary and legacy aliases (`manual`/`assisted` → `applied`) are defined in that same `__init__.py`. Any DB-write failure rolls back and raises `ApplicationRecordError`, which the FSM routes to `REMOTE_SUBMITTED_LOCAL_FAILED`.
+`ApplicationRecorder.record` (`recorder.py:46`) persists the result. If `reserved_app_id` is set (the AUTO/ASSISTED path) it **updates the placeholder in place** — never inserts a duplicate (which would double-count the limit); for MANUAL it inserts a fresh row. It also writes an `ApplicationEvent` lifecycle row, and flips the parent `JobMatch.status` to `"applied"` only for a `confirmed` outcome (to `"applying"` for prepared or unverified ones). Strategy outcome strings are mapped to the canonical persisted status via `normalize_result_status` (`backend/applier/__init__.py:100`); the status vocabulary and legacy aliases (`manual`/`assisted` → `applied`) are defined in that same `__init__.py`. Any DB-write failure rolls back and raises `ApplicationRecordError`, which the FSM routes to `REMOTE_SUBMITTED_LOCAL_FAILED`.
 
 ## CAPTCHA handling (`captcha_handler.py`)
 

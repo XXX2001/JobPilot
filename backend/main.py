@@ -84,14 +84,16 @@ async def lifespan(app: FastAPI):
     for d in data_dirs:
         d.mkdir(parents=True, exist_ok=True)
 
-    # Initialize DB (create tables if not exists via SQLAlchemy)
-    try:
-        from backend.database import init_db
+    # Bring the schema to the Alembic head. W02 / F20: a migration failure is
+    # fatal — serving routes against a half-migrated schema corrupts data.
+    from backend import database
 
-        await init_db()
-        logger.info("Database initialized")
+    try:
+        await database.init_db()
     except Exception:
-        logger.exception("DB init failed (may already be up)")
+        logger.exception("Database migration failed — aborting startup")
+        raise
+    logger.info("Database initialized")
 
     # ── Validate provider configuration (fail-fast, provider-aware) ───────
     # Only the credentials the *chosen* providers need are required, so a
@@ -159,9 +161,8 @@ async def lifespan(app: FastAPI):
             scrapling_fetcher=scrapling,
         )
         matcher = JobMatcher()
-        from backend.defaults import DAILY_LIMIT
 
-        apply_engine = ApplicationEngine(daily_limit=DAILY_LIMIT)
+        apply_engine = ApplicationEngine()  # W11: limit read from settings per reservation
 
         # DB factory for the batch runner (creates a new session each call)
         from backend.database import AsyncSessionLocal
@@ -188,6 +189,11 @@ async def lifespan(app: FastAPI):
         app.state.batch_runner = batch_runner
 
         logger.info("All singletons initialised")
+
+        # W05: resume document operations accepted before a restart.
+        from backend.latex.regeneration import resume_pending
+
+        await resume_pending(app, AsyncSessionLocal)
     except Exception:
         # Fail-fast: a half-initialised app.state can boot a half-broken server
         # (no apply_engine, no batch_runner, no orchestrator) that returns 200
@@ -225,29 +231,18 @@ async def lifespan(app: FastAPI):
             if sm:
                 sm.cancel_login(site)
 
-        def _handle_confirm_submit(msg: dict) -> None:
-            job_id = msg.get("job_id", -1)
-            engine = getattr(app.state, "apply_engine", None)
-            if engine:
-                engine.signal_confirm(job_id)
-
         def _handle_cancel_apply(msg: dict) -> None:
             job_id = msg.get("job_id", -1)
             engine = getattr(app.state, "apply_engine", None)
             if engine:
                 engine.signal_cancel(job_id)
 
-        def _handle_patch_fields(msg: dict) -> None:
-            job_id = msg.get("job_id", -1)
-            engine = getattr(app.state, "apply_engine", None)
-            if engine:
-                engine.signal_patch_fields(job_id, msg.get("fields", {}))
-
         ws_module.manager.register_handler("login_done", _handle_login_done)
         ws_module.manager.register_handler("login_cancel", _handle_login_cancel)
-        ws_module.manager.register_handler("confirm_submit", _handle_confirm_submit)
+        # W07: review approval + corrections are an acknowledged HTTP command
+        # (POST /api/applications/{id}/review-decision); the unacknowledged
+        # WS confirm_submit / patch_fields mutations are gone.
         ws_module.manager.register_handler("cancel_apply", _handle_cancel_apply)
-        ws_module.manager.register_handler("patch_fields", _handle_patch_fields)
 
     except Exception as exc:
         logger.warning("WS handler registration failed (non-fatal): %s", exc)
@@ -277,6 +272,9 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down JobPilot application")
+    from backend.latex.regeneration import cancel_all
+
+    await cancel_all(app)  # interrupted operations stay 'running' → resumed next start
     scheduler = getattr(app.state, "scheduler", None)
     if scheduler is not None:
         try:
@@ -297,6 +295,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# W07: Host / Origin / session boundary for commands and the WebSocket.
+# Added last, so it runs first (outermost).
+from backend.api.access import SESSION_COOKIE, AccessBoundary, load_or_create_secret  # noqa: E402
+
+_session_secret = load_or_create_secret(DATA_DIR)
+app.add_middleware(
+    AccessBoundary,
+    allowed_origins=_allowed_origins,
+    extra_hosts=[h.strip() for h in settings.jobpilot_allowed_hosts.split(",") if h.strip()],
+    secret=_session_secret,
+)
+
+
+@app.get("/api/session", include_in_schema=False)
+async def establish_session() -> Response:
+    """Give this browser the local session cookie (W07). Same-site only; never in a URL."""
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(SESSION_COOKIE, _session_secret, httponly=True, samesite="strict", path="/")
+    return resp
 
 # Include API routers (stubs implemented in backend/api/*.py)
 try:

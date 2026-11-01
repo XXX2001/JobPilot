@@ -85,6 +85,11 @@ class ApplyReview(BaseModel):
     job_id: int
     filled_fields: dict[str, str]
     screenshot_base64: str | None = None
+    # W07: the snapshot an approval must name (POST .../review-decision).
+    review_id: str | None = None
+    revision: int | None = None
+    # W08: why a new review round was opened (failed correction, page change…).
+    note: str | None = None
 
 
 class ApplyResult(BaseModel):
@@ -173,26 +178,9 @@ WSMessage = Annotated[
 ]
 
 
-class ConfirmSubmit(BaseModel):
-    type: Literal["confirm_submit"]
-    job_id: int
-
-
 class CancelApply(BaseModel):
     type: Literal["cancel_apply"]
     job_id: int
-
-
-class PatchFields(BaseModel):
-    """Client edits to mis-filled review fields, keyed by CSS selector.
-
-    Sent right before ``confirm_submit`` so the backend can re-fill the
-    patched selectors with the user-corrected values before clicking submit.
-    """
-
-    type: Literal["patch_fields"]
-    job_id: int
-    fields: dict[str, str]
 
 
 class LoginDone(BaseModel):
@@ -206,7 +194,8 @@ class LoginCancel(BaseModel):
 
 
 ClientMessage = Annotated[
-    Union[ConfirmSubmit, CancelApply, PatchFields, LoginDone, LoginCancel],
+    # W07: review approval/corrections moved to POST .../review-decision.
+    Union[CancelApply, LoginDone, LoginCancel],
     Field(discriminator="type"),
 ]
 
@@ -230,9 +219,7 @@ __all__ = [
     "Pong",
     "ErrorMessage",
     "ClientMessage",
-    "ConfirmSubmit",
     "CancelApply",
-    "PatchFields",
     "LoginDone",
     "LoginCancel",
 ]

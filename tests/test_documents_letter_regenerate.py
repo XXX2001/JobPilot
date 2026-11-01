@@ -126,3 +126,32 @@ def test_letter_regenerate_unknown_match_returns_404(test_app: TestClient):
     _install_mock_letter_pipeline(test_app)
     resp = test_app.post("/api/documents/999999/letter/regenerate")
     assert resp.status_code == 404, resp.text
+
+
+def test_letter_regeneration_adds_a_version_and_keeps_the_previous_one(test_app: TestClient):
+    """W05: a regenerated letter is a new immutable version, never an overwrite."""
+    from backend.latex.pipeline import LetterPipeline, TailoredLetter
+
+    match_id = asyncio.run(_seed_match_with_letter_template(job_id_hint="letter-versions"))
+    calls = {"n": 0}
+
+    async def _gen(*, base_letter_path, job, output_dir):  # noqa: ANN001
+        calls["n"] += 1
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pdf = output_dir / "letter.pdf"
+        pdf.write_bytes(f"%PDF-1.4 version {calls['n']}".encode())
+        return TailoredLetter(job_id=job.id, tex_path=output_dir / "letter.tex", pdf_path=pdf)
+
+    pipeline = MagicMock(spec=LetterPipeline)
+    pipeline.generate_tailored_letter = AsyncMock(side_effect=_gen)
+    test_app.app.state.letter_pipeline = pipeline  # type: ignore[attr-defined]
+
+    first = test_app.post(f"/api/documents/{match_id}/letter/regenerate").json()
+    second = test_app.post(f"/api/documents/{match_id}/letter/regenerate").json()
+
+    assert first["doc_id"] != second["doc_id"]
+    assert Path(first["pdf_path"]).read_bytes().endswith(b"version 1")
+    latest = test_app.get(f"/api/documents/{match_id}/letter/pdf")
+    assert latest.content.endswith(b"version 2")
+    old = test_app.get(f"/api/documents/{match_id}/letter/pdf?document_id={first['doc_id']}")
+    assert old.status_code == 200 and old.content.endswith(b"version 1")

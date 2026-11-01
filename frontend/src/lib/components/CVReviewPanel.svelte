@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { apiFetch } from '$lib/api';
+	import { ApiError, apiFetch } from '$lib/api';
 	import {
 		ArrowLeft,
 		Zap,
@@ -15,6 +15,8 @@
 	import type { BindingHandle } from '$lib/utils/hotkeys';
 	import { onMount, onDestroy } from 'svelte';
 	import type { QueueMatch, DiffEntry } from '$lib/types/api';
+	import { applyRequestBody, type ReviewedDocuments } from '$lib/utils/documentSelection';
+	import { describeApplyResult, type ApplyResultLike } from '$lib/utils/applyOutcome';
 
 	type ApplyMode = 'auto' | 'manual' | 'skip';
 	type Decision = 'approved' | 'base_cv' | 'skip';
@@ -35,6 +37,8 @@
 	let cursor = $state(0);
 	let cvToastMessage = $state<string | null>(null);
 	let diffs = $state<Map<number, DiffEntry[]>>(new Map());
+	/** W04: the exact document versions shown in the review, per match. */
+	let reviewed = $state<Map<number, ReviewedDocuments>>(new Map());
 	let diffLoading = $state(false);
 	let decisions = $state<Map<number, Decision>>(new Map());
 	let running = $state(false);
@@ -44,6 +48,7 @@
 	let letterTab = $state<'diff' | 'pdf'>('diff');
 
 	const current = $derived(matches[cursor]);
+	const currentDocs = $derived(current ? reviewed.get(current.id) : undefined);
 	const applyQuote = $derived(panelPhase === 'confirm' ? getApplyConfirmation() : '');
 
 	let hotkeyHandle: BindingHandle | null = null;
@@ -68,19 +73,43 @@
 		if (diffs.has(matchId)) return;
 		diffLoading = true;
 		try {
-			const data = await apiFetch<{ diff: DiffEntry[] }>(`/api/documents/${matchId}/diff`);
+			const data = await apiFetch<{
+				diff: DiffEntry[];
+				document_id: number;
+				letter_document_id: number | null;
+			}>(`/api/documents/${matchId}/diff`);
 			const d = new Map(diffs);
 			d.set(matchId, data.diff ?? []);
 			diffs = d;
+			setReviewed(matchId, {
+				cvDocumentId: data.document_id,
+				letterDocumentId: data.letter_document_id ?? null,
+				attachLetter: true
+			});
 			cvToastMessage = getCvToast();
 			setTimeout(() => (cvToastMessage = null), 4000);
-		} catch {
+		} catch (e) {
 			const d = new Map(diffs);
 			d.set(matchId, []);
 			diffs = d;
+			// Only a 404 means "no tailored CV" (the base CV is shown and sent).
+			// Any other error leaves what the user saw unknown: block approval (I9).
+			const missing = e instanceof ApiError && e.status === 404;
+			setReviewed(matchId, {
+				cvDocumentId: null,
+				letterDocumentId: null,
+				attachLetter: false,
+				loadFailed: !missing
+			});
 		} finally {
 			diffLoading = false;
 		}
+	}
+
+	function setReviewed(matchId: number, docs: ReviewedDocuments) {
+		const r = new Map(reviewed);
+		r.set(matchId, docs);
+		reviewed = r;
 	}
 
 	$effect(() => {
@@ -130,16 +159,24 @@
 
 		for (const match of approvedMatches) {
 			const method = modes.get(match.id) ?? 'manual';
-			try {
-				await apiFetch(`/api/applications/${match.id}/apply`, {
-					method: 'POST',
-					body: JSON.stringify({ method })
-				});
+			const decision = decisions.get(match.id) === 'approved' ? 'approved' : 'base_cv';
+			const docs = reviewed.get(match.id) ?? { cvDocumentId: null, letterDocumentId: null, attachLetter: false };
+			const body = applyRequestBody(method, decision, docs);
+			if (body === null) {
 				results.push({
 					matchId: match.id,
-					ok: true,
-					msg: `${match.job.title} — queued (${method})`
+					ok: false,
+					msg: `${match.job.title} — the tailored CV could not be loaded for review; go back and review it again`
 				});
+				continue;
+			}
+			try {
+				const res = await apiFetch<ApplyResultLike>(`/api/applications/${match.id}/apply`, {
+					method: 'POST',
+					body: JSON.stringify(body)
+				});
+				const outcome = describeApplyResult(res);
+				results.push({ matchId: match.id, ok: outcome.ok, msg: `${match.job.title} — ${outcome.text}` });
 			} catch (e: any) {
 				results.push({ matchId: match.id, ok: false, msg: e.message ?? 'Failed' });
 			}
@@ -289,7 +326,9 @@
 				</div>
 			{:else}
 				<iframe
-					src="/api/documents/{current.id}/cv/pdf"
+					src="/api/documents/{current.id}/cv/pdf{currentDocs?.cvDocumentId
+						? `?document_id=${currentDocs.cvDocumentId}`
+						: ''}"
 					class="flex-1 rounded-b border-0"
 					style="height: calc(100% - 48px)"
 					title="Tailored CV PDF"
@@ -301,6 +340,22 @@
 
 	<!-- Action bar -->
 	<div class="border-border mt-4 flex items-center gap-2 border-t pt-4">
+		{#if currentDocs?.letterDocumentId}
+			<label class="text-muted-foreground flex items-center gap-1.5 text-xs">
+				<input
+					type="checkbox"
+					checked={currentDocs.attachLetter}
+					onchange={(e) => setReviewed(current.id, { ...currentDocs, attachLetter: e.currentTarget.checked })}
+				/>
+				Attach cover letter
+				<a
+					href="/api/documents/{current.id}/letter/pdf"
+					target="_blank"
+					rel="noopener"
+					class="underline hover:text-foreground">view</a
+				>
+			</label>
+		{/if}
 		<button
 			onclick={goBack}
 			disabled={cursor === 0}

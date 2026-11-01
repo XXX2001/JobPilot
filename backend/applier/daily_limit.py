@@ -28,24 +28,48 @@ application.
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import datetime, time
 from typing import Optional
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.applier import LEGACY_APPLIED_ALIASES, STATUS_APPLIED, STATUS_PENDING
+from backend.applier import (
+    LEGACY_APPLIED_ALIASES,
+    STATUS_APPLIED,
+    STATUS_NEEDS_VERIFICATION,
+    STATUS_PENDING,
+)
 from backend.models.application import Application
-from backend.utils.time import utc_now
+from backend.defaults import DAILY_LIMIT
+from backend.utils.time import naive_utc_now, utc_now
 
 logger = logging.getLogger(__name__)
 
 # Statuses that count against today's quota. Includes the canonical
 # ``"applied"`` plus legacy ``"manual"`` / ``"assisted"`` for backward
 # compatibility with rows persisted before the vocabulary consolidation.
+# W06: a possible-but-unverified submission still counts — retrying it
+# must not evade the guard. Prepared (awaiting the user) work does not.
 COUNTABLE_STATUSES: list[str] = sorted(
-    {STATUS_APPLIED, STATUS_PENDING} | LEGACY_APPLIED_ALIASES
+    {STATUS_APPLIED, STATUS_PENDING, STATUS_NEEDS_VERIFICATION} | LEGACY_APPLIED_ALIASES
 )
+
+
+def quota_day_start() -> datetime:
+    """Start of the current quota day: UTC midnight, as naive UTC (W11).
+
+    Matches how timestamps are stored, and the ``resets_at`` the UI shows.
+    """
+    return datetime.combine(utc_now().date(), time.min)
+
+
+async def resolve_daily_limit(db: AsyncSession) -> int:
+    """The configured limit (``SearchSettings.daily_limit``), else the default."""
+    from backend.models.user import SearchSettings
+
+    row = (await db.execute(select(SearchSettings).limit(1))).scalar_one_or_none()
+    return (row.daily_limit if row is not None else None) or DAILY_LIMIT
 
 
 class DailyLimitExceeded(Exception):
@@ -53,15 +77,32 @@ class DailyLimitExceeded(Exception):
 
 
 class DailyLimitGuard:
-    """Enforces the configurable N applications/day limit (default 10).
+    """The automated-submission guard: at most N reservations per UTC day (W11).
 
-    Counts applications whose ``applied_at`` is today and whose
-    status is ``"applied"`` or ``"pending"``.
+    A row counts when it holds a reservation for today
+    (``quota_reserved_at >= quota_day_start()``) and its status is in
+    :data:`COUNTABLE_STATUSES` — an active reservation, a possible
+    submission, or a confirmed one. The recorder clears the reservation
+    once non-submission is established (prepared for the user, cancelled,
+    failed before submit), so manual and assisted preparation never
+    consume the quota. Build it with :meth:`from_settings` so the
+    engine, batch and UI share the configured limit.
     """
 
-    def __init__(self, db: AsyncSession, limit: int = 10) -> None:
+    def __init__(self, db: AsyncSession, limit: int = DAILY_LIMIT) -> None:
         self.db = db
         self.limit = limit
+
+    @classmethod
+    async def from_settings(cls, db: AsyncSession) -> "DailyLimitGuard":
+        return cls(db=db, limit=await resolve_daily_limit(db))
+
+    async def used_today(self) -> int:
+        stmt = select(func.count(Application.id)).where(
+            Application.quota_reserved_at >= quota_day_start(),  # type: ignore[operator]
+            Application.status.in_(COUNTABLE_STATUSES),
+        )
+        return (await self.db.execute(stmt)).scalar_one_or_none() or 0
 
     async def remaining_today(self) -> int:
         """Return how many applications can still be submitted today.
@@ -70,13 +111,7 @@ class DailyLimitGuard:
         gate before submitting — use :py:meth:`reserve_slot` instead,
         which is atomic.
         """
-        today = date.today()
-        stmt = select(func.count(Application.id)).where(
-            Application.applied_at >= today,  # type: ignore[operator]
-            Application.status.in_(COUNTABLE_STATUSES),
-        )
-        count = (await self.db.execute(stmt)).scalar_one_or_none() or 0
-        return max(0, self.limit - count)
+        return max(0, self.limit - await self.used_today())
 
     async def can_apply(self) -> bool:
         """Return ``True`` if at least one application slot remains today.
@@ -120,7 +155,7 @@ class DailyLimitGuard:
             job_match_id=job_match_id,
             method=method,
             status=STATUS_PENDING,
-            applied_at=utc_now(),
+            quota_reserved_at=naive_utc_now(),
         )
         self.db.add(placeholder)
         # flush() issues the INSERT, which takes SQLite's RESERVED
@@ -129,12 +164,7 @@ class DailyLimitGuard:
         # the COUNT we issue next sees a consistent post-insert view.
         await self.db.flush()
 
-        today = date.today()
-        count_stmt = select(func.count(Application.id)).where(
-            Application.applied_at >= today,  # type: ignore[operator]
-            Application.status.in_(COUNTABLE_STATUSES),
-        )
-        count = (await self.db.execute(count_stmt)).scalar_one_or_none() or 0
+        count = await self.used_today()
 
         if count > self.limit:
             # Over the limit — roll back our reservation. We rollback
@@ -161,4 +191,10 @@ class DailyLimitGuard:
         return placeholder.id  # type: ignore[return-value]
 
 
-__all__ = ["COUNTABLE_STATUSES", "DailyLimitExceeded", "DailyLimitGuard"]
+__all__ = [
+    "COUNTABLE_STATUSES",
+    "DailyLimitExceeded",
+    "DailyLimitGuard",
+    "quota_day_start",
+    "resolve_daily_limit",
+]

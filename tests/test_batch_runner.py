@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from backend.scheduler.batch_runner import BatchRunner
+from backend.scheduler.batch_runner import BatchRunner, StoredMatch
 from backend.matching.matcher import JobMatcher
 from backend.models import Base
 from backend.models.job import JobMatch
@@ -58,6 +58,11 @@ class MockCVPipeline:
         result.pdf_path = output_dir / "cv.pdf"
         result.diff = []
         return result
+
+
+def _stored(*ids):
+    """``_store_matches`` return value: each match carries its own job."""
+    return [StoredMatch(i, JobDetails(id=i, title="SWE", company="ACME")) for i in ids]
 
 
 def _make_runner(jobs=None, score=80.0, cv_fail=False):
@@ -121,7 +126,7 @@ async def test_store_matches_populates_keyword_hits(sqlite_factory):
     assert len(match_ids) == 1
     async with sqlite_factory() as db:
         row = (
-            await db.execute(select(JobMatch).where(JobMatch.id == match_ids[0]))
+            await db.execute(select(JobMatch).where(JobMatch.id == match_ids[0].match_id))
         ).scalar_one()
 
     assert row.keyword_hits is not None
@@ -151,7 +156,7 @@ async def test_batch_runs_all_steps(tmp_path):
         patch.object(runner, "_load_profile", new_callable=AsyncMock) as mock_profile,
         patch.object(runner, "_load_sources", new_callable=AsyncMock) as mock_sources,
         patch.object(
-            runner, "_store_matches", new_callable=AsyncMock, return_value=[1]
+            runner, "_store_matches", new_callable=AsyncMock, return_value=_stored(1)
         ) as mock_store,
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
         patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
@@ -180,6 +185,7 @@ async def test_batch_runs_all_steps(tmp_path):
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=10)
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         await runner.run_batch()
 
@@ -197,7 +203,7 @@ async def test_batch_cv_error_continues():
         patch.object(runner, "_load_profile", new_callable=AsyncMock) as mock_profile,
         patch.object(runner, "_load_sources", new_callable=AsyncMock) as mock_sources,
         patch.object(
-            runner, "_store_matches", new_callable=AsyncMock, return_value=[1]
+            runner, "_store_matches", new_callable=AsyncMock, return_value=_stored(1)
         ) as mock_store,
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
         patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
@@ -223,6 +229,7 @@ async def test_batch_cv_error_continues():
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=5)
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         # Should not raise even though cv pipeline fails
         with patch("pathlib.Path.exists", return_value=True):
@@ -243,7 +250,7 @@ async def test_batch_stops_cv_generation_at_daily_limit():
         patch.object(runner, "_load_profile", new_callable=AsyncMock) as mock_profile,
         patch.object(runner, "_load_sources", new_callable=AsyncMock) as mock_sources,
         patch.object(
-            runner, "_store_matches", new_callable=AsyncMock, return_value=list(range(1, 11))
+            runner, "_store_matches", new_callable=AsyncMock, return_value=_stored(*range(1, 11))
         ) as mock_store,
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock) as mock_doc,
         patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
@@ -268,6 +275,7 @@ async def test_batch_stops_cv_generation_at_daily_limit():
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=3)  # only 3 left
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         await runner.run_batch()
 
@@ -380,7 +388,7 @@ async def test_normal_run_returns_none(tmp_path):
         patch.object(runner, "_load_settings", new_callable=AsyncMock) as mock_settings,
         patch.object(runner, "_load_profile", new_callable=AsyncMock) as mock_profile,
         patch.object(runner, "_load_sources", new_callable=AsyncMock) as mock_sources,
-        patch.object(runner, "_store_matches", new_callable=AsyncMock, return_value=[1]),
+        patch.object(runner, "_store_matches", new_callable=AsyncMock, return_value=_stored(1)),
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
         patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
         patch("backend.scheduler.batch_runner.settings") as mock_cfg,
@@ -405,6 +413,7 @@ async def test_normal_run_returns_none(tmp_path):
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=10)
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         result = await runner.run_batch()
 
@@ -465,7 +474,7 @@ async def test_fit_assessments_run_concurrently():
             runner,
             "_store_matches",
             new_callable=AsyncMock,
-            return_value=[1, 2, 3, 4, 5],
+            return_value=_stored(1, 2, 3, 4, 5),
         ),
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
         patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
@@ -474,6 +483,7 @@ async def test_fit_assessments_run_concurrently():
         # match_row lookup → return None so we don't try to set attrs on a Mock
         patch("backend.scheduler.batch_runner.select"),
         # Make the cv_path resolution succeed (the runner reads the file)
+        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=Path("/tmp/base.tex")),
         patch("pathlib.Path.exists", return_value=True),
         patch("pathlib.Path.read_text", return_value="\\documentclass{article}\\begin{document}cv\\end{document}"),
     ):
@@ -499,6 +509,7 @@ async def test_fit_assessments_run_concurrently():
         guard_instance = AsyncMock()
         guard_instance.remaining_today = AsyncMock(return_value=0)  # skip CV gen entirely
         MockGuard.return_value = guard_instance
+        MockGuard.from_settings = AsyncMock(return_value=guard_instance)  # W11
 
         # db.execute(...).scalar_one_or_none() → None so the DB-write branch is a no-op
         db = AsyncMock()
@@ -518,3 +529,143 @@ async def test_fit_assessments_run_concurrently():
     # while still catching a regression back to serial execution.
     assert fake_embedder.embed_job_profile.await_count == 5
     assert elapsed < 0.35, f"Expected concurrent execution under 350ms, took {elapsed:.3f}s"
+
+
+# ── W03 / F01: job identity survives the whole batch ────────────────────────
+
+
+class _RecordingPipeline:
+    """Records which job each output directory was generated for."""
+
+    def __init__(self, fail_titles=()):
+        self.calls: list[tuple[str, int | None, str]] = []  # (out_dir name, job.id, title)
+        self._fail = set(fail_titles)
+
+    async def _gen(self, job, output_dir):
+        self.calls.append((output_dir.parent.name, job.id, job.title))
+        if job.title in self._fail:
+            raise RuntimeError("compile error")
+        result = MagicMock()
+        result.tex_path = output_dir / "cv.tex"
+        result.pdf_path = output_dir / "cv.pdf"
+        result.diff = []
+        return result
+
+    async def generate_tailored_cv(self, base_cv_path, job, output_dir, **_kw):
+        return await self._gen(job, output_dir)
+
+    async def generate_base_cv(self, base_cv_path, job, output_dir, **_kw):
+        return await self._gen(job, output_dir)
+
+
+class _TitleScoreMatcher(JobMatcher):
+    def __init__(self, scores):
+        super().__init__()
+        self._scores = scores
+
+    def score(self, job, filters):  # noqa: ARG002
+        return self._scores[job.title]
+
+
+@pytest.mark.asyncio
+async def test_batch_preserves_job_identity_when_first_ranked_job_is_skipped(
+    sqlite_factory, tmp_path
+):
+    """A previously skipped top-ranked job must not shift details onto other matches.
+
+    Pre-fix, ``_store_matches`` dropped the skipped job but the generation
+    step zipped the surviving match IDs with ``ranked`` by position, so the
+    Rust match received the (skipped) Python job's CV.
+    """
+    import hashlib
+
+    from backend.models.document import TailoredDocument
+    from backend.models.job import Job
+
+    # Seed: "Python Engineer" already exists and was skipped by the user.
+    async with sqlite_factory() as db:
+        h = hashlib.md5("ACME|Python Engineer|".lower().encode()).hexdigest()
+        job = Job(title="Python Engineer", company="ACME", location="", url="u0", dedup_hash=h)
+        db.add(job)
+        await db.flush()
+        db.add(JobMatch(job_id=job.id, score=10.0, status="skipped"))
+        await db.commit()
+
+    jobs = [
+        RawJob(title="Python Engineer", company="ACME", url="https://e.x/py"),
+        RawJob(title="Rust Engineer", company="ACME", url="https://e.x/rs"),
+        RawJob(title="Rust Engineer", company="ACME", url="https://e.x/rs-dup"),  # same dedup hash
+        RawJob(title="Go Engineer", company="ACME", url="https://e.x/go"),
+    ]
+    scores = {"Python Engineer": 95.0, "Rust Engineer": 90.0, "Go Engineer": 85.0}
+    pipeline = _RecordingPipeline(fail_titles={"Go Engineer"})
+    runner = BatchRunner(
+        scraper=MockScraper(jobs=jobs),
+        matcher=_TitleScoreMatcher(scores),
+        cv_pipeline=pipeline,
+        db_factory=sqlite_factory,
+    )
+    cv = tmp_path / "base.tex"
+    cv.write_text("\\documentclass{article}")
+    messages: list[str] = []
+
+    async def _status(msg, progress=0.0):  # noqa: ARG001
+        messages.append(msg)
+
+    with (
+        patch("backend.scheduler.batch_runner.broadcast_status", side_effect=_status),
+        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=cv),
+        patch("backend.scheduler.batch_runner.settings") as cfg,
+    ):
+        cfg.jobpilot_data_dir = str(tmp_path)
+        await runner.run_batch()
+
+    async with sqlite_factory() as db:
+        matches = {
+            m.id: m for m in (await db.execute(select(JobMatch).where(JobMatch.status == "new"))).scalars()
+        }
+        titles = {j.id: j.title for j in (await db.execute(select(Job))).scalars()}
+        docs = (await db.execute(select(TailoredDocument))).scalars().all()
+
+    # Every generation call targeted the match's own job (dir is "<match_id>_<slug>").
+    assert pipeline.calls, "no CV generation happened"
+    for dir_name, job_id, title in pipeline.calls:
+        mid = int(dir_name.split("_", 1)[0])
+        assert matches[mid].job_id == job_id, (dir_name, job_id)
+        assert titles[job_id] == title
+    assert "Python Engineer" not in [t for _, _, t in pipeline.calls]
+    # The duplicate scrape of the Rust job produced ONE match and ONE generation.
+    assert [t for _, _, t in pipeline.calls].count("Rust Engineer") == 1
+    # Only the successful document is persisted, and it belongs to the Rust match.
+    assert len(docs) == 1
+    assert titles[matches[docs[0].job_match_id].job_id] == "Rust Engineer"
+    # Readiness counts actual artifacts, not selected matches.
+    assert any("1 ready" in m and "1 failed" in m for m in messages), messages
+
+
+@pytest.mark.asyncio
+async def test_same_day_rerun_does_not_overwrite_the_previous_version(sqlite_factory, tmp_path):
+    """Review I6: each run writes its own directory, so earlier documents stay intact."""
+    from backend.models.document import TailoredDocument
+
+    pipeline = _RecordingPipeline()
+    runner = BatchRunner(
+        scraper=MockScraper(jobs=[RawJob(title="Solo", company="ACME", url="https://e.x/solo")]),
+        matcher=_TitleScoreMatcher({"Solo": 90.0}),
+        cv_pipeline=pipeline,
+        db_factory=sqlite_factory,
+    )
+    cv = tmp_path / "base.tex"
+    cv.write_text("x")
+    with (
+        patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=cv),
+        patch("backend.scheduler.batch_runner.settings") as cfg,
+    ):
+        cfg.jobpilot_data_dir = str(tmp_path)
+        await runner.run_batch()
+        await runner.run_batch()
+
+    async with sqlite_factory() as db:
+        paths = [d.pdf_path for d in (await db.execute(select(TailoredDocument))).scalars()]
+    assert len(paths) == 2 and len(set(paths)) == 2

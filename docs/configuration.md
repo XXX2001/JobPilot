@@ -109,6 +109,8 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 | `JOBPILOT_LOG_LEVEL` | `jobpilot_log_level` | `info` | Log level |
 | `JOBPILOT_SCRAPER_HEADLESS` | `jobpilot_scraper_headless` | `true` | Run the browser scraper headless |
 | `JOBPILOT_APPLY_HEADLESS` | `jobpilot_apply_headless` | `false` | Tier-2 apply uses a *visible* browser by default so you can watch and intervene on logins and captchas. Set true for headless/server/Docker runs with no display. The apply browser always launches with container-safe Chromium flags (`--no-sandbox` / `--disable-dev-shm-usage`), so headless works in Docker |
+| `JOBPILOT_AUTO_SUBMIT_ENABLED` | `jobpilot_auto_submit_enabled` | `false` | Allows the `auto` apply method (JobPilot clicks the final submit). Off by default because a successful submission is not yet verified against the destination site and failed corrections do not yet block submission; with it off, `POST /api/applications/{id}/apply` rejects `auto` with 409 and the UI hides Auto. Assisted and manual apply are unaffected. |
+| `JOBPILOT_ALLOWED_HOSTS` | `jobpilot_allowed_hosts` | `""` | Extra `Host` header names (comma-separated) accepted besides loopback and the hosts of `JOBPILOT_ALLOWED_ORIGINS`. Only needed behind a local reverse proxy; any other Host gets 403 (DNS-rebinding defence). |
 | `JOBPILOT_DATA_DIR` | `jobpilot_data_dir` | `./data` | Resolved to absolute path under project root if relative (`config.py:222`) |
 | `JOBPILOT_ALLOWED_ORIGINS` | `jobpilot_allowed_origins` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000` | Comma-separated CORS origins |
 

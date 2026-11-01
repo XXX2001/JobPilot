@@ -35,3 +35,61 @@ def test_upgrade_head_is_clean_and_in_sync():
 
     # A non-empty diff means the models and the migration head disagree.
     assert diff == [], f"models/migrations out of sync: {diff}"
+
+
+def test_w04_backfills_pdf_hash_for_existing_documents(tmp_path, monkeypatch):
+    """Upgrading an old-schema DB hashes PDFs that exist; missing/invalid stay NULL."""
+    import hashlib
+
+    from sqlalchemy import text
+
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "jobpilot_data_dir", str(tmp_path))
+    good = tmp_path / "cvs" / "1_x" / "cv.pdf"
+    good.parent.mkdir(parents=True)
+    good.write_bytes(b"%PDF-1.4 hello")
+    (tmp_path / "bad.pdf").write_bytes(b"not a pdf")
+
+    db = tmp_path / "old.db"
+    cfg = _alembic_config(f"sqlite+aiosqlite:///{db}")
+    command.upgrade(cfg, "t2b4_indexes")
+    eng = create_engine(f"sqlite:///{db}")
+    with eng.begin() as c:
+        c.execute(text("INSERT INTO jobs (id, title, company, url, dedup_hash, scraped_at) VALUES (1, 't', 'c', 'u', 'h', '2026-01-01')"))
+        c.execute(text("INSERT INTO job_matches (id, job_id, score, status, matched_at) VALUES (1, 1, 50, 'new', '2026-01-01')"))
+        for i, p in enumerate(["cvs/1_x/cv.pdf", str(tmp_path / "bad.pdf"), "cvs/gone.pdf"], 1):
+            c.execute(
+                text("INSERT INTO tailored_documents (id, job_match_id, doc_type, pdf_path, created_at) VALUES (:i, 1, 'cv', :p, '2026-01-01')"),
+                {"i": i, "p": p},
+            )
+    command.upgrade(cfg, "head")
+    with eng.connect() as c:
+        hashes = dict(c.execute(text("SELECT id, pdf_sha256 FROM tailored_documents")).fetchall())
+    eng.dispose()
+    assert hashes == {1: hashlib.sha256(good.read_bytes()).hexdigest(), 2: None, 3: None}
+
+
+def test_w06_marks_existing_applied_rows_legacy_unknown(tmp_path):
+    """Historical applied rows keep their status/timestamp; provenance becomes legacy_unknown."""
+    from sqlalchemy import text
+
+    db = tmp_path / "w06.db"
+    cfg = _alembic_config(f"sqlite+aiosqlite:///{db}")
+    command.upgrade(cfg, "w05_document_operations")
+    eng = create_engine(f"sqlite:///{db}")
+    with eng.begin() as c:
+        c.execute(text(
+            "INSERT INTO applications (id, method, status, applied_at, created_at) VALUES "
+            "(1, 'manual', 'applied', '2026-01-02', '2026-01-01'), (2, 'manual', 'pending', NULL, '2026-01-01')"
+        ))
+    command.upgrade(cfg, "head")
+    with eng.begin() as c:
+        rows = dict(c.execute(text("SELECT id, confirmation_source FROM applications")).fetchall())
+        applied_at = c.execute(text("SELECT applied_at FROM applications WHERE id = 1")).scalar()
+        c.execute(text(
+            "INSERT INTO applications (method, status, created_at) VALUES ('manual', 'awaiting_submission', '2026-01-03')"
+        ))
+    eng.dispose()
+    assert rows == {1: "legacy_unknown", 2: None}
+    assert str(applied_at).startswith("2026-01-02")

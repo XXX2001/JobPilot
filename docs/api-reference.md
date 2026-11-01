@@ -2,6 +2,16 @@
 
 JobPilot's backend is a FastAPI app (`backend/main.py`) that mounts a set of `APIRouter` modules under `/api/*` plus a single `/ws` WebSocket; this reference enumerates every route module, the WebSocket protocol, dependency injection, and the health schema.
 
+## Local access boundary (W07)
+
+`backend/api/access.py` wraps every request and WebSocket handshake:
+
+- **Host** must be `localhost`, `127.0.0.1`, `::1`, a host from `JOBPILOT_ALLOWED_ORIGINS`, or one listed in `JOBPILOT_ALLOWED_HOSTS` — otherwise **403** (DNS-rebinding defence; applies to reads too).
+- **Commands** (POST/PUT/PATCH/DELETE under `/api`) and every `/ws` handshake must carry the per-installation session secret — the `jobpilot_session` cookie, or an `X-JobPilot-Session` header for local scripts — else **401**; an `Origin` that is neither in `JOBPILOT_ALLOWED_ORIGINS` nor the request's own origin (same scheme + validated Host, so custom ports work) or `Sec-Fetch-Site: cross-site` is refused with **403** (WS: close code 1008).
+- `GET /api/session` sets the cookie (HttpOnly, SameSite=Strict). The bundled UI calls it before its first command and before opening the WebSocket. The secret is stored in `<JOBPILOT_DATA_DIR>/.session_secret` (mode 0600); it is never put in a URL or logged. A local script can read it from that file.
+
+This protects a single local user from hostile web pages. It is not remote-access authentication: keep the service on loopback.
+
 ## How the app is assembled
 
 The app object is built in `backend/main.py`. Routers are imported and mounted inside a `try/except` block (`backend/main.py:301-332`) so a missing module degrades gracefully instead of crashing startup:
@@ -117,8 +127,12 @@ Split across two routers (`applications_export.py` mounted first).
 | GET | `/api/applications/{application_id}` | `ApplicationOut` | One application |
 | PATCH | `/api/applications/{application_id}` | `ApplicationOut` | Update an application |
 | POST | `/api/applications/{application_id}/events` | `ApplicationEventOut` (201) | Append a status/event to the timeline |
+| POST | `/api/applications/{job_id}/review-decision` | `ReviewDecisionAck` | Approve (with `fields` corrections) or cancel the review awaiting a decision. Body: `review_id`, `revision`, `decision` (`approve`/`cancel`), `fields`, `idempotency_key`. **409** if no review is waiting, it is not the current revision, or it was already decided; an identical retry returns the original ack |
 | GET | `/api/applications/{job_id}/review-state` | _(dict)_ | Review state for a job |
-| POST | `/api/applications/{match_id}/apply` | `ApplicationResult` | Run the auto-apply engine for a match |
+| POST | `/api/applications/{application_id}/confirm-submitted` | `ApplicationOut` | The user attests they submitted an `awaiting_submission` / `needs_verification` application → `applied` with `confirmation_source=user`; 409 for any other status |
+| POST | `/api/applications/{match_id}/apply` | `ApplicationResult` | Run the apply engine for a match (`method`: `manual`, `assisted`, `auto`). `auto` returns **409** unless `JOBPILOT_AUTO_SUBMIT_ENABLED=true` |
+
+**Document selection on apply (W04).** The apply body accepts `cv_document_id` (a reviewed tailored CV of this match) **or** `use_base_cv: true`, plus an optional `letter_document_id`. With an explicit selection the engine receives read-only, attempt-owned copies of exactly those PDFs (`<data>/attempts/<id>/`, verified against the stored hash) and no letter unless one is named; each is checked against the match, the document type, the file on disk and its recorded `pdf_sha256`, and any mismatch returns **409** before anything is uploaded. The base CV is compiled from its `.tex` source into `cvs/base/<source-hash>/cv.pdf` and reused while the source is unchanged. Without a selection (legacy callers), the newest *valid* tailored CV/letter is used, else the compiled base CV; a `.tex` source or an unrelated `templates/*.pdf` is never uploaded.
 
 ## Documents — `/api/documents`
 
@@ -129,11 +143,12 @@ Generated CVs, cover letters, and template validation. PDF routes return `FileRe
 | GET | `/api/documents` | `list[DocumentOut]` | List generated documents |
 | POST | `/api/documents/validate-template` | `ValidateTemplateResponse` | Validate a LaTeX template |
 | POST | `/api/documents/compile-test` | `CompileTestResponse` | Test-compile a template |
-| GET | `/api/documents/{match_id}/cv/pdf` | `FileResponse` | Download tailored CV PDF |
-| GET | `/api/documents/{match_id}/letter/pdf` | `FileResponse` | Download cover-letter PDF |
-| GET | `/api/documents/{match_id}/diff` | `CVDiffResponse` | Diff of tailored vs. base CV |
-| POST | `/api/documents/{match_id}/regenerate` | `RegenerateResponse` | Re-tailor the CV |
-| POST | `/api/documents/{match_id}/letter/regenerate` | `LetterRegenerateResponse` | Regenerate the cover letter |
+| GET | `/api/documents/{match_id}/cv/pdf` | `FileResponse` | Download the newest CV PDF, or `?document_id=` a specific version of this match |
+| GET | `/api/documents/{match_id}/letter/pdf` | `FileResponse` | Download the newest cover-letter PDF, or `?document_id=` a specific version |
+| GET | `/api/documents/{match_id}/diff` | `CVDiffResponse` | Diff of the newest CV version vs. base, with its `document_id` and the newest `letter_document_id` (the IDs the review UI sends back on apply) |
+| POST | `/api/documents/{match_id}/regenerate` | `RegenerateResponse` (**202**) | Accept a CV re-tailoring as a durable operation; returns `operation_id` and `state`. Duplicate requests return the active operation; without `force` an unchanged valid result is reused. A failure keeps the previous PDF; 409 if no base CV is configured |
+| GET | `/api/documents/operations/{operation_id}` | `DocumentOperationOut` | Operation state (`queued`/`running`/`succeeded`/`failed`), resulting `document_id`, `error` |
+| POST | `/api/documents/{match_id}/letter/regenerate` | `LetterRegenerateResponse` | Regenerate the cover letter as a new version (earlier versions stay retrievable) |
 
 ## Settings — `/api/settings`
 
@@ -147,7 +162,7 @@ Profile, search config, sources, credentials, custom sites, and the onboarding/s
 | PUT | `/api/settings/search` | `SearchSettingsOut` | Update search settings |
 | GET | `/api/settings/sources` | `SourcesOut` | Read enabled job sources |
 | PUT | `/api/settings/sources` | `SourcesUpdateResponse` | Update sources |
-| GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness (config presence only) |
+| GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness (config presence only), plus `auto_submit_enabled` (whether the UI may offer Auto apply) |
 | POST | `/api/settings/test-connection` | _(dict)_ | Live-probe the configured generation + embedding endpoints (actually calls them) |
 | GET | `/api/settings/models` | _(dict)_ | List model ids advertised by the configured endpoint's `/models` route (`?role=llm\|embedding`) |
 | POST | `/api/settings/profile/cv-upload` | `CvUploadResponse` | Upload base CV (multipart `UploadFile`) |
@@ -293,13 +308,13 @@ Discriminated union (Pydantic `Field(discriminator="type")`):
 
 `SkillGap` (`ws_models.py:36`) is a nested payload inside `JobAssessment`: `{ skill: str, criticality: float }` — `criticality` is a float weight on the wire.
 
-### Client → server messages (`ClientMessage`, `ws_models.py:208`)
+### Client → server messages (`ClientMessage`, `ws_models.py`)
+
+Review approval and field corrections are **not** WebSocket messages: they are the acknowledged `POST /api/applications/{job_id}/review-decision` command (W07). The old `confirm_submit` / `patch_fields` messages are ignored.
 
 | Class | `type` | Key fields |
 |---|---|---|
-| `ConfirmSubmit` | `confirm_submit` | `job_id` |
 | `CancelApply` | `cancel_apply` | `job_id` |
-| `PatchFields` | `patch_fields` | `job_id`, `fields: dict[str,str]` (selector → corrected value, sent before `confirm_submit`) |
 | `LoginDone` | `login_done` | `site` |
 | `LoginCancel` | `login_cancel` | `site` |
 

@@ -12,6 +12,7 @@ from sqlalchemy import exists, func, select
 from backend.api.deps import DBSession
 from backend.applier import (
     LEGACY_APPLIED_ALIASES,
+    POSSIBLY_SUBMITTED_STATUSES,
     STATUS_APPLIED,
     STATUS_AWAITING_SUBMISSION,
     STATUS_NEEDS_VERIFICATION,
@@ -564,17 +565,36 @@ class ReviewDecisionAck(BaseModel):
 
 
 @router.post("/{job_id}/review-decision", response_model=ReviewDecisionAck)
-async def decide_review(job_id: int, body: ReviewDecisionRequest, request: Request) -> ReviewDecisionAck:
+async def decide_review(
+    job_id: int, body: ReviewDecisionRequest, request: Request, db: DBSession
+) -> ReviewDecisionAck:
     """Approve (with corrections) or cancel the review currently awaiting a decision.
 
     409 when the review is unknown, not yet ready, already decided, or not
     the current revision; an identical retry returns the original ack.
+    409 too when an approval would submit on a day whose limit is reached
+    (a review opened before UTC midnight); the review stays open.
     """
+    from backend.applier.daily_limit import DailyLimitExceeded, DailyLimitGuard
     from backend.applier.engine import ReviewConflict
 
     engine = getattr(request.app.state, "apply_engine", None)
     if engine is None:
         raise HTTPException(status_code=503, detail="ApplicationEngine not initialised")
+    reservation = engine.reservation_for(job_id) if body.decision == "approve" else None
+    if reservation is not None:
+        guard = (
+            DailyLimitGuard(db, limit=engine._daily_limit)
+            if engine._daily_limit is not None
+            else await DailyLimitGuard.from_settings(db)
+        )
+        try:
+            await guard.renew_for_today(reservation)
+        except DailyLimitExceeded as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{exc} Cancel this review, or approve it after the limit resets.",
+            )
     try:
         ack = engine.decide(
             job_id,
@@ -621,7 +641,7 @@ async def apply_to_job(
             .join(JobMatch, Application.job_match_id == JobMatch.id)
             .where(
                 JobMatch.job_id == select(JobMatch.job_id).where(JobMatch.id == match_id).scalar_subquery(),
-                Application.status.in_([STATUS_APPLIED, STATUS_NEEDS_VERIFICATION]),
+                Application.status.in_(POSSIBLY_SUBMITTED_STATUSES),
             )
             .limit(1)
         )

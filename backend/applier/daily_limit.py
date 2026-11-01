@@ -34,12 +34,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.applier import (
-    LEGACY_APPLIED_ALIASES,
-    STATUS_APPLIED,
-    STATUS_NEEDS_VERIFICATION,
-    STATUS_PENDING,
-)
+from backend.applier import POSSIBLY_SUBMITTED_STATUSES, STATUS_PENDING
 from backend.models.application import Application
 from backend.defaults import DAILY_LIMIT
 from backend.utils.time import naive_utc_now, utc_now
@@ -51,9 +46,7 @@ logger = logging.getLogger(__name__)
 # compatibility with rows persisted before the vocabulary consolidation.
 # W06: a possible-but-unverified submission still counts — retrying it
 # must not evade the guard. Prepared (awaiting the user) work does not.
-COUNTABLE_STATUSES: list[str] = sorted(
-    {STATUS_APPLIED, STATUS_PENDING, STATUS_NEEDS_VERIFICATION} | LEGACY_APPLIED_ALIASES
-)
+COUNTABLE_STATUSES: list[str] = sorted(POSSIBLY_SUBMITTED_STATUSES | {STATUS_PENDING})
 
 
 def quota_day_start() -> datetime:
@@ -129,6 +122,27 @@ class DailyLimitGuard:
             raise DailyLimitExceeded(
                 f"Daily application limit of {self.limit} has been reached for today."
             )
+
+    async def renew_for_today(self, app_id: int) -> None:
+        """Move a reservation made before today's UTC midnight onto today (R03).
+
+        Called when the user approves a submit: a review opened yesterday
+        must take one of today's slots, not ride on yesterday's. Same
+        flush-then-recount pattern as :meth:`reserve_slot`; raises
+        :class:`DailyLimitExceeded` (leaving the row unchanged) when today
+        is full. A same-day or missing reservation is left alone.
+        """
+        app = await self.db.get(Application, app_id)
+        if app is None or app.quota_reserved_at is None or app.quota_reserved_at >= quota_day_start():
+            return
+        app.quota_reserved_at = naive_utc_now()
+        await self.db.flush()
+        if await self.used_today() > self.limit:
+            await self.db.rollback()
+            raise DailyLimitExceeded(
+                f"Daily application limit of {self.limit} has been reached for today."
+            )
+        await self.db.commit()
 
     async def reserve_slot(
         self,

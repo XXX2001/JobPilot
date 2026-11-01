@@ -89,6 +89,8 @@ class ApplicationEngine:
         # so a client retrying a lost response still gets its ack.
         self._review_revisions: dict[int, int] = {}
         self._decisions: "OrderedDict[tuple[int, str], tuple[tuple, dict]]" = OrderedDict()
+        # job_id → reserved Application id of the live attempt (R03 midnight check).
+        self._reservations: dict[int, int] = {}
         # T4a: guard the re-entrancy check (read-then-write of the events
         # dicts) so two concurrent apply() calls for the same job_match_id
         # cannot both pass the membership check before either one inserts.
@@ -158,6 +160,10 @@ class ApplicationEngine:
         while len(self._decisions) > 256:  # ponytail: in-memory; durable decisions are W14/W15
             self._decisions.popitem(last=False)
         return ack
+
+    def reservation_for(self, job_id: int) -> Optional[int]:
+        """The quota reservation of the attempt now running for *job_id*, if any."""
+        return self._reservations.get(job_id)
 
     def signal_confirm(self, job_id: int) -> None:
         """Release the waiting strategy for *job_id*. Callers go through :meth:`decide`."""
@@ -284,6 +290,9 @@ class ApplicationEngine:
                 message=f"Job {job_match_id} already has an application in progress.",
             )
 
+        if reserved_app_id is not None:
+            self._reservations[job_match_id] = reserved_app_id
+
         # ── Build FSM context ───────────────────────────────────────────
         ctx = ApplyContext(
             job_match_id=job_match_id,
@@ -328,6 +337,7 @@ class ApplicationEngine:
             self._cancel_events.pop(job_match_id, None)
             self._pending_reviews.pop(job_match_id, None)
             self._pending_patches.pop(job_match_id, None)
+            self._reservations.pop(job_match_id, None)
 
         sr = ctx.strategy_result
         extra = (

@@ -80,6 +80,16 @@ LEGACY_APPLIED_ALIASES: frozenset[str] = frozenset({"manual", "assisted"})
 #: analytics, daily-limit, queue, and the engine's JobMatch.status update.
 SUCCESS_STATUSES: frozenset[str] = frozenset({STATUS_APPLIED}) | LEGACY_APPLIED_ALIASES
 
+#: Statuses of an attempt that was, or may have been, submitted. Recruiting
+#: progress (interview/offer/rejected) only happens after a submission, so it
+#: never gives back the quota slot or re-enables an apply (second review R03).
+POSSIBLY_SUBMITTED_STATUSES: frozenset[str] = SUCCESS_STATUSES | {
+    STATUS_NEEDS_VERIFICATION,
+    STATUS_INTERVIEW,
+    STATUS_OFFER,
+    STATUS_REJECTED,
+}
+
 #: Strategy-outcome strings that mean the engine should mark the row as
 #: a successful application when persisting (i.e. set ``applied_at`` and
 #: flip ``JobMatch.status`` to ``"applied"``).
@@ -165,6 +175,7 @@ __all__ = [
     "STATUS_INTERVIEW",
     "STATUS_OFFER",
     "STATUS_REJECTED",
+    "POSSIBLY_SUBMITTED_STATUSES",
     "normalize_result_status",
     "warn_if_legacy_status",
 ]

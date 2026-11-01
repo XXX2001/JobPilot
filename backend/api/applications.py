@@ -500,6 +500,18 @@ async def apply_to_job(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid apply method: {body.method!r}")
 
+    from backend.config import settings as app_settings
+
+    if mode == ApplyMode.AUTO and not app_settings.jobpilot_auto_submit_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Automatic submission is disabled: JobPilot cannot yet verify that a "
+                "site accepted an application. Use the assisted method (prefill, then "
+                "you submit) or set JOBPILOT_AUTO_SUBMIT_ENABLED=true to accept the risk."
+            ),
+        )
+
     # ── Auto-populate applicant info from UserProfile when not provided ──
     profile = (
         await db.execute(select(UserProfile).where(UserProfile.id == 1))
@@ -600,8 +612,6 @@ async def apply_to_job(
 
     # Last resort: scan templates directory for a .tex-compiled PDF
     if cv_pdf is None:
-        from backend.config import settings as app_settings
-
         templates_dir = Path(app_settings.jobpilot_data_dir) / "templates"
         if templates_dir.is_dir():
             pdf_candidates = sorted(templates_dir.glob("*.pdf"))

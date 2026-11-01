@@ -9,7 +9,7 @@
 	import { getEmptyState } from '$lib/utils/easterEggs';
 	import { register, deregister } from '$lib/utils/hotkeys';
 	import type { BindingHandle } from '$lib/utils/hotkeys';
-	import type { Job, QueueMatch } from '$lib/types/api';
+	import type { Job, QueueMatch, SetupStatus } from '$lib/types/api';
 	import { focusTrap } from '$lib/utils/focusTrap';
 	import {
 		addPendingReviewId,
@@ -23,6 +23,8 @@
 	type Phase = 'select' | 'review';
 
 	let matches = $state<QueueMatch[]>([]);
+	/** W02: automatic final submission is opt-in server-side (JOBPILOT_AUTO_SUBMIT_ENABLED). */
+	let autoSubmitEnabled = $state(false);
 	let modes = $state<Map<number, ApplyMode>>(new Map());
 	let phase = $state<Phase>('select');
 	let loading = $state(true);
@@ -46,7 +48,8 @@
 	let hotkeyHandle: BindingHandle | null = null;
 
 	function defaultMode(job: Job): ApplyMode {
-		return job.apply_method === 'easy_apply' || job.apply_method === 'auto' ? 'auto' : 'manual';
+		const easy = job.apply_method === 'easy_apply' || job.apply_method === 'auto';
+		return easy && autoSubmitEnabled ? 'auto' : 'manual';
 	}
 
 	$effect(() => {
@@ -73,6 +76,11 @@
 	});
 
 	async function loadQueue() {
+		try {
+			autoSubmitEnabled = (await apiFetch<SetupStatus>('/api/settings/status')).auto_submit_enabled;
+		} catch {
+			autoSubmitEnabled = false; // fail closed: never offer Auto on an unknown capability
+		}
 		try {
 			const data = await apiFetch<{ matches: QueueMatch[]; total: number }>('/api/queue');
 			matches = data.matches ?? [];
@@ -297,7 +305,7 @@
 		hotkeyHandle = register('/', {
 			j:      { label: 'Move focus down',      action: focusNext },
 			k:      { label: 'Move focus up',        action: focusPrev },
-			a:      { label: 'Set focused card → Auto',   action: () => setFocusedMode('auto') },
+			a:      { label: 'Set focused card → Auto',   action: () => { if (autoSubmitEnabled) setFocusedMode('auto'); } },
 			m:      { label: 'Set focused card → Manual', action: () => setFocusedMode('manual') },
 			s:      { label: 'Set focused card → Skip',   action: () => setFocusedMode('skip') },
 			Enter:  { label: 'Review & apply',        action: () => { if (activeMatches.length > 0 && phase === 'select') proceedToReview(); } },
@@ -474,7 +482,7 @@
 				</div>
 
 				<div class="flex flex-shrink-0 gap-1">
-					{#each [['auto', 'Auto', Zap], ['manual', 'Manual', MousePointer], ['skip', 'Skip', X]] as const as [m, label, Icon]}
+					{#each ([['auto', 'Auto', Zap], ['manual', 'Manual', MousePointer], ['skip', 'Skip', X]] as const).filter(([m]) => m !== 'auto' || autoSubmitEnabled) as [m, label, Icon]}
 						<button
 							onclick={() => setMode(match.id, m as ApplyMode)}
 							class="border-border text-muted-foreground hover:text-foreground flex items-center gap-1 rounded border px-2 py-1 text-xs transition-colors {mode ===

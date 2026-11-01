@@ -118,7 +118,7 @@ Split across two routers (`applications_export.py` mounted first).
 | PATCH | `/api/applications/{application_id}` | `ApplicationOut` | Update an application |
 | POST | `/api/applications/{application_id}/events` | `ApplicationEventOut` (201) | Append a status/event to the timeline |
 | GET | `/api/applications/{job_id}/review-state` | _(dict)_ | Review state for a job |
-| POST | `/api/applications/{match_id}/apply` | `ApplicationResult` | Run the auto-apply engine for a match |
+| POST | `/api/applications/{match_id}/apply` | `ApplicationResult` | Run the apply engine for a match (`method`: `manual`, `assisted`, `auto`). `auto` returns **409** unless `JOBPILOT_AUTO_SUBMIT_ENABLED=true` |
 
 ## Documents — `/api/documents`
 
@@ -147,7 +147,7 @@ Profile, search config, sources, credentials, custom sites, and the onboarding/s
 | PUT | `/api/settings/search` | `SearchSettingsOut` | Update search settings |
 | GET | `/api/settings/sources` | `SourcesOut` | Read enabled job sources |
 | PUT | `/api/settings/sources` | `SourcesUpdateResponse` | Update sources |
-| GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness (config presence only) |
+| GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness (config presence only), plus `auto_submit_enabled` (whether the UI may offer Auto apply) |
 | POST | `/api/settings/test-connection` | _(dict)_ | Live-probe the configured generation + embedding endpoints (actually calls them) |
 | GET | `/api/settings/models` | _(dict)_ | List model ids advertised by the configured endpoint's `/models` route (`?role=llm\|embedding`) |
 | POST | `/api/settings/profile/cv-upload` | `CvUploadResponse` | Upload base CV (multipart `UploadFile`) |

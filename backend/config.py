@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # that have no display. (build_browser always adds the container-safe
     # Chromium flags, so headless launches work in Docker either way.)
     jobpilot_apply_headless: bool = False
+    # W02 containment (F02/F03/F05): automatic FINAL submission is opt-in.
+    # Until destination verification and correction gating exist, `auto`
+    # apply is refused; assisted (prefill + you submit) and manual remain.
+    jobpilot_auto_submit_enabled: bool = False
     jobpilot_data_dir: str = "./data"
     # Comma-separated list of allowed CORS origins. Default = local dev hosts.
     jobpilot_allowed_origins: str = (

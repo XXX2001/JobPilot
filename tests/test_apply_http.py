@@ -288,3 +288,30 @@ def test_apply_idempotency_documented_behaviour(test_app: TestClient):
     assert resp2.status_code == 200, resp2.text
     # Both calls reach the engine — no HTTP-layer dedup.
     assert mock_engine.apply.await_count == 2
+
+
+def test_auto_apply_rejected_while_auto_submit_disabled(test_app: TestClient, monkeypatch):
+    """W02 / F02, F03, F05 containment — automatic final submission is opt-in.
+
+    Until submission verification (W06) and correction gating (W08) exist,
+    ``method=auto`` must be refused with an actionable 409 and never reach
+    the engine; assisted/manual stay available.
+    """
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "jobpilot_auto_submit_enabled", False)
+    match_id = asyncio.run(_seed_job_match(job_id_hint="auto-disabled"))
+    mock_engine = _install_mock_engine(test_app, result=None)
+
+    resp = test_app.post(f"/api/applications/{match_id}/apply", json={"method": "auto"})
+
+    assert resp.status_code == 409, resp.text
+    assert "assisted" in resp.json()["detail"].lower()
+    mock_engine.apply.assert_not_awaited()
+
+
+def test_setup_status_reports_auto_submit_capability(test_app: TestClient, monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "jobpilot_auto_submit_enabled", False)
+    assert test_app.get("/api/settings/status").json()["auto_submit_enabled"] is False

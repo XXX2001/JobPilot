@@ -23,7 +23,7 @@
 		Sparkles,
 		Target
 	} from 'lucide-svelte';
-	import type { QueueMatch, DiffEntry } from '$lib/types/api';
+	import type { QueueMatch, DiffEntry, SetupStatus } from '$lib/types/api';
 
 	interface JobScoreResponse {
 		job_id: number;
@@ -127,9 +127,15 @@
 		return `${Math.floor(hrs / 24)}d ago`;
 	};
 
+	/** W02: Auto apply is offered only when the server enables automatic submission. */
+	let autoSubmitEnabled = $state(false);
+
 	async function load() {
 		loading = true;
 		error = '';
+		apiFetch<SetupStatus>('/api/settings/status')
+			.then((s) => (autoSubmitEnabled = s.auto_submit_enabled))
+			.catch(() => (autoSubmitEnabled = false));
 		try {
 			matchData = await apiFetch<QueueMatch>(`/api/queue/${matchId}`);
 			try {
@@ -304,6 +310,7 @@
 	<div class="flex items-center gap-2 mb-6 p-4 bg-card border border-border rounded-lg">
 		<span class="text-xs text-muted-foreground mr-2">Apply via:</span>
 
+		{#if autoSubmitEnabled}
 		<button
 			onclick={() => applyWith('auto')}
 			disabled={!!applyLoading}
@@ -312,6 +319,7 @@
 			<Zap size={12} />
 			{applyLoading === 'auto' ? 'Starting…' : 'Auto Apply'}
 		</button>
+		{/if}
 
 		<button
 			onclick={() => applyWith('assisted')}

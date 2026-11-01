@@ -84,14 +84,16 @@ async def lifespan(app: FastAPI):
     for d in data_dirs:
         d.mkdir(parents=True, exist_ok=True)
 
-    # Initialize DB (create tables if not exists via SQLAlchemy)
-    try:
-        from backend.database import init_db
+    # Bring the schema to the Alembic head. W02 / F20: a migration failure is
+    # fatal — serving routes against a half-migrated schema corrupts data.
+    from backend import database
 
-        await init_db()
-        logger.info("Database initialized")
+    try:
+        await database.init_db()
     except Exception:
-        logger.exception("DB init failed (may already be up)")
+        logger.exception("Database migration failed — aborting startup")
+        raise
+    logger.info("Database initialized")
 
     # ── Validate provider configuration (fail-fast, provider-aware) ───────
     # Only the credentials the *chosen* providers need are required, so a

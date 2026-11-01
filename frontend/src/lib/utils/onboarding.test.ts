@@ -19,6 +19,7 @@ function makeStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
 		tectonic_found: false,
 		base_cv_uploaded: false,
 		setup_complete: false,
+		auto_submit_enabled: false,
 		...overrides
 	};
 }

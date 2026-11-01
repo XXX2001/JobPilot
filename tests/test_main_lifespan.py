@@ -89,3 +89,19 @@ def test_zz_singleton_init_failure_aborts_startup(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(RuntimeError, match="simulated LLM client construction failure"):
         with TestClient(app):
             pass  # pragma: no cover — we expect startup to fail before yield
+
+
+def test_zz_migration_failure_aborts_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """W02 / F20 — a failed schema migration must abort startup, not log and continue."""
+    from backend import database
+
+    async def _boom() -> None:
+        raise RuntimeError("simulated alembic upgrade failure")
+
+    monkeypatch.setattr(database, "init_db", _boom)
+
+    from backend.main import app
+
+    with pytest.raises(RuntimeError, match="simulated alembic upgrade failure"):
+        with TestClient(app):
+            pass  # pragma: no cover

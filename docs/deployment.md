@@ -92,10 +92,14 @@ The single `jobpilot` service applies several production-oriented settings:
 | `restart` | `unless-stopped` | Survives reboots / crashes. |
 | `logging` | `json-file`, `max-size: 10m`, `max-file: 3` | Caps log growth so a long-running container can't fill host disk (`docker-compose.yml:61-65`). |
 | `healthcheck` | `wget --spider http://localhost:8000/api/health` | 30s interval, 5s timeout, 3 retries, **40s `start_period`** because first boot runs DB migrations + a Playwright check (`docker-compose.yml:66-72`). |
-| `ports` | `8000:8000` | |
-| `environment` | overrides `JOBPILOT_HOST=0.0.0.0`, sets `JOBPILOT_DATA_DIR=/app/data`, `JOBPILOT_SCRAPER_HEADLESS=true`, and `JOBPILOT_ALLOWED_ORIGINS` (CORS allow-list) | Binds to all interfaces so the container is reachable externally (`docker-compose.yml:48-56`). |
+| `ports` | `127.0.0.1:8000:8000` | JobPilot has **no authentication**, so the port is published on host loopback only. Do not publish it on `0.0.0.0` or a LAN address; remote access needs an authenticated reverse proxy, which JobPilot does not ship. |
+| `environment` | overrides `JOBPILOT_HOST=0.0.0.0`, sets `JOBPILOT_DATA_DIR=/app/data`, `JOBPILOT_SCRAPER_HEADLESS=true`, and `JOBPILOT_ALLOWED_ORIGINS` (CORS allow-list) | Binds all interfaces *inside* the container so Docker's port mapping can reach uvicorn; host exposure is decided by `ports`. |
 
 The compose file also documents (commented-out) a `postgres:16-alpine` service for swapping the bundled SQLite for Postgres via a `DATABASE_URL` env var (`docker-compose.yml:12-28`).
+
+### What works in the container
+
+The container has no display. Supported there: job discovery, scoring, CV/letter generation and compilation, the tracker, and **manual** apply (JobPilot opens nothing; use the job link and your documents). Browser-driven apply flows that need you to see the browser — assisted apply, logins, CAPTCHAs — need the local desktop install (Path B). Automatic final submission is disabled in every mode until JobPilot can verify that a site accepted an application; `JOBPILOT_AUTO_SUBMIT_ENABLED=true` opts in at your own risk.
 
 ### Using a model on the host machine
 

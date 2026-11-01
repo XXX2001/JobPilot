@@ -108,6 +108,8 @@ export interface SetupStatus {
 	tectonic_found: boolean;
 	base_cv_uploaded: boolean;
 	setup_complete: boolean;
+	/** False until submission verification exists; the UI must not offer Auto apply. */
+	auto_submit_enabled: boolean;
 }
 
 // ─── Documents ──────────────────────────────────────────────────────────────

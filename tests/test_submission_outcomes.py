@@ -64,8 +64,9 @@ def test_verify_page_parses_probe_result():
 
 
 class _FakePage:
-    def __init__(self, probe: dict):
+    def __init__(self, probe: dict, *, pre_click_text: str | None = None):
         self.clicked: list[str] = []
+        self._pre_click_text = pre_click_text
         self._probe = probe
         self.url = probe.get("url", "u")
 
@@ -76,6 +77,8 @@ class _FakePage:
         return None
 
     async def evaluate(self, _js):
+        if self._pre_click_text is not None and not self.clicked:
+            return json.dumps({"url": self.url, "invalid": 0, "text": self._pre_click_text})
         return json.dumps(self._probe)
 
 
@@ -91,7 +94,7 @@ def test_tier1_submit_returns_verified_outcome(probe, expected):
     from backend.applier.form_filler import PlaywrightFormFiller
 
     filler = PlaywrightFormFiller(llm_client=AsyncMock())
-    page = _FakePage(probe)
+    page = _FakePage(probe, pre_click_text="Apply")
     out = asyncio.run(filler._submit_and_verify(page, {"submit_selector": "#go"}, job_id=1))
     assert page.clicked == ["#go"]
     assert out["status"] == expected
@@ -248,3 +251,53 @@ def test_user_confirmation_is_a_distinct_evidence_source(test_app):
     assert body["applied_at"] is not None
     # Confirming twice (or confirming an applied row) is a conflict.
     assert test_app.post(f"/api/applications/{app.id}/confirm-submitted").status_code == 409
+
+
+# ── Second review R07: failure or stale text must not read as confirmation ──
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Your application was not successfully submitted. Please try again.",
+        "Sorry, your application could not be submitted.",
+        "We were unable to confirm: application not received.",
+        "Votre candidature n'a pas été envoyée. Veuillez réessayer.",
+        "Thank you for applying! An error occurred while uploading your CV.",
+    ],
+)
+def test_negated_or_conflicting_confirmation_is_unknown(text):
+    assert classify_page(text=text, invalid_count=0, url="u").outcome == "unknown"
+
+
+def test_confirmation_already_on_the_page_before_submit_is_unknown():
+    text = "Thank you for applying to Acme. Fill in the form below."
+    check = classify_page(text=text, invalid_count=0, url="u", before_text=text)
+    assert check.outcome == "unknown" and "before submit" in check.evidence
+
+
+def test_new_confirmation_after_submit_still_confirms():
+    check = classify_page(
+        text="Thank you for applying!", invalid_count=0, url="u", before_text="Apply to Acme"
+    )
+    assert check.outcome == "confirmed"
+
+
+def test_tier1_passes_the_pre_click_text_to_the_verifier():
+    from backend.applier.form_filler import PlaywrightFormFiller
+
+    class Page:
+        url = "https://jobs.example.com/apply"
+
+        async def evaluate(self, _js):  # same text before and after the click
+            return json.dumps({"url": self.url, "invalid": 0, "text": "Thank you for applying"})
+
+        async def click(self, *_a, **_kw):
+            return None
+
+        async def wait_for_load_state(self, *_a, **_kw):
+            return None
+
+    filler = PlaywrightFormFiller(llm_client=AsyncMock())
+    result = asyncio.run(filler._submit_and_verify(Page(), {"submit_selector": "#go"}, 1))
+    assert result["status"] == "needs_verification"

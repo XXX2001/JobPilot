@@ -233,10 +233,11 @@ class PlaywrightFormFiller:
         evidence. Never raises after the click: the caller must not mistake
         a possible submission for a failure it can retry on another tier.
         """
-        from backend.applier.verification import verify_page
+        from backend.applier.verification import page_text, verify_page
 
         submit_sel = mapping.get("submit_selector", "button[type=submit]")
         before_url = page.url
+        before_text = await page_text(page)
         try:
             await page.click(submit_sel, timeout=5_000)
         except Exception as exc:  # noqa: BLE001 — the click may have been dispatched
@@ -247,7 +248,7 @@ class PlaywrightFormFiller:
             await page.wait_for_load_state("networkidle", timeout=10_000)
         except Exception:  # noqa: BLE001 — a slow page is still inspected below
             pass
-        check = await verify_page(page, before_url=before_url)
+        check = await verify_page(page, before_url=before_url, before_text=before_text)
         status = {"confirmed": "confirmed", "rejected": "rejected"}.get(check.outcome, "needs_verification")
         logger.info("[Tier 1] job_id=%d submission %s: %s", job_id, status, check.evidence)
         return {"status": status, "evidence": check.evidence}

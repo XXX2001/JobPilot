@@ -91,7 +91,9 @@ def classify_page(
         snippet = " ".join(text[start : m.end() + 120].split())
         return SubmissionCheck("confirmed", f"{snippet} @ {url}"[:_EVIDENCE_CHARS])
     if invalid_count > 0 and before_url is not None and url == before_url:
-        return SubmissionCheck("rejected", f"{invalid_count} form field(s) failed validation at {url}")
+        return SubmissionCheck(
+            "rejected", f"{invalid_count} form field(s) failed validation at {url}"
+        )
     hint = f"; validation text {m.group(0)!r}" if (m := _REJECTED.search(text)) else ""
     return SubmissionCheck("unknown", f"no confirmation found at {url}{hint}"[:_EVIDENCE_CHARS])
 

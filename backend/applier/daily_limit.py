@@ -35,8 +35,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier import POSSIBLY_SUBMITTED_STATUSES, STATUS_PENDING
-from backend.models.application import Application
 from backend.defaults import DAILY_LIMIT
+from backend.models.application import Application
 from backend.utils.time import naive_utc_now, utc_now
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,9 @@ class DailyLimitGuard:
         is full. A same-day or missing reservation is left alone.
         """
         app = await self.db.get(Application, app_id)
-        if app is None or app.quota_reserved_at is None or app.quota_reserved_at >= quota_day_start():
+        if app is None or app.quota_reserved_at is None:
+            return
+        if app.quota_reserved_at >= quota_day_start():
             return
         app.quota_reserved_at = naive_utc_now()
         await self.db.flush()

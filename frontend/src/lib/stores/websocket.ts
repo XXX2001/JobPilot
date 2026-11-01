@@ -1,3 +1,4 @@
+import { ensureSession, resetSession } from '$lib/api';
 import { writable, type Readable } from 'svelte/store';
 import { asWSMessage, type ClientMessage } from '$lib/types/ws';
 import { pushToast } from '$lib/stores/toast';
@@ -54,6 +55,17 @@ export function connectWs() {
     wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws`;
   }
 
+  // W07: the handshake needs the local session cookie; get it first.
+  ensureSession().then(() => openSocket(wsUrl), () => scheduleReconnectAfterSessionFailure());
+}
+
+function scheduleReconnectAfterSessionFailure() {
+  wsStatus.set('disconnected');
+  setTimeout(connectWs, 2000);
+}
+
+function openSocket(wsUrl: string) {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   try {
     ws = new WebSocket(wsUrl);
 
@@ -110,8 +122,10 @@ export function connectWs() {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       wsStatus.set('disconnected');
+      // 1008/1006 can mean the session was refused; re-fetch it on reconnect.
+      if (ev.code !== 1000) resetSession();
       scheduleReconnect();
     };
 

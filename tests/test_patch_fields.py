@@ -18,9 +18,7 @@ import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from pydantic import TypeAdapter, ValidationError
 
-from backend.api.ws_models import ClientMessage, PatchFields
 from backend.applier.engine import ApplicationEngine
 from backend.applier.form_filler import PlaywrightFormFiller
 
@@ -30,21 +28,8 @@ from backend.applier.form_filler import PlaywrightFormFiller
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def test_client_message_accepts_patch_fields():
-    adapter = TypeAdapter(ClientMessage)
-    msg = adapter.validate_python(
-        {"type": "patch_fields", "job_id": 7, "fields": {"#name": "Alice"}}
-    )
-    assert isinstance(msg, PatchFields)
-    assert msg.job_id == 7
-    assert msg.fields == {"#name": "Alice"}
-
-
-def test_client_message_rejects_malformed_patch_fields():
-    adapter = TypeAdapter(ClientMessage)
-    # Missing the required ``fields`` mapping.
-    with pytest.raises(ValidationError):
-        adapter.validate_python({"type": "patch_fields", "job_id": 7})
+# W07: the WS patch_fields/confirm_submit messages were replaced by the
+# acknowledged review-decision command (tests/test_review_decision.py).
 
 
 # ══════════════════════════════════════════════════════════════════════════════

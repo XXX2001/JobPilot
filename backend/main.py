@@ -232,29 +232,18 @@ async def lifespan(app: FastAPI):
             if sm:
                 sm.cancel_login(site)
 
-        def _handle_confirm_submit(msg: dict) -> None:
-            job_id = msg.get("job_id", -1)
-            engine = getattr(app.state, "apply_engine", None)
-            if engine:
-                engine.signal_confirm(job_id)
-
         def _handle_cancel_apply(msg: dict) -> None:
             job_id = msg.get("job_id", -1)
             engine = getattr(app.state, "apply_engine", None)
             if engine:
                 engine.signal_cancel(job_id)
 
-        def _handle_patch_fields(msg: dict) -> None:
-            job_id = msg.get("job_id", -1)
-            engine = getattr(app.state, "apply_engine", None)
-            if engine:
-                engine.signal_patch_fields(job_id, msg.get("fields", {}))
-
         ws_module.manager.register_handler("login_done", _handle_login_done)
         ws_module.manager.register_handler("login_cancel", _handle_login_cancel)
-        ws_module.manager.register_handler("confirm_submit", _handle_confirm_submit)
+        # W07: review approval + corrections are an acknowledged HTTP command
+        # (POST /api/applications/{id}/review-decision); the unacknowledged
+        # WS confirm_submit / patch_fields mutations are gone.
         ws_module.manager.register_handler("cancel_apply", _handle_cancel_apply)
-        ws_module.manager.register_handler("patch_fields", _handle_patch_fields)
 
     except Exception as exc:
         logger.warning("WS handler registration failed (non-fatal): %s", exc)
@@ -307,6 +296,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# W07: Host / Origin / session boundary for commands and the WebSocket.
+# Added last, so it runs first (outermost).
+from backend.api.access import SESSION_COOKIE, AccessBoundary, load_or_create_secret  # noqa: E402
+
+_session_secret = load_or_create_secret(DATA_DIR)
+app.add_middleware(
+    AccessBoundary,
+    allowed_origins=_allowed_origins,
+    extra_hosts=[h.strip() for h in settings.jobpilot_allowed_hosts.split(",") if h.strip()],
+    secret=_session_secret,
+)
+
+
+@app.get("/api/session", include_in_schema=False)
+async def establish_session() -> Response:
+    """Give this browser the local session cookie (W07). Same-site only; never in a URL."""
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(SESSION_COOKIE, _session_secret, httponly=True, samesite="strict", path="/")
+    return resp
 
 # Include API routers (stubs implemented in backend/api/*.py)
 try:

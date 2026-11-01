@@ -70,7 +70,7 @@ WebSocket messages consumed:
 - `status` with `progress >= 1.0` — marks refresh complete, reloads queue
 
 WebSocket messages sent:
-- `{ type: "confirm_submit", job_id }` — approve an auto-apply form submission
+- Approval is not a WS message: the queue modal calls `POST /api/applications/:id/review-decision` (`src/lib/utils/reviewDecision.ts`) and stays open until it is acknowledged
 - `{ type: "cancel_apply", job_id }` — reject a pending submission
 
 User actions: set per-job mode (Auto / Manual / Skip), trigger scan, proceed to CV review panel, confirm or cancel auto-apply modal.

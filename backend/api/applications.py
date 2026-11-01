@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import exists, func, select
 
 from backend.api.deps import DBSession
@@ -548,6 +548,52 @@ async def get_review_state(job_id: int, request: Request) -> dict:
     if payload is None:
         raise HTTPException(status_code=404, detail="No pending review")
     return payload
+
+
+class ReviewDecisionRequest(BaseModel):
+    """W07: an acknowledged decision on one review snapshot."""
+
+    review_id: str = Field(min_length=1, max_length=64)
+    revision: int = Field(ge=1)
+    decision: Literal["approve", "cancel"]
+    #: Corrections to apply before submit (selector → value), part of the approval.
+    fields: dict[str, str] = Field(default_factory=dict, max_length=200)
+    #: Client-generated; a retry of a lost response reuses it.
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+class ReviewDecisionAck(BaseModel):
+    job_id: int
+    review_id: str
+    revision: int
+    decision: Literal["approve", "cancel"]
+    accepted_at: str
+
+
+@router.post("/{job_id}/review-decision", response_model=ReviewDecisionAck)
+async def decide_review(job_id: int, body: ReviewDecisionRequest, request: Request) -> ReviewDecisionAck:
+    """Approve (with corrections) or cancel the review currently awaiting a decision.
+
+    409 when the review is unknown, not yet ready, already decided, or not
+    the current revision; an identical retry returns the original ack.
+    """
+    from backend.applier.engine import ReviewConflict
+
+    engine = getattr(request.app.state, "apply_engine", None)
+    if engine is None:
+        raise HTTPException(status_code=503, detail="ApplicationEngine not initialised")
+    try:
+        ack = engine.decide(
+            job_id,
+            review_id=body.review_id,
+            revision=body.revision,
+            decision=body.decision,
+            fields=body.fields,
+            idempotency_key=body.idempotency_key,
+        )
+    except ReviewConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return ReviewDecisionAck(**ack)
 
 
 @router.post("/{match_id}/apply", status_code=200, response_model=ApplicationResult)

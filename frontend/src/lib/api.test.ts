@@ -30,7 +30,8 @@ function installFetchStub(responseBody: unknown = {}): {
 	const originalFetch = globalThis.fetch;
 
 	globalThis.fetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
-		calls.push({ url: String(input), init });
+		// W07 session bootstrap is not the call under test.
+		if (!String(input).endsWith('/api/session')) calls.push({ url: String(input), init });
 		return new Response(JSON.stringify(responseBody), {
 			status: 200,
 			headers: { 'Content-Type': 'application/json' }
@@ -147,3 +148,29 @@ describe('apiFetch — Content-Type handling', () => {
 		}
 	});
 });
+
+describe('apiFetch session (W07)', () => {
+	it('establishes the session before a command and retries once on 401', async () => {
+		const seen: string[] = [];
+		let first = true;
+		const original = globalThis.fetch;
+		globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+			const url = String(input);
+			seen.push(url);
+			if (url.endsWith('/api/session')) return new Response('{}', { status: 200 });
+			if (first) {
+				first = false;
+				return new Response('{"detail":"Session required"}', { status: 401 });
+			}
+			return new Response('{"ok":true}', { status: 200 });
+		}) as typeof fetch;
+		try {
+			await expect(apiFetch('/api/x', { method: 'POST', body: '{}' })).resolves.toEqual({ ok: true });
+			expect(seen.filter((u) => u.endsWith('/api/x'))).toHaveLength(2);
+			expect(seen.at(-2)).toMatch(/\/api\/session$/);
+		} finally {
+			globalThis.fetch = original;
+		}
+	});
+});
+

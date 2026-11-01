@@ -58,6 +58,9 @@ export interface ApplyReviewMsg {
 	job_id: number;
 	filled_fields: Record<string, string>;
 	screenshot_base64: string | null;
+	/** W07: identity of this review snapshot; send it back on approval. */
+	review_id: string | null;
+	revision: number | null;
 }
 
 export interface ApplyResultMsg {
@@ -144,21 +147,9 @@ export type WSMessageType = WSMessage['type'];
 
 // ─── Client → Server ─────────────────────────────────────────────────────────
 
-export interface ConfirmSubmitMsg {
-	type: 'confirm_submit';
-	job_id: number;
-}
-
 export interface CancelApplyMsg {
 	type: 'cancel_apply';
 	job_id: number;
-}
-
-/** User edits to mis-filled review fields (selector→new value) before submit. */
-export interface PatchFieldsMsg {
-	type: 'patch_fields';
-	job_id: number;
-	fields: Record<string, string>;
 }
 
 export interface LoginDoneMsg {
@@ -171,10 +162,10 @@ export interface LoginCancelMsg {
 	site: string;
 }
 
+// W07: review approval and corrections are an HTTP command
+// (POST /api/applications/:id/review-decision), not a WS message.
 export type ClientMessage =
-	| ConfirmSubmitMsg
 	| CancelApplyMsg
-	| PatchFieldsMsg
 	| LoginDoneMsg
 	| LoginCancelMsg;
 

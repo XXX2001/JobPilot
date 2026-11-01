@@ -134,7 +134,6 @@ All handlers are registered conditionally — if the respective module cannot be
 |---|---|---|
 | `"login_done"` | `_handle_login_done` | Calls `session_manager.confirm_login(site)`. |
 | `"login_cancel"` | `_handle_login_cancel` | Calls `session_manager.cancel_login(site)`. |
-| `"confirm_submit"` | `_handle_confirm_submit` | Calls `apply_engine.signal_confirm(job_id)`. |
 | `"cancel_apply"` | `_handle_cancel_apply` | Calls `apply_engine.signal_cancel(job_id)`. |
 
 ---

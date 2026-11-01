@@ -50,7 +50,7 @@ class AssistedApplyStrategy:
 
     def __init__(
         self,
-        on_review: Optional[Callable[..., None]] = None,
+        on_review: Optional[Callable[..., Optional[dict]]] = None,
         on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
         # Engine callback invoked at apply_review broadcast time so the

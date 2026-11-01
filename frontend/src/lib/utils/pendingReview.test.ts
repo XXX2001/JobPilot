@@ -110,6 +110,12 @@ describe('reviewStateToModal', () => {
 		});
 	});
 
+	it('carries the review identity an approval must name (W07)', () => {
+		const modal = reviewStateToModal({ job_id: 1, filled_fields: {}, review_id: 'abc', revision: 3 });
+		expect(modal?.reviewId).toBe('abc');
+		expect(modal?.revision).toBe(3);
+	});
+
 	it('defaults fields to {} when filled_fields is missing', () => {
 		const modal = reviewStateToModal({ job_id: 7, screenshot_b64: null });
 		expect(modal).toEqual({ jobId: 7, method: 'auto', fields: {}, screenshot: undefined });

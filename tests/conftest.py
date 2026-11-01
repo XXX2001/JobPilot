@@ -49,6 +49,7 @@ os.environ["JOBPILOT_DATA_DIR"] = _TEST_DATA_DIR
 
 # Seed dummy credentials so backend.config.Settings() doesn't refuse to load
 # on fresh checkouts / CI machines that don't have a real ``.env``.
+os.environ.setdefault("JOBPILOT_ALLOWED_HOSTS", "testserver")  # TestClient Host header (W07)
 os.environ.setdefault("LLM_API_KEY", "test-key-not-real")
 os.environ.setdefault("EMBEDDING_API_KEY", "test-key-not-real")
 os.environ.setdefault("BROWSER_LLM_API_KEY", "test-key-not-real")
@@ -152,6 +153,7 @@ def test_app():
     from backend.main import app
 
     with TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/api/session")  # W07: authenticated local session for commands
         yield client
 
 

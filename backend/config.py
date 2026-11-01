@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     # Until destination verification and correction gating exist, `auto`
     # apply is refused; assisted (prefill + you submit) and manual remain.
     jobpilot_auto_submit_enabled: bool = False
+    # W07: extra Host names accepted besides loopback and the allowed origins'
+    # hosts (comma-separated). Needed only behind a local reverse proxy.
+    jobpilot_allowed_hosts: str = ""
     jobpilot_data_dir: str = "./data"
     # Comma-separated list of allowed CORS origins. Default = local dev hosts.
     jobpilot_allowed_origins: str = (

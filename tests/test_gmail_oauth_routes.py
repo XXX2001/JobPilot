@@ -20,6 +20,7 @@ def app_with_gmail(monkeypatch):
     monkeypatch.setattr(cfg, "settings", cfg._load_settings())
     from backend.main import app
     with TestClient(app, raise_server_exceptions=False) as client:
+        client.get("/api/session")  # W07 local session for commands
         yield client
 
 

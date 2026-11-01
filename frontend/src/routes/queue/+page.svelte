@@ -18,6 +18,7 @@
 		reviewStateToModal,
 		savePendingReviewIds
 	} from '$lib/utils/pendingReview';
+	import { submitReviewDecision } from '$lib/utils/reviewDecision';
 
 	type ApplyMode = 'auto' | 'manual' | 'skip';
 	type Phase = 'select' | 'review';
@@ -41,7 +42,12 @@
 		method: string;
 		fields?: Record<string, string>;
 		screenshot?: string;
+		reviewId?: string;
+		revision?: number;
 	} | null>(null);
+	/** W07: the decision is in flight; the modal stays until it is acknowledged. */
+	let deciding = $state(false);
+	let decisionError = $state('');
 
 	/** Index of the keyboard-focused card in the `matches` array. -1 = none. */
 	let focusedIndex = $state(-1);
@@ -60,8 +66,11 @@
 				jobId: lastMsg.job_id,
 				method: 'auto',
 				fields: lastMsg.filled_fields,
-				screenshot: lastMsg.screenshot_base64
+				screenshot: lastMsg.screenshot_base64 ?? undefined,
+				reviewId: lastMsg.review_id ?? undefined,
+				revision: lastMsg.revision ?? undefined
 			};
+			decisionError = '';
 			// Mirror the awaiting job id so the review survives a WS reconnect/reload.
 			savePendingReviewIds(addPendingReviewId(loadPendingReviewIds(), lastMsg.job_id));
 		}
@@ -211,26 +220,42 @@
 		loadQueue();
 	}
 
-	function confirmApply() {
-		if (confirmModal) {
-			const jobId = confirmModal.jobId;
-			if (confirmModal.fields) {
-				send({ type: 'patch_fields', job_id: jobId, fields: confirmModal.fields });
-			}
-			send({ type: 'confirm_submit', job_id: jobId });
+	/** W07: approve/cancel the exact snapshot shown; close only on acknowledgment. */
+	async function decide(decision: 'approve' | 'cancel') {
+		const modal = confirmModal;
+		if (!modal || deciding) return;
+		if (!modal.reviewId || !modal.revision) {
+			decisionError = 'This review has no identity yet — reload it before deciding.';
+			return;
+		}
+		deciding = true;
+		decisionError = '';
+		try {
+			await submitReviewDecision(
+				{ jobId: modal.jobId, reviewId: modal.reviewId, revision: modal.revision },
+				decision,
+				decision === 'approve' ? { ...(modal.fields ?? {}) } : {}
+			);
 			confirmModal = null;
-			savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), jobId));
+			savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), modal.jobId));
+		} catch (e: any) {
+			decisionError = e?.message ?? 'The decision was not acknowledged';
+			if (e?.status === 409) {
+				// Stale or already decided: show the current snapshot, if any.
+				try {
+					const fresh = reviewStateToModal(await apiFetch(`/api/applications/${modal.jobId}/review-state`));
+					if (fresh) confirmModal = fresh;
+				} catch {
+					/* no current review — keep the error visible */
+				}
+			}
+		} finally {
+			deciding = false;
 		}
 	}
 
-	function cancelApply() {
-		if (confirmModal) {
-			const jobId = confirmModal.jobId;
-			send({ type: 'cancel_apply', job_id: jobId });
-			confirmModal = null;
-			savePendingReviewIds(removePendingReviewId(loadPendingReviewIds(), jobId));
-		}
-	}
+	const confirmApply = () => decide('approve');
+	const cancelApply = () => decide('cancel');
 
 	/**
 	 * Recover an in-flight apply-review after a WS reconnect or page reload.
@@ -548,16 +573,21 @@
 					</dl>
 				</div>
 			{/if}
+			{#if decisionError}
+				<p class="px-4 text-xs text-red-400" role="alert">{decisionError}</p>
+			{/if}
 			<div class="flex justify-end gap-2 p-4">
 				<button
 					onclick={cancelApply}
-					class="border-border hover:bg-accent rounded-md border px-4 py-2 text-xs transition-colors"
+					disabled={deciding}
+					class="border-border hover:bg-accent rounded-md border px-4 py-2 text-xs transition-colors disabled:opacity-50"
 					>Cancel</button
 				>
 				<button
 					onclick={confirmApply}
-					class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-xs transition-colors"
-					>Confirm Submit</button
+					disabled={deciding}
+					class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-2 text-xs transition-colors disabled:opacity-50"
+					>{deciding ? 'Waiting for confirmation…' : 'Confirm Submit'}</button
 				>
 			</div>
 		</div>

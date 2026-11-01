@@ -55,6 +55,8 @@ def test_on_review_callback_populates_cache():
     callback(42, filled_fields={"#name": "Alice"}, screenshot_b64="abc123")
 
     payload = engine.get_pending_review(42)
+    assert payload is not None
+    assert payload.pop("review_id") and payload.pop("revision") == 1  # W07 identity
     assert payload == {
         "job_id": 42,
         "filled_fields": {"#name": "Alice"},
@@ -155,6 +157,7 @@ def test_review_state_http_returns_cached_payload(test_app: TestClient):
     resp = test_app.get("/api/applications/123/review-state")
     assert resp.status_code == 200, resp.text
     body = resp.json()
+    assert body.pop("review_id") and body.pop("revision") == 1  # W07 identity
     assert body == {
         "job_id": 123,
         "filled_fields": {"#email": "a@b.com"},

@@ -53,7 +53,7 @@ class PlaywrightFormFiller:
     def __init__(
         self,
         llm_client: "LLMClient",
-        on_review: Optional[Callable[..., None]] = None,
+        on_review: Optional[Callable[..., Optional[dict]]] = None,
         on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
         self._llm = llm_client
@@ -209,7 +209,13 @@ class PlaywrightFormFiller:
             except Exception:
                 pass
 
-            # Phase 6: broadcast apply_review for user inspection
+            # Phase 6: record the review snapshot (engine assigns its
+            # review_id/revision), then broadcast it for user inspection.
+            snapshot = (
+                self._on_review(job_id, filled_fields=filled_fields, screenshot_b64=screenshot_b64)
+                if self._on_review is not None
+                else None
+            ) or {}
             try:
                 from backend.api.ws import manager as ws_manager  # type: ignore
                 from backend.api.ws_models import ApplyReview  # type: ignore
@@ -219,19 +225,12 @@ class PlaywrightFormFiller:
                         job_id=job_id,
                         filled_fields=filled_fields,
                         screenshot_base64=screenshot_b64,
+                        review_id=snapshot.get("review_id"),
+                        revision=snapshot.get("revision"),
                     )
                 )
             except Exception as exc:
                 logger.warning("Could not broadcast apply_review: %s", exc)
-
-            # Cache the same snapshot the WS broadcast just sent so a
-            # reconnecting client can re-fetch it over HTTP.
-            if self._on_review is not None:
-                self._on_review(
-                    job_id,
-                    filled_fields=filled_fields,
-                    screenshot_b64=screenshot_b64,
-                )
 
             # Phase 7: wait for confirm or cancel
             if confirm_event is None:

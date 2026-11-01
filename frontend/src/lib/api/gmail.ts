@@ -1,3 +1,5 @@
+import { apiFetch } from "$lib/api";
+
 export type GmailStatus = {
   connected: boolean;
   email_address: string | null;
@@ -13,19 +15,13 @@ export async function fetchGmailStatus(): Promise<GmailStatus> {
   return r.json();
 }
 
+// W07: commands go through apiFetch so they carry the local session.
 export async function forceSync(): Promise<{ synced: number }> {
-  const r = await fetch("/api/gmail/sync", { method: "POST" });
-  if (!r.ok) throw new Error(`gmail sync ${r.status}`);
-  return r.json();
+  return apiFetch("/api/gmail/sync", { method: "POST" });
 }
 
 export async function disconnect(email: string): Promise<void> {
-  const r = await fetch("/api/gmail/disconnect", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  });
-  if (!r.ok) throw new Error(`gmail disconnect ${r.status}`);
+  await apiFetch("/api/gmail/disconnect", { method: "POST", body: JSON.stringify({ email }) });
 }
 
 export type UnlinkedItem = {
@@ -48,13 +44,10 @@ export async function fetchUnlinked(): Promise<UnlinkedItem[]> {
 }
 
 export async function linkMessage(application_id: number, gmail_message_id: number) {
-  const r = await fetch("/api/correspondence/link", {
+  return apiFetch("/api/correspondence/link", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ application_id, gmail_message_id }),
   });
-  if (!r.ok) throw new Error(`link ${r.status}`);
-  return r.json();
 }
 
 export async function fetchThread(application_id: number) {

@@ -112,17 +112,11 @@ When Tier 1 is skipped or raises, `auto_apply._browser_use_apply` (`auto_apply.p
 
 ## The `apply_review` confirm/cancel flow
 
-Both tiers pause before submitting and emit an `ApplyReview` WS message (`backend/api/ws_models.py:84`) containing `job_id`, `filled_fields`, and an optional `screenshot_base64`. The frontend renders this for the user, who responds with one of three WS messages, routed by handlers registered in `backend/main.py:228`–`250`:
+Both tiers pause before submitting. The strategy calls the engine's `record_pending_review`, which assigns the snapshot a fresh `review_id` and the next `revision`, caches it for `GET .../review-state`, and the strategy then broadcasts an `ApplyReview` WS message carrying `job_id`, `filled_fields`, `screenshot_base64`, `review_id` and `revision`.
 
-| WS message | Handler | Engine method |
-|------------|---------|---------------|
-| `confirm_submit` | `_handle_confirm_submit` | `signal_confirm(job_id)` (`engine.py:93`) |
-| `cancel_apply` | `_handle_cancel_apply` | `signal_cancel(job_id)` (`engine.py:134`) |
-| `patch_fields` | `_handle_patch_fields` | `signal_patch_fields(job_id, fields)` (`engine.py:106`) |
+The user's decision is an acknowledged HTTP command, `POST /api/applications/{job_id}/review-decision` (W07), handled by `ApplicationEngine.decide`. It must name the current `review_id`/`revision` of a review that is actually waiting; premature, stale, unknown or already-consumed decisions get **409** and change nothing. An approval carries the user's field corrections (`fields`, selector → value) in the same command, so corrections and approval cannot arrive out of order. A retry with the same `idempotency_key` returns the original acknowledgment (one effect); reusing a key with different content is a 409. The queue modal stays open until the acknowledgment arrives and retries network failures with the same key. Only `cancel_apply` remains a WebSocket message (used to abort a running fill).
 
-`signal_confirm` / `signal_cancel` just `.set()` the per-job `asyncio.Event` the strategy is awaiting.
-
-**Field patching.** The client may send `patch_fields` (a `selector → new value` map) *before* `confirm_submit` to correct mis-filled values. `signal_patch_fields` stores them in `_pending_patches`; the Tier-1 form filler re-applies them in `_apply_patches` right before clicking submit (best-effort — a failing re-fill logs a warning, never aborts). Critically, `signal_confirm` does **not** purge the patches (`engine.py:97`): `event.set()` only schedules the waiter wakeup, so the filler reads the patches *after* it resumes. Patches are purged on cancel and in `apply()`'s `finally`.
+The Tier-1 form filler re-applies the corrections in `_apply_patches` right before clicking submit (still best-effort until W08 makes a failed correction block submission). Patches are purged on cancel and in `apply()`'s `finally`.
 
 **Reconnect recovery.** Each broadcast also calls `on_review` → `record_pending_review` (`engine.py:120`), caching the snapshot in `_pending_reviews`. A client that lost its WS connection can re-fetch it over HTTP via `GET /api/applications/{job_id}/review-state` (`backend/api/applications.py:462`).
 

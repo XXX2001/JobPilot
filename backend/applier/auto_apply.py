@@ -62,7 +62,7 @@ class AutoApplyStrategy:
 
     def __init__(
         self,
-        on_review: Optional[Callable[..., None]] = None,
+        on_review: Optional[Callable[..., Optional[dict]]] = None,
         on_get_patches: Optional[Callable[[int], dict]] = None,
     ) -> None:
         # Engine callback invoked at apply_review broadcast time so the
@@ -375,7 +375,12 @@ class AutoApplyStrategy:
                 message=f"Fill-out phase failed: {exc}",
             )
 
-        # Broadcast review
+        # Record the review snapshot (engine assigns review_id/revision), then broadcast it.
+        snapshot = (
+            self._on_review(job_id, filled_fields=filled_fields, screenshot_b64=screenshot_b64)
+            if self._on_review is not None
+            else None
+        ) or {}
         try:
             from backend.api.ws import manager as ws_manager  # type: ignore
             from backend.api.ws_models import ApplyReview  # type: ignore
@@ -385,20 +390,13 @@ class AutoApplyStrategy:
                     job_id=job_id,
                     filled_fields=filled_fields,
                     screenshot_base64=screenshot_b64,
+                    review_id=snapshot.get("review_id"),
+                    revision=snapshot.get("revision"),
                 )
             )
             logger.info("[Tier 2] Broadcast apply_review for job_id=%d — waiting for confirmation", job_id)
         except Exception as exc:
             logger.warning("Could not broadcast apply_review: %s", exc)
-
-        # Cache the same snapshot the WS broadcast just sent so a
-        # reconnecting client can re-fetch it over HTTP.
-        if self._on_review is not None:
-            self._on_review(
-                job_id,
-                filled_fields=filled_fields,
-                screenshot_b64=screenshot_b64,
-            )
 
         # Wait for user
         if confirm_event is None:

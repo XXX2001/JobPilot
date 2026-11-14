@@ -84,7 +84,7 @@ Applied on restart.
 
 Live run, 2026-11-14, 27 minutes, 30 sources (18 Greenhouse, 5 Ashby, 5 SmartRecruiters, 1 Indeed, 1 LinkedIn guest): 3,447 jobs stored, no source in a failed state at the end, 13 ntfy notifications delivered. The LinkedIn source measured a median lag of 840 s from posting to first sighting; no other source published a posting during the run, so their lag is unmeasured.
 
-Soak results: pending
+Soak, 2026-11-14 16:00–18:00 UTC, 2 hours, same 30 sources, Saturday evening: no source in a failed state at the end, no SQLite lock errors, memory flat at 162–170 MB RSS, 32 s of CPU in total. The LinkedIn guest source went from 45 to 85 jobs seen (median lag 780 s), produced both notifications of the run, and returned an unparseable body 5 times, recovering each time. No company board published a posting during the window, so board lag is still unmeasured. The soak ran commit `ac5d2f1`, before the gazetteer scorer.
 
 ## Overview
 

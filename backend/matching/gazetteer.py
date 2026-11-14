@@ -97,6 +97,39 @@ def _key(alias: str) -> tuple[str, ...]:
     return tuple(tok for tok, _, _ in _tokens(_strip_accents(alias)[0]))
 
 
+def _parse(text: str) -> tuple[list[tuple[str, str, bool]], dict[str, str]]:
+    """(canonical, alias, case_sensitive) entries and canonical -> family of a skill file."""
+    entries: list[tuple[str, str, bool]] = []
+    families: dict[str, str] = {}
+    family: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("@"):
+            family = line[1:].strip()
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        canon = parts[0].lstrip("!").lower()
+        if family:
+            families[canon] = family
+        entries += [(canon, p.lstrip("!"), p.startswith("!")) for p in parts if p]
+    return entries, families
+
+
+def check_skill_lines(text: str) -> int:
+    """Number of skill lines in an owner-supplied file; ValueError naming the first bad line."""
+    count = 0
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line[0] in "#@":
+            continue
+        if not all(_key(part.strip().lstrip("!")) for part in line.split("|")):
+            raise ValueError(f"line {number}: empty skill or alias in {line!r}")
+        count += 1
+    return count
+
+
 class Gazetteer:
     def __init__(
         self, entries: Iterable[tuple[str, str, bool]], families: dict[str, str] | None = None
@@ -107,6 +140,8 @@ class Gazetteer:
         self._families = families or {}
         # Canonical names of the owner's keywords :meth:`load` added as skills of their own.
         self.extra_skills: frozenset[str] = frozenset()
+        # Canonical skills the owner's my_skills file lists; empty without one.
+        self.owner_skills: frozenset[str] = frozenset()
         for canon, alias, case_sensitive in entries:
             key = _key(alias)
             if not key:
@@ -118,29 +153,23 @@ class Gazetteer:
         self._max_len = max((len(k) for k in (*self._ci, *self._cs)), default=0)
 
     @classmethod
-    def load(cls, extra_terms: Iterable[str] = (), *, path: Path = SKILLS_PATH) -> Gazetteer:
-        """The curated list, plus ``extra_terms`` (the owner's search keywords).
+    def load(
+        cls, extra_terms: Iterable[str] = (), *, path: Path = SKILLS_PATH, my_skills: str = ""
+    ) -> Gazetteer:
+        """The vocabulary at ``path``, the owner's ``my_skills`` lines (same format), plus
+        ``extra_terms`` (the owner's search keywords).
 
         An extra term becomes a skill of its own when the curated list finds nothing in
         it, so a profession the list does not cover still counts. A keyword that contains
         a curated skill ("Python Developer", "Ingénieur Robotique") is a job title, not a
         skill: as an alias it would win the longest match and hide the skill inside it.
         """
-        entries: list[tuple[str, str, bool]] = []
-        families: dict[str, str] = {}
-        family: str | None = None
-        for raw in path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("@"):
-                family = line[1:].strip()
-                continue
-            parts = [p.strip() for p in line.split("|")]
-            canon = parts[0].lstrip("!").lower()
-            if family:
-                families[canon] = family
-            entries += [(canon, p.lstrip("!"), p.startswith("!")) for p in parts if p]
+        entries, families = _parse(path.read_text(encoding="utf-8"))
+        # The owner's own file comes second: the first claim on an alias wins, so an
+        # alias the vocabulary knows resolves to the vocabulary's skill.
+        mine, my_families = _parse(my_skills)
+        entries += mine
+        families = my_families | families
         gazetteer = cls(entries, families)
         case_sensitive_lowered = {tuple(t.lower() for t in k) for k in gazetteer._cs}
         extra: dict[tuple[str, ...], str] = {}
@@ -154,6 +183,11 @@ class Gazetteer:
             gazetteer._max_len = max(gazetteer._max_len, len(key))
         gazetteer.extra_skills = frozenset(
             canon for key, canon in extra.items() if gazetteer._ci[key] == canon
+        )
+        gazetteer.owner_skills = frozenset(
+            gazetteer._cs.get(key) or gazetteer._ci[tuple(t.lower() for t in key)]
+            for _, alias, _ in mine
+            if (key := _key(alias))
         )
         return gazetteer
 

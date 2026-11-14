@@ -12,12 +12,14 @@ from typing import Any, Literal, Optional, Type, TypeVar
 
 import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import DBSession
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
+from backend.matching.gazetteer import SKILLS_PATH, check_skill_lines
+from backend.matching.matcher import skill_files
 from backend.models.base import Base
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
@@ -85,6 +87,7 @@ async def _upsert_singleton(
     await db.commit()
     await db.refresh(row)
     return row
+
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], redirect_slashes=False)
 
@@ -183,6 +186,7 @@ class CvUploadResponse(BaseModel):
     path: str
     filename: str
     size_bytes: int
+
 
 class SourceProviderStatus(BaseModel):
     configured: bool
@@ -325,6 +329,54 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
     return out
 
 
+class SkillsIn(BaseModel):
+    my_skills: str = Field(max_length=200_000)
+
+
+def _skills_out() -> dict[str, Any]:
+    my_path, vocab = skill_files()
+    text = my_path.read_text(encoding="utf-8") if my_path.is_file() else None
+    return {
+        "my_skills": text,
+        "vocabulary_overridden": vocab != SKILLS_PATH,
+        "skill_count": check_skill_lines(text) if text else 0,
+    }
+
+
+@router.get("/skills")
+async def get_skills():
+    """The owner's skill file ($DATA/my_skills.txt), which replaces skills read from the CV."""
+    try:
+        return _skills_out()
+    except ValueError as exc:  # hand-edited into a bad state: show it so it can be fixed
+        my_path, vocab = skill_files()
+        return {
+            "my_skills": my_path.read_text(encoding="utf-8"),
+            "vocabulary_overridden": vocab != SKILLS_PATH,
+            "skill_count": 0,
+            "error": str(exc),
+        }
+
+
+@router.put("/skills")
+async def put_skills(body: SkillsIn, db: DBSession):
+    """Replace the owner's skill file and rescore. An empty body removes it (back to the CV)."""
+    try:
+        check_skill_lines(body.my_skills)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    my_path, _ = skill_files()
+    if body.my_skills.strip():
+        my_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = my_path.with_suffix(".tmp")
+        tmp.write_text(body.my_skills, encoding="utf-8")
+        tmp.replace(my_path)
+    else:
+        my_path.unlink(missing_ok=True)
+    await _rescore(db)
+    return _skills_out()
+
+
 @router.get("/sources", response_model=SourcesOut)
 async def get_sources() -> SourcesOut:
     """Return which API sources are configured (keys masked)."""
@@ -335,9 +387,7 @@ async def get_sources() -> SourcesOut:
     return SourcesOut(
         adzuna=SourceProviderStatus(
             configured=bool(adzuna_id_set and adzuna_key_set),
-            app_id_hint=(
-                (adzuna_app_id[:4] + "****") if adzuna_id_set else None
-            ),
+            app_id_hint=((adzuna_app_id[:4] + "****") if adzuna_id_set else None),
         ),
         llm=LlmProviderStatus(
             configured=llm_key_set,
@@ -532,6 +582,7 @@ async def _compile_check(tex: str, templates_dir: Path) -> None:
                 ),
             ) from exc
 
+
 def _sanitize_cv_filename(raw_filename: str) -> str:
     """Slug a user-supplied filename, preserving extension.
 
@@ -584,7 +635,7 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
             status_code=413,
             detail=(
                 f"File too large ({len(data)} bytes). Maximum allowed size is "
-                f"{_MAX_CV_SIZE_BYTES} bytes ({_MAX_CV_SIZE_BYTES // (1024*1024)} MB)."
+                f"{_MAX_CV_SIZE_BYTES} bytes ({_MAX_CV_SIZE_BYTES // (1024 * 1024)} MB)."
             ),
         )
 
@@ -763,9 +814,7 @@ async def get_sites(db: DBSession):
 
 
 @router.put("/sites/{site_name}", response_model=SiteToggleResponse)
-async def toggle_site(
-    site_name: str, body: SiteToggle, db: DBSession
-) -> SiteToggleResponse:
+async def toggle_site(site_name: str, body: SiteToggle, db: DBSession) -> SiteToggleResponse:
     """Enable or disable a job source site."""
     if site_name not in SITE_CONFIGS:
         raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")

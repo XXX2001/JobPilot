@@ -14,7 +14,7 @@ from backend.defaults import MIN_MATCH_SCORE
 from backend.latex.artifacts import resolve_base_source
 from backend.matching.cv_parser import latex_to_text
 from backend.matching.filters import JobFilters
-from backend.matching.gazetteer import GAZETTEER_VERSION, Gazetteer
+from backend.matching.gazetteer import SKILLS_PATH, Gazetteer, file_version
 from backend.matching.scorer import (
     SCORER_VERSION,
     ScoreResult,
@@ -37,16 +37,26 @@ class JobMatcher:
     posting asks for them. ``cv_text`` may be LaTeX source.
     """
 
-    def __init__(self, cv_text: str = "", extra_terms: Iterable[str] = ()) -> None:
+    def __init__(
+        self,
+        cv_text: str = "",
+        extra_terms: Iterable[str] = (),
+        *,
+        my_skills: str = "",
+        vocab_path: Path = SKILLS_PATH,
+    ) -> None:
+        """``my_skills`` (the owner's skill file) replaces the CV when it lists a skill."""
         terms = sorted({" ".join(t.lower().split()) for t in extra_terms} - {""})
-        self._gaz = Gazetteer.load(terms)
+        self._gaz = Gazetteer.load(terms, path=vocab_path, my_skills=my_skills)
         cv_text = latex_to_text(cv_text)  # "R\\&D" is not the skill R
         self._cv = cv_skills(cv_text, self._gaz) if cv_text.strip() else None
+        if self._gaz.owner_skills:
+            self._cv, cv_text = self._gaz.owner_skills, "my_skills\0" + my_skills
         # What a stored score was computed from: a match with another basis is stale.
         digest = hashlib.sha256(
             "\0".join([str(SCORER_VERSION), cv_text, *terms]).encode()
         ).hexdigest()
-        self.score_basis = f"{digest[:12]}:{GAZETTEER_VERSION}"
+        self.score_basis = f"{digest[:12]}:{file_version(vocab_path)}"
 
     def explain(self, job: JobDetails, filters: JobFilters) -> ScoreResult:
         if self._cv is not None:
@@ -76,8 +86,17 @@ class JobMatcher:
 
 
 @lru_cache(maxsize=4)
-def _matcher(cv_text: str, keywords: tuple[str, ...]) -> JobMatcher:
-    return JobMatcher(cv_text, keywords)
+def _matcher(
+    cv_text: str, keywords: tuple[str, ...], my_skills: str, vocab: Path, _vocab_version: str
+) -> JobMatcher:
+    return JobMatcher(cv_text, keywords, my_skills=my_skills, vocab_path=vocab)
+
+
+def skill_files() -> tuple[Path, Path]:
+    """($DATA/my_skills.txt, the vocabulary: $DATA/skills.txt when present, else bundled)."""
+    data = Path(settings.jobpilot_data_dir)
+    override = data / "skills.txt"
+    return data / "my_skills.txt", override if override.is_file() else SKILLS_PATH
 
 
 async def load_matcher(db: AsyncSession) -> JobMatcher:
@@ -97,4 +116,11 @@ async def load_matcher(db: AsyncSession) -> JobMatcher:
         except (OSError, UnicodeError) as exc:
             logger.warning("Base CV %s unreadable, matching on keywords only: %s", cv_path, exc)
     keywords = _extract_json_list(row.keywords, "include") if row is not None else []
-    return _matcher(cv_text, tuple(keywords))
+    my_path, vocab = skill_files()
+    my_skills = ""
+    if my_path.is_file():
+        try:
+            my_skills = my_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            logger.warning("%s unreadable, using the CV: %s", my_path, exc)
+    return _matcher(cv_text, tuple(keywords), my_skills, vocab, file_version(vocab))

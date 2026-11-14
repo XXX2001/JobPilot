@@ -1,0 +1,12 @@
+# Your skills. Copy to <data dir>/my_skills.txt (or PUT it to /api/settings/skills).
+# When this file lists at least one skill, jobs are scored against it and the CV is
+# no longer read for skills. Delete the file to go back to the CV.
+#
+# One skill per line:  name | alias | alias
+# "!" in front of a name makes it case-sensitive (for names that are also words: !Go, !C).
+# A skill the built-in vocabulary does not know is fine: it is added.
+python | python3
+ros 2 | ros2 | ros humble
+c++ | cpp
+docker
+!Go | golang

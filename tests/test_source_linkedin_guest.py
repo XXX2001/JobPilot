@@ -191,7 +191,8 @@ async def test_linkedin_window_is_twice_the_gap_within_bounds():
 
 
 async def test_empty_200_is_zero_jobs_not_error():
-    for body in (b"", b"  \n "):
+    # the last one is what LinkedIn sends today for a window with no posting
+    for body in (b"", b"  \n ", b"<!DOCTYPE html>\n\n<!---->  "):
         async with client_for(recording([], body)) as client:
             res = await poll(client, CFG, None, None)
         assert res.jobs == [] and not res.not_modified and not res.truncated

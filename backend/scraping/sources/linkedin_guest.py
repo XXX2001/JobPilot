@@ -9,6 +9,8 @@ not a card list counts as blocked so the poller backs off.
 
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -58,6 +60,9 @@ def _posted_at(card) -> datetime | None:
     return day  # no relative text, or one that contradicts the attribute
 
 
+_NO_MARKUP = re.compile(r"<!DOCTYPE[^>]*>|<!--.*?-->", re.IGNORECASE | re.DOTALL)
+
+
 async def _cards(client: httpx.AsyncClient, cfg: dict, window_s: int, start: int) -> list:
     """One page of job cards; ``[]`` when the window holds nothing (more)."""
     # Redirects are not followed: the only one this endpoint sends is the authwall.
@@ -83,7 +88,8 @@ async def _cards(client: httpx.AsyncClient, cfg: dict, window_s: int, start: int
     if status != 200:
         raise SourceError("transient", f"HTTP {status}")
 
-    body = r.text.strip()
+    # An empty window comes back as "" or as a bare ``<!DOCTYPE html><!---->``.
+    body = _NO_MARKUP.sub("", r.text).strip()
     if not body:
         return []  # nothing (more) posted in the window
     try:

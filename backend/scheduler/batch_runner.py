@@ -483,7 +483,7 @@ class BatchRunner:
         repeated batch runs do not create duplicate Job rows.  If a job
         already exists the existing row is reused for the new JobMatch.
         """
-        import hashlib
+        from backend.scraping.deduplicator import dedup_key
 
         today = date.today()
         stored: list[StoredMatch] = []
@@ -491,9 +491,7 @@ class BatchRunner:
 
         for jd, score in ranked:
             # Compute dedup hash — same logic as /api/jobs/search
-            dedup_hash = hashlib.md5(
-                f"{jd.company}|{jd.title}|{jd.location}".lower().encode()
-            ).hexdigest()
+            dedup_hash = dedup_key(jd.company, jd.title, jd.location)
 
             # Check for existing Job with same hash
             existing = (

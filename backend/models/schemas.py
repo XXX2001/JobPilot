@@ -16,7 +16,7 @@ class RawJob(BaseModel):
     salary_text: str = Field(default="", max_length=100)
     salary_min: Optional[int] = None
     salary_max: Optional[int] = None
-    description: str = Field(default="", max_length=5000)
+    description: str = Field(default="", max_length=20000)
     requirements: list[str] = Field(default_factory=list)
     benefits: list[str] = Field(default_factory=list)
     url: str = Field(default="", max_length=2048)

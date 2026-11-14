@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,10 +45,33 @@ class JobSource(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_scraped_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
+    # Monitor poll state (m01). NULL interval/window = the adapter's default.
+    poll_interval_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    next_poll_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    etag: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    fail_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    window_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
+_HAS_EXTERNAL_ID = "external_id IS NOT NULL AND external_id != ''"
 
 
 class Job(Base):
     __tablename__ = "jobs"
+    # Job identity is (source, external_id) when the source gives a stable ID;
+    # ``dedup_hash`` stays the cross-source fallback (spec D2).
+    __table_args__ = (
+        Index(
+            "uq_jobs_source_external",
+            "source_id",
+            "external_id",
+            unique=True,
+            sqlite_where=text(_HAS_EXTERNAL_ID),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[Optional[int]] = mapped_column(
@@ -72,6 +96,8 @@ class Job(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now, index=True)
     dedup_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    first_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class JobMatch(Base):

@@ -48,6 +48,35 @@ def test_search_jobs_schema_valid(test_app: TestClient):
     assert resp.status_code in (200, 502)
 
 
+def test_search_stores_jobs_under_the_shared_dedup_key(test_app: TestClient, monkeypatch):
+    """Manual search hashes with ``dedup_key``: whitespace variants are one job."""
+    import asyncio
+
+    from sqlalchemy import select
+
+    from backend.database import AsyncSessionLocal
+    from backend.models.job import Job
+    from backend.models.schemas import RawJob
+    from backend.scraping.adzuna_client import AdzunaClient
+    from backend.scraping.deduplicator import dedup_key
+
+    titles = iter(["Robotics  Engineer", " robotics engineer"])
+
+    async def fake_search(self, **kwargs):
+        return [RawJob(title=next(titles), company="ACME ", location="Paris", url="http://x")]
+
+    monkeypatch.setattr(AdzunaClient, "search", fake_search)
+    body = {"keywords": ["robotics"], "country": "fr", "max_results": 5}
+    assert test_app.post("/api/jobs/search", json=body).json()["stored"] == 1
+    assert test_app.post("/api/jobs/search", json=body).json()["stored"] == 0
+
+    async def _hashes():
+        async with AsyncSessionLocal() as db:
+            return (await db.execute(select(Job.dedup_hash))).scalars().all()
+
+    assert asyncio.run(_hashes()) == [dedup_key("acme", "robotics engineer", "paris")]
+
+
 # ─── Queue ────────────────────────────────────────────────────────────────────
 
 

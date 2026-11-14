@@ -166,11 +166,9 @@ async def search_jobs(body: SearchRequest, db: DBSession) -> SearchResponse:
 
     Returns the list of newly stored jobs.
     """
-    import hashlib
-
     from backend.matching.filters import JobFilters
     from backend.scraping.adzuna_client import AdzunaClient
-    from backend.scraping.deduplicator import JobDeduplicator
+    from backend.scraping.deduplicator import JobDeduplicator, dedup_key
 
     client = AdzunaClient()
     deduplicator = JobDeduplicator()
@@ -196,9 +194,7 @@ async def search_jobs(body: SearchRequest, db: DBSession) -> SearchResponse:
     stored: list[dict] = []
     for rj in unique_jobs:
         # Skip if hash already in DB
-        dedup_hash = hashlib.md5(
-            f"{rj.company}|{rj.title}|{rj.location}".lower().encode()
-        ).hexdigest()
+        dedup_hash = dedup_key(rj.company, rj.title, rj.location)
         existing = await db.execute(select(Job).where(Job.dedup_hash == dedup_hash))
         if existing.scalar_one_or_none() is not None:
             continue

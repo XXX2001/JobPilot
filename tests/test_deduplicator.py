@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from backend.scraping.deduplicator import JobDeduplicator
+import hashlib
+
 from backend.models.schemas import RawJob
+from backend.scraping.deduplicator import JobDeduplicator, dedup_key
 
 
 def _make_job(
@@ -36,3 +38,23 @@ def test_keeps_longer_description():
     result = dedup.deduplicate([short_job, long_job])
     assert len(result) == 1
     assert result[0].description == long_job.description
+
+
+def test_dedup_key_ignores_case_and_whitespace():
+    assert dedup_key("ACME ", "Robotics  Engineer", " Paris") == dedup_key(
+        "acme", "robotics engineer", "paris"
+    )
+
+
+def test_dedup_key_matches_legacy_hash_for_clean_input():
+    legacy = hashlib.md5("acme|robotics engineer|paris".encode()).hexdigest()
+    assert dedup_key("acme", "robotics engineer", "paris") == legacy
+
+
+def test_dedup_key_tolerates_missing_location():
+    assert dedup_key("acme", "engineer", None) == dedup_key("acme", "engineer", "")
+
+
+def test_deduplicator_uses_dedup_key():
+    job = _make_job(title="Robotics\t Engineer", company=" Acme", location="PARIS ")
+    assert JobDeduplicator()._make_key(job) == dedup_key("acme", "robotics engineer", "paris")

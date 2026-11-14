@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import weakref
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 import httpx
 from sqlalchemy import or_, select
@@ -45,6 +46,10 @@ FALLBACK_INTERVAL_S = 300
 MAX_BACKOFF = timedelta(hours=6)
 DEFAULT_WINDOW_HOURS = 2  # the indeed adapter's default when nothing is configured
 MAX_ERROR_CHARS = 500
+# Adapters that ask for a time window: their seed can miss postings that a later,
+# differently cut window returns. A board adapter returns the whole board, and its
+# posted_at may be old for a posting that was only just (re)published.
+WINDOWED_ADAPTERS = frozenset({"indeed", "linkedin_guest"})
 
 _rng = random.Random()
 
@@ -56,6 +61,30 @@ def next_due(now: datetime, interval_s: float, fail_count: int, rng: random.Rand
     # exponent capped so a long outage cannot overflow; 2**20 intervals is far past 6 h
     backoff = timedelta(seconds=interval_s * 2 ** min(fail_count, 20))
     return now + min(backoff, MAX_BACKOFF)
+
+
+# One per event loop: an asyncio.Lock binds to the loop it first waits on.
+_write_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _write_lock() -> asyncio.Lock:
+    """Serialises the polls' DB writes, so they do not wait on SQLite's write lock.
+
+    ponytail: one lock for every source. SQLite has a single writer anyway; split
+    it only if the store moves to a database with row locks.
+    """
+    return _write_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+
+
+def _predates(posted_at: datetime | None, cutoff: datetime | None) -> bool:
+    """Was the job posted before ``cutoff``? Unknown dates count as not."""
+    if posted_at is None or cutoff is None:
+        return False
+    if posted_at.time() == time.min:  # a bare day (LinkedIn without "x minutes ago")
+        return posted_at.date() < cutoff.date()
+    return posted_at < cutoff
 
 
 async def _load_filters(db: AsyncSession) -> JobFilters:
@@ -95,6 +124,9 @@ async def poll_source(
         cfg["window_hours"] = source.window_hours
     # First successful poll: every job in the window is unseen. Seed silently.
     seeding = source.last_scraped_at is None
+    # ... and a windowed source keeps returning postings older than its seed
+    # (LinkedIn pages, Indeed overflow): those are stored and matched, not pushed.
+    seeded_at = source.first_polled_at if adapter in WINDOWED_ADAPTERS else None
     fail_count = source.fail_count or 0
 
     created: list[tuple[JobMatch, Job]] = []
@@ -103,27 +135,30 @@ async def poll_source(
         if poll is None:
             raise SourceError("transient", f"unknown adapter {adapter!r}")
         result = await poll(client, cfg, source.etag, source.last_scraped_at)
-        if not result.not_modified:
-            jobs = await upsert_discovered(db, source, result.jobs)
-            filters = await _load_filters(db)
-            matches = await match_new(db, jobs, filters, filters.min_score)
-            by_id = {job.id: job for job in jobs}
-            created = [(match, by_id[match.job_id]) for match in matches]
-            source.etag = result.etag
-            if result.truncated and adapter == "indeed":
-                # The window overflowed the page: ask for half as much next time.
-                # ponytail: never widened back; the adapter already widens to cover
-                # downtime. Grow it on quiet polls if a halved window proves too small.
-                window = int(cfg.get("window_hours") or DEFAULT_WINDOW_HOURS)
-                source.window_hours = max(1, window // 2)
-        source.fail_count = 0
-        source.last_error = None
-        source.last_scraped_at = now
-        source.next_poll_at = next_due(now, interval_s, 0, _rng)
-        await db.commit()
+        # The fetch above ran unlocked; the writes below hold the lock up to the commit.
+        async with _write_lock():
+            if not result.not_modified:
+                jobs = await upsert_discovered(db, source, result.jobs)
+                filters = await _load_filters(db)
+                matches = await match_new(db, jobs, filters, filters.min_score)
+                by_id = {job.id: job for job in jobs}
+                created = [(match, by_id[match.job_id]) for match in matches]
+                source.etag = result.etag
+                if result.truncated and adapter == "indeed":
+                    # The window overflowed the page: ask for half as much next time.
+                    # ponytail: never widened back; the adapter already widens to cover
+                    # downtime. Grow it on quiet polls if a halved window proves too small.
+                    window = int(cfg.get("window_hours") or DEFAULT_WINDOW_HOURS)
+                    source.window_hours = max(1, window // 2)
+                elif result.truncated:
+                    logger.warning("monitor: source %s: result truncated, jobs may be missed", name)
+            source.fail_count = 0
+            source.last_error = None
+            source.last_scraped_at = now
+            source.first_polled_at = source.first_polled_at or now
+            source.next_poll_at = next_due(now, interval_s, 0, _rng)
+            await db.commit()
     except Exception as exc:  # noqa: BLE001 - one source must never break the tick
-        # ponytail: a SQLite "database is locked" lands here too and costs one
-        # backoff step; set busy_timeout (planned hardening) if it shows up in logs.
         await db.rollback()
         await db.refresh(source)  # rollback expired it
         if isinstance(exc, SourceError):
@@ -148,6 +183,8 @@ async def poll_source(
 
     if not seeding:
         for match, job in created:
+            if _predates(job.posted_at, seeded_at):
+                continue
             await _safely(notify(match, job, name), "notify", name)
     return len(created)
 

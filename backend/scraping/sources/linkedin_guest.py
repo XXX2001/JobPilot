@@ -1,7 +1,8 @@
-"""LinkedIn guest job search: one logged-out GET returns an HTML fragment of job cards.
+"""LinkedIn guest job search: a logged-out GET returns an HTML fragment of ten job cards.
 
 No account, no cookies (spec D7). There is no ETag: each poll asks for the jobs
-posted in a time window, newest first, and the store diffs by ID. Cards carry no
+posted in a time window, newest first, page by page (at most ``MAX_PAGES``),
+and the store diffs by ID. Cards carry no
 description. Sustained polling of this endpoint is not proven: anything that is
 not a card list counts as blocked so the poller backs off.
 """
@@ -32,6 +33,8 @@ USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/1
 URN_PREFIX = "urn:li:jobPosting:"
 MIN_WINDOW_S = 1800
 MAX_WINDOW_S = 86400
+PAGE_SIZE = 10  # cards per request; the endpoint takes no page-size parameter
+MAX_PAGES = 5
 
 
 def _window_seconds(last_scraped_at: datetime | None) -> int:
@@ -55,12 +58,8 @@ def _posted_at(card) -> datetime | None:
     return day  # no relative text, or one that contradicts the attribute
 
 
-async def poll(
-    client: httpx.AsyncClient,
-    cfg: dict,
-    etag: str | None,
-    last_scraped_at: datetime | None,
-) -> PollResult:
+async def _cards(client: httpx.AsyncClient, cfg: dict, window_s: int, start: int) -> list:
+    """One page of job cards; ``[]`` when the window holds nothing (more)."""
     # Redirects are not followed: the only one this endpoint sends is the authwall.
     r = await send_logged_out(
         client,
@@ -69,9 +68,9 @@ async def poll(
         params={
             "keywords": str(cfg["keywords"]),
             "location": str(cfg["location"]),
-            "f_TPR": f"r{_window_seconds(last_scraped_at)}",
+            "f_TPR": f"r{window_s}",
             "sortBy": "DD",
-            "start": 0,
+            "start": start,
         },
         headers={"User-Agent": USER_AGENT},
     )
@@ -86,7 +85,7 @@ async def poll(
 
     body = r.text.strip()
     if not body:
-        return PollResult()  # nothing posted in the window
+        return []  # nothing (more) posted in the window
     try:
         tree = html.fromstring(body)
     except (ValueError, html.etree.ParserError) as exc:
@@ -95,6 +94,26 @@ async def poll(
     if not cards:
         # A login or challenge page: nothing in it may be read as jobs.
         raise SourceError("blocked", "HTTP 200 without job cards")
+    return cards
+
+
+async def poll(
+    client: httpx.AsyncClient,
+    cfg: dict,
+    etag: str | None,
+    last_scraped_at: datetime | None,
+) -> PollResult:
+    # A page that fails fails the whole poll: nothing is stored, the poller backs
+    # off, and the next window (twice the gap) covers what this one would have.
+    window_s = _window_seconds(last_scraped_at)
+    cards: list = []
+    truncated = True  # until a short page says the window was read to its end
+    for page in range(MAX_PAGES):
+        batch = await _cards(client, cfg, window_s, page * PAGE_SIZE)
+        cards += batch
+        if len(batch) < PAGE_SIZE:
+            truncated = False
+            break
 
     jobs = []
     for card in cards:
@@ -128,7 +147,7 @@ async def poll(
             )
         except ITEM_ERRORS as exc:
             skip_item("linkedin_guest", exc)
-    return PollResult(jobs=jobs)
+    return PollResult(jobs=jobs, truncated=truncated)
 
 
 ADAPTERS["linkedin_guest"] = poll

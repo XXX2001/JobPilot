@@ -51,7 +51,7 @@ async def upsert_discovered(db: AsyncSession, source: JobSource, jobs: list[RawJ
 
     Known miss (accepted): ``jobs.dedup_hash`` is globally unique, so the hash
     fallback also merges two postings of *one* source that carry different IDs
-    but the same company/title/location — a repost, or two identical openings.
+    but the same company/title/city — a repost, or two identical openings.
     The second is not stored; it is logged. Telling them apart needs a
     source-qualified hash column.
     """
@@ -140,7 +140,11 @@ async def upsert_discovered(db: AsyncSession, source: JobSource, jobs: list[RawJ
 async def match_new(
     db: AsyncSession, jobs: list[Job], filters: JobFilters, min_score: float
 ) -> list[JobMatch]:
-    """Create one ``new`` match per job scoring ``>= min_score`` that has no match at all."""
+    """Create one ``new`` match per job scoring ``>= min_score`` that has no match at all.
+
+    The title counts as description text: LinkedIn and SmartRecruiters cards
+    carry no description, so their keywords can only be found there.
+    """
     if not jobs:
         return []
     matched_ids = set(
@@ -156,6 +160,15 @@ async def match_new(
         if job.id in matched_ids:
             continue
         details = raw_to_details(job)
+        details = details.model_copy(
+            update={"description": f"{details.title}\n{details.description}"}
+        )
+        hits = _matcher.matched_keywords(details, filters)
+        # ponytail: the matcher gives 31/100 to any job with no keyword hit, above
+        # the default threshold of 30, so the hit is required here. Drop this gate
+        # when the Phase 2 scorer replaces JobMatcher.
+        if filters.keywords and not hits:
+            continue
         score = _matcher.score(details, filters)
         if score < min_score:
             continue
@@ -163,7 +176,7 @@ async def match_new(
         match = JobMatch(
             job_id=job.id,
             score=score,
-            keyword_hits={kw: True for kw in _matcher.matched_keywords(details, filters)},
+            keyword_hits={kw: True for kw in hits},
             batch_date=today,
             status="new",
         )

@@ -112,6 +112,66 @@ async def test_same_job_from_two_sources_is_one_row():  # Review Focus 3
         assert (job.source_id, job.external_id) == (greenhouse_src.id, "gh-1")
 
 
+async def test_same_job_with_each_sources_location_spelling_is_one_row():  # Review Focus 3
+    """The strings the live sources really return for one Paris posting."""
+    async with AsyncSessionLocal() as db:
+        board = await source(db, "gh-mirakl")
+        linkedin = await source(db, "linkedin", "linkedin_guest")
+        indeed = await source(db, "indeed", "indeed")
+        job = dict(company="Mirakl", title="Backend Engineer")
+        first = await upsert_discovered(
+            db, board, [raw(external_id="gh-1", location="Paris, France", **job)]
+        )
+        second = await upsert_discovered(
+            db, linkedin, [raw(external_id="li-9", location="Paris, Île-de-France, France", **job)]
+        )
+        third = await upsert_discovered(
+            db, indeed, [raw(external_id="in-3", location="Paris, A8, FR", **job)]
+        )
+        assert len(first) == 1 and second == [] and third == []
+        assert await count(db, Job) == 1
+        assert len(await match_new(db, first + second + third, JobFilters(), 0)) == 1
+        # another city is another job
+        lyon = await upsert_discovered(
+            db, linkedin, [raw(external_id="li-10", location="Lyon, France", **job)]
+        )
+        assert len(lyon) == 1 and await count(db, Job) == 2
+
+
+async def test_two_sessions_inserting_the_same_new_job_do_not_collide():
+    """B looks the job up before A commits it, so B's own INSERT meets A's row."""
+    import asyncio
+
+    async with AsyncSessionLocal() as setup:
+        a_id, b_id = (await source(setup, "gh-mirakl")).id, (await source(setup, "linkedin")).id
+        await setup.commit()
+    job = dict(company="Mirakl", location="Paris")
+    async with AsyncSessionLocal() as a, AsyncSessionLocal() as b:
+        src_a, src_b = await a.get(JobSource, a_id), await b.get(JobSource, b_id)
+        # A inserts and holds the write lock, uncommitted
+        in_a = await upsert_discovered(
+            a, src_a, [raw(external_id="gh-1", title="Backend Engineer", **job)]
+        )
+        task = asyncio.create_task(
+            upsert_discovered(
+                b,
+                src_b,
+                [  # the shared job first: B's lookup of it must miss
+                    raw(external_id="li-9", title="Backend  Engineer", **job),
+                    raw(external_id="li-2", title="SRE", **job),
+                ],
+            )
+        )
+        await asyncio.sleep(0.2)
+        assert not task.done()  # B waits on A's lock, past its own lookup
+        await a.commit()
+        in_b = await task
+        await b.commit()
+        assert [j.external_id for j in in_a] == ["gh-1"]
+        assert [j.external_id for j in in_b] == ["li-2"]
+        assert await count(b, Job) == 2
+
+
 async def test_retitled_posting_is_still_one_row_from_a_second_source():  # Review Focus 3
     async with AsyncSessionLocal() as db:
         board = await source(db, "gh-acme")
@@ -261,6 +321,52 @@ async def test_match_new_skips_low_scores_and_any_existing_status():
         assert await match_new(db, [low], JobFilters(), 101) == []
         assert await match_new(db, [skipped], JobFilters(), 0) == []
         assert await count(db, JobMatch) == 1
+
+
+async def test_match_new_reads_keywords_from_the_title():
+    """LinkedIn and SmartRecruiters cards have no description: the title must count."""
+    filters = JobFilters(keywords=["robotics", "software engineer", "python"])
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        hit, miss = await upsert_discovered(
+            db,
+            src,
+            [
+                raw(external_id="a", title="Robotics Software Engineer Python"),
+                raw(external_id="b", title="Chef de rayon"),
+            ],
+        )
+        (match,) = await match_new(db, [hit, miss], filters, 30)
+        assert match.job_id == hit.id
+        assert match.keyword_hits == {"robotics": True, "software engineer": True, "python": True}
+        # all keywords found: the full 40 points over a job with none
+        no_keywords = JobMatcher().score(raw_to_details(miss), filters)
+        assert match.score == no_keywords + 40
+
+
+async def test_match_new_needs_a_keyword_hit_when_keywords_are_set():
+    """Without a hit the matcher still gives 31, above the default threshold of 30."""
+    filters = JobFilters(keywords=["robotics", "python"], locations=["France", "Paris"])
+    old = datetime.now() - timedelta(days=29)
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        (job,) = await upsert_discovered(
+            db,
+            src,
+            [
+                raw(
+                    external_id="a",
+                    title="Account Executive",
+                    location="New York",
+                    description="Sell things.",
+                    posted_at=old,
+                )
+            ],
+        )
+        assert JobMatcher().score(raw_to_details(job), filters) > 30
+        assert await match_new(db, [job], filters, 30) == []
+        # no keywords configured: nothing to hit, the score alone decides
+        assert len(await match_new(db, [job], JobFilters(), 30)) == 1
 
 
 def test_raw_to_details_accepts_a_job_row_with_nulls():

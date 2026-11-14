@@ -54,6 +54,8 @@ class JobSource(Base):
     )
     last_error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     window_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # When the seeding poll succeeded (m02). Older postings are stored, not notified.
+    first_polled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 _HAS_EXTERNAL_ID = "external_id IS NOT NULL AND external_id != ''"

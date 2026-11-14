@@ -92,7 +92,7 @@ async def test_first_poll_seeds_without_notifying(monkeypatch):  # Review Focus 
         assert notify.await_count == 0 and alert.await_count == 0
         assert await count(db, Job) == 3 and await count(db, JobMatch) == 3
         stored = await db.get(JobSource, src.id)
-        assert stored.last_scraped_at == NOW
+        assert stored.last_scraped_at == NOW and stored.first_polled_at == NOW
         assert stored.etag == 'W/"v1"'
         assert (stored.fail_count, stored.last_error) == (0, None)
         # default greenhouse interval is 60 s, jittered by ±20 %
@@ -114,6 +114,45 @@ async def test_second_poll_notifies_only_new_ids(monkeypatch):
         assert match.job_id == job.id and source_name == "gh-mirakl"
         assert await count(db, Job) == 4 and await count(db, JobMatch) == 4
         assert src.etag == 'W/"v2"'
+
+
+async def test_windowed_source_does_not_notify_jobs_older_than_its_seed(monkeypatch):
+    """Review Focus 1: a later window returns postings the seed's page did not hold."""
+    notify, alert = hooks()
+    later = NOW + timedelta(minutes=5)
+    polls = [
+        [raw_job("li-1", "Seeded", posted_at=NOW - timedelta(hours=1))],
+        [
+            raw_job("li-2", "Before the seed", posted_at=NOW - timedelta(minutes=30)),
+            raw_job("li-3", "Day before, no time", posted_at=datetime(2026, 11, 13)),
+            raw_job("li-4", "After the seed", posted_at=NOW + timedelta(minutes=2)),
+            raw_job("li-5", "Seed day, no time", posted_at=datetime(2026, 11, 14)),
+            raw_job("li-6", "No date"),
+        ],
+    ]
+
+    async def poll(client, cfg, etag, last_scraped_at) -> PollResult:
+        return PollResult(jobs=polls.pop(0))
+
+    monkeypatch.setitem(ADAPTERS, "linkedin_guest", poll)
+    async with AsyncSessionLocal() as db:
+        src = await add_source(
+            db, name="li", type="linkedin_guest", config={"adapter": "linkedin_guest"}
+        )
+        freeze(monkeypatch)
+        assert await poll_source(db, src, board_client(), notify, alert) == 1
+        freeze(monkeypatch, later)
+        # all five are stored and matched ...
+        assert await poll_source(db, src, board_client(), notify, alert) == 5
+        assert await count(db, Job) == 6 and await count(db, JobMatch) == 6
+        # ... the seed instant does not move ...
+        assert (src.first_polled_at, src.last_scraped_at) == (NOW, later)
+    # ... and only those that can be newer than the seed are pushed
+    assert sorted(call.args[1].title for call in notify.await_args_list) == [
+        "After the seed",
+        "No date",
+        "Seed day, no time",
+    ]
 
 
 async def test_failed_first_poll_still_seeds_silently_afterwards(monkeypatch):
@@ -402,14 +441,59 @@ async def test_tick_limits_concurrency(monkeypatch):
     assert peak == 2
 
 
-def raw_job(external_id: str, title: str) -> RawJob:
+def raw_job(external_id: str, title: str, **kw) -> RawJob:
     return RawJob(
         external_id=external_id,
         title=title,
         company="Mirakl",
         location="Paris",
         url=f"https://example.com/{external_id}",
+        **kw,
     )
+
+
+async def test_tick_polls_fetch_together_but_write_one_at_a_time(monkeypatch):
+    """Interleaved writers wait on SQLite's lock and fail with 'database is locked'."""
+    import asyncio
+
+    freeze(monkeypatch)
+    both_fetched = asyncio.Barrier(2)  # the fetches do overlap
+    events: list[str] = []
+    real_upsert, real_commit = poller.upsert_discovered, poller.AsyncSession.commit
+
+    async def poll(client, cfg, etag, last_scraped_at) -> PollResult:
+        await both_fetched.wait()
+        return PollResult(jobs=[raw_job(cfg["slug"], f"Job {cfg['slug']}")])
+
+    async def upsert(db, source, jobs):
+        events.append(f"write {source.name}")
+        await asyncio.sleep(0.01)  # room for the other poll to start writing
+        return await real_upsert(db, source, jobs)
+
+    async def commit(self):
+        await real_commit(self)
+        events.append("commit")
+
+    monkeypatch.setitem(ADAPTERS, "fake", poll)
+    monkeypatch.setattr(poller, "upsert_discovered", upsert)
+    async with AsyncSessionLocal() as db:
+        await add_fake(db, "a")
+        await add_fake(db, "b")
+    monkeypatch.setattr(poller.AsyncSession, "commit", commit)
+
+    await monitor_tick()
+
+    assert sorted(events[::2]) == ["write a", "write b"]
+    assert events[1::2] == ["commit", "commit"]
+
+
+async def test_engine_waits_for_the_write_lock_longer_than_a_seeding_poll():
+    """sqlite3's default of 5 s is shorter than a board's first poll holds the lock."""
+    from backend.database import engine
+
+    async with engine.connect() as conn:
+        timeout_ms = (await conn.exec_driver_sql("PRAGMA busy_timeout")).scalar_one()
+    assert timeout_ms >= 30_000
 
 
 async def test_tick_same_job_from_two_sources_fails_neither(monkeypatch):  # Review Focus 3

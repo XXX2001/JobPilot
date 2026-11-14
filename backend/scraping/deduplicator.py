@@ -7,14 +7,21 @@ from backend.models.schemas import RawJob
 
 
 def dedup_key(company: str | None, title: str | None, location: str | None) -> str:
-    """The one cross-source identity hash: md5 of normalized ``company|title|location``.
+    """The one cross-source identity hash: md5 of normalized ``company|title|city``.
 
     Lowercased, whitespace runs collapsed, stripped — so every caller (batch
-    runner, manual search, monitor) agrees on the same ``Job.dedup_hash``.
+    runner, manual search, monitor) agrees on the same ``Job.dedup_hash``. Only
+    the first comma-separated token of the location counts: sources spell the
+    rest differently (``Paris, France`` / ``Paris, Île-de-France, France`` /
+    ``Paris, A8, FR``).
     """
+    # ponytail: city = text before the first comma. Same title in Paris, France
+    # and Paris, Texas at one company merges; "Paris (75)" does not match "Paris".
+    # Normalise through a gazetteer if either shows up.
     def _norm(s: str | None) -> str:
         return re.sub(r"\s+", " ", (s or "").lower()).strip()
-    return hashlib.md5(f"{_norm(company)}|{_norm(title)}|{_norm(location)}".encode()).hexdigest()
+    city = (location or "").split(",")[0]
+    return hashlib.md5(f"{_norm(company)}|{_norm(title)}|{_norm(city)}".encode()).hexdigest()
 
 
 class JobDeduplicator:

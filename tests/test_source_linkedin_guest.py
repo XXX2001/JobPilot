@@ -30,13 +30,24 @@ def client_for(handler, **kwargs) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
 
 
-def recording(seen: list[httpx.Request], body: bytes | None = None):
+def recording(seen: list[httpx.Request], body: bytes | None = None, pages: int = 1):
+    """Serve ``body`` (default: the ten-card fixture) for the first ``pages`` pages."""
+
     def handler(request):
         seen.append(request)
         content = FIXTURE.read_bytes() if body is None else body
+        if int(request.url.params["start"]) >= pages * 10:
+            content = b""
         return httpx.Response(200, content=content, headers=HTML)
 
     return handler
+
+
+def one_card(job_id: int) -> bytes:
+    return (
+        f'<li><div data-entity-urn="urn:li:jobPosting:{job_id}"><h3>Engineer {job_id}</h3>'
+        f"<h4>ACME</h4></div></li>"
+    ).encode()
 
 
 async def raises_kind(handler, **kwargs) -> str:
@@ -133,6 +144,41 @@ async def test_linkedin_request_shape():
     assert "if-none-match" not in req.headers
 
 
+async def test_linkedin_pages_until_a_short_page():
+    """Ten cards may not be all of them: ask for the next page until one is short."""
+    seen: list[httpx.Request] = []
+
+    def handler(request):
+        seen.append(request)
+        start = int(request.url.params["start"])
+        ids = range(1000 + start, 1000 + start + (10 if start < 20 else 3))
+        return httpx.Response(200, content=b"".join(map(one_card, ids)), headers=HTML)
+
+    async with client_for(handler) as client:
+        res = await poll(client, CFG, None, NOW - timedelta(minutes=5))
+    assert [r.url.params["start"] for r in seen] == ["0", "10", "20"]
+    assert {r.url.params["f_TPR"] for r in seen} == {"r1800"}
+    assert [j.external_id for j in res.jobs] == [f"li-{i}" for i in range(1000, 1023)]
+    assert not res.truncated
+
+
+async def test_linkedin_stops_at_five_pages_and_reports_truncated():
+    seen: list[httpx.Request] = []
+    async with client_for(recording(seen, pages=99)) as client:
+        res = await poll(client, CFG, None, None)
+    assert [r.url.params["start"] for r in seen] == ["0", "10", "20", "30", "40"]
+    assert len(res.jobs) == 50 and res.truncated
+
+
+async def test_linkedin_blocked_on_a_later_page_fails_the_whole_poll():  # Review Focus 2
+    def handler(request):
+        if request.url.params["start"] == "0":
+            return httpx.Response(200, content=FIXTURE.read_bytes(), headers=HTML)
+        return httpx.Response(429)
+
+    assert await raises_kind(handler) == "blocked"
+
+
 async def test_linkedin_window_is_twice_the_gap_within_bounds():
     seen: list[httpx.Request] = []
     async with client_for(recording(seen)) as client:
@@ -140,7 +186,8 @@ async def test_linkedin_window_is_twice_the_gap_within_bounds():
         await poll(client, CFG, None, NOW - timedelta(hours=1))  # 2 x 3600
         await poll(client, CFG, None, NOW - timedelta(days=3))  # cap 86400
         await poll(client, CFG, None, None)  # never polled: widest window
-    assert [r.url.params["f_TPR"] for r in seen] == ["r1800", "r7200", "r86400", "r86400"]
+    first_pages = [r for r in seen if r.url.params["start"] == "0"]
+    assert [r.url.params["f_TPR"] for r in first_pages] == ["r1800", "r7200", "r86400", "r86400"]
 
 
 async def test_empty_200_is_zero_jobs_not_error():
@@ -198,7 +245,7 @@ async def test_request_carries_no_cookie_header():
     async with client_for(handler, cookies={"li_at": "account-session"}) as client:
         await poll(client, CFG, None, None)
         await poll(client, CFG, None, NOW - timedelta(minutes=5))
-    assert len(seen) == 2
+    assert len(seen) == 10  # five pages per poll: later pages are logged out too
     assert all("cookie" not in r.headers for r in seen)
 
 

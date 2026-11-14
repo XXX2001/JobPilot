@@ -168,3 +168,71 @@ def test_raw_job_accepts_long_descriptions():
     assert len(RawJob(title="t", company="c", description="x" * 20000).description) == 20000
     with pytest.raises(ValueError):
         RawJob(title="t", company="c", description="x" * 20001)
+
+
+def test_m02_rehashes_to_the_city_key_and_backfills_first_polled_at(tmp_path):
+    """Rows stored with the whole location are still found; the twin's match moves."""
+    db = tmp_path / "m02.db"
+    cfg = _alembic_config(f"sqlite+aiosqlite:///{db}")
+    command.upgrade(cfg, "m01_monitor_state")
+
+    def m01_key(company, title, location) -> str:
+        return hashlib.md5(f"{company}|{title}|{location}".lower().encode()).hexdigest()
+
+    rows = {  # id -> source_id, location, first_seen_at
+        1: (1, "Paris, France", "2026-11-14 14:00:00"),
+        2: (2, "Paris, Île-de-France, France", "2026-11-14 14:34:00"),  # twin of 1
+        3: (2, "Lyon, France", "2026-11-14 14:38:00"),
+    }
+    eng = create_engine(f"sqlite:///{db}")
+    with eng.begin() as c:
+        polled = "2026-11-14 15:00:00"
+        for sid, name, scraped in ((1, "gh", polled), (2, "li", polled), (3, "x", None)):
+            c.execute(
+                text(
+                    "INSERT INTO job_sources (id, name, type, enabled, created_at, fail_count,"
+                    " last_scraped_at) VALUES (:i, :n, 'm', 1, '2026-01-01', 0, :s)"
+                ),
+                {"i": sid, "n": name, "s": scraped},
+            )
+        for i, (sid, location, seen) in rows.items():
+            c.execute(
+                text(
+                    "INSERT INTO jobs (id, source_id, title, company, location, url, dedup_hash,"
+                    " scraped_at, first_seen_at) VALUES (:i, :s, 'Dev', 'Mirakl', :l, 'u', :h,"
+                    " '2026-01-01', :seen)"
+                ),
+                {"i": i, "s": sid, "l": location, "h": m01_key("mirakl", "dev", location),
+                 "seen": seen},
+            )
+        c.execute(
+            text(
+                "INSERT INTO job_matches (id, job_id, score, status, batch_date, matched_at)"
+                " VALUES (1, 2, 50, 'applied', '2026-11-14', '2026-01-01')"
+            )
+        )
+
+    def state():
+        with eng.connect() as c:
+            hashes = dict(c.execute(text("SELECT id, dedup_hash FROM jobs")).fetchall())
+            owner = c.execute(text("SELECT job_id FROM job_matches")).scalar()
+        return hashes, owner
+
+    command.upgrade(cfg, "head")
+    hashes, owner = state()
+    assert hashes[1] == dedup_key("Mirakl", "Dev", "Paris, A8, FR")
+    assert hashes[2] == m01_key("mirakl", "dev", rows[2][1])  # blocked by job 1: kept
+    assert hashes[3] == dedup_key("Mirakl", "Dev", "Lyon")
+    assert owner == 1  # the row lookups reach carries the applied match
+    with eng.connect() as c:
+        first = dict(c.execute(text("SELECT id, first_polled_at FROM job_sources")).fetchall())
+    assert first[1].startswith("2026-11-14 14:00:00")
+    assert first[2].startswith("2026-11-14 14:34:00")
+    assert first[3] is None  # never polled: it still has to seed
+
+    command.downgrade(cfg, "m01_monitor_state")
+    hashes, _ = state()
+    cols = {c["name"] for c in inspect(eng).get_columns("job_sources")}
+    eng.dispose()
+    assert hashes == {i: m01_key("mirakl", "dev", r[1]) for i, r in rows.items()}
+    assert "first_polled_at" not in cols

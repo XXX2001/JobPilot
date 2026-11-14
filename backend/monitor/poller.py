@@ -24,8 +24,9 @@ from backend.matching.filters import JobFilters
 from backend.matching.matcher import load_matcher
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.user import SearchSettings
+from backend.monitor.linkedin_detail import read_jobs
 from backend.monitor.notify import notify_new_match, notify_text
-from backend.monitor.store import match_new, rescore_all, upsert_discovered
+from backend.monitor.store import match_new, raw_to_details, rescore_all, upsert_discovered
 from backend.scheduler.batch_runner import _extract_json_list
 from backend.scraping.sources import ADAPTERS, SourceError
 from backend.utils.time import naive_utc_now
@@ -224,12 +225,54 @@ async def poll_source(
             await _safely(alert("Source disabled", f"{name}: {detail}"), "alert", name)
         return 0
 
+    stored = len(created)
     if not seeding:
+        created = [(m, j) for m, j in created if not _predates(j.posted_at, seeded_at)]
+        if adapter == "linkedin_guest":
+            created = await _read_linkedin_pages(db, created, name)
         for match, job in created:
-            if _predates(job.posted_at, seeded_at):
-                continue
             await _safely(notify(match, job, name), "notify", name)
-    return len(created)
+    return stored
+
+
+async def _read_linkedin_pages(
+    db: AsyncSession, created: list[tuple[JobMatch, Job]], source_name: str
+) -> list[tuple[JobMatch, Job]]:
+    """Read the matched LinkedIn cards in the owner's logged-in Chrome and rescore them.
+
+    Returns the matches still worth a notification: a posting that is closed, or that
+    its description puts under the minimum score, is kept in the queue but not pushed.
+    Without the Chrome (not running, logged out) the cards stay as they are.
+    """
+    cards = [(m, j) for m, j in created if not (j.description or "").strip()]
+    try:
+        details = await read_jobs([j.url for _, j in cards])
+    except Exception:  # noqa: BLE001 - the poll is committed; the cards stay title-only
+        logger.exception("monitor: reading LinkedIn pages failed for source %s", source_name)
+        return created
+    if not details:
+        return created
+    drop: set[int] = set()
+    async with _write_lock():
+        matcher = await load_matcher(db)
+        filters = await _load_filters(db)
+        for match, job in cards:
+            detail = details.get(job.url)
+            if detail is None:
+                continue
+            job.apply_method = detail.apply_method
+            if detail.description:
+                job.description = detail.description
+                result = matcher.explain(raw_to_details(job), filters)
+                match.score = result.score
+                match.keyword_hits = dict.fromkeys(result.covered + result.partial, True)
+                match.score_basis = matcher.score_basis
+                match.provisional = result.provisional
+                match.location_unverified = result.location_unverified
+            if detail.apply_method == "closed" or match.score < filters.min_score:
+                drop.add(match.id)
+        await db.commit()
+    return [(m, j) for m, j in created if m.id not in drop]
 
 
 async def _safely(call: Awaitable[None], what: str, source_name: str) -> None:

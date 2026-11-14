@@ -70,6 +70,7 @@ async def notify_new_match(match: JobMatch, job: Job, source_name: str) -> None:
         for flag, note in (
             (match.provisional, "title only"),
             (match.location_unverified, "location unverified"),
+            (job.apply_method == "easy_apply", "Easy Apply"),
         )
         if flag
     ]

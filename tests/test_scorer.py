@@ -160,6 +160,81 @@ def test_remote_only_needs_a_remote_marker(g, cv):
     assert score_job(in_text, cv, f, g).passed_filters
 
 
+@pytest.mark.parametrize(
+    ("wanted", "location", "country", "passes"),
+    [
+        # a country entry: reject only a job that names another country
+        (["France", "Paris"], "Lyon, ARA, FR", "", True),
+        (["France", "Paris"], "FR", "", True),
+        (["France"], "Marseille", "", True),
+        (["France"], "Remote - France", "", True),
+        (["France"], "Lyon", "fr", True),
+        (["France"], "Berlin, Germany", "", False),
+        (["France"], "London, ENG, GB", "", False),
+        (["France"], "Remote UK", "", False),
+        (["France"], "Lyon", "gb", False),
+        (["France"], "", "de", False),
+        (["FR"], "Nantes, France", "", True),
+        # "City, Country": the city decides
+        (["Paris, France"], "Paris", "", True),
+        (["Paris, France"], "Paris, 75, FR", "", True),
+        (["Paris, France"], "Paris, Île-de-France, France", "", True),
+        (["Paris, France"], "Lyon, France", "", False),
+        # hyphen and space are the same, accents fold
+        (["Ile de France"], "Île-de-France", "", True),
+        (["Saint-Denis"], "Saint Denis", "", True),
+        # blank entries are no filter
+        ([""], "Lyon", "", True),
+        (["", " , "], "Lyon", "", True),
+        (["", "Paris"], "Lyon", "", False),
+        # a remote job is held to the country, not the city
+        (["Paris"], "Remote - France", "", True),
+        (["Paris"], "Lyon (Hybrid remote)", "", False),
+    ],
+)
+def test_location_filter_matrix(g, cv, wanted, location, country, passes):
+    r = score_job(job(location=location, country=country), cv, filters(locations=wanted), g)
+    assert r.passed_filters is passes
+    assert r.reject_reason == (None if passes else "location")
+
+
+def test_unprovable_location_is_flagged_not_rejected(g, cv):
+    f = filters(locations=["France", "Paris"])
+    assert score_job(job(location="Marseille"), cv, f, g).location_unverified
+    assert not score_job(job(location="Lyon, ARA, FR"), cv, f, g).location_unverified
+    assert not score_job(job(location="Paris"), cv, f, g).location_unverified
+    assert not score_job(job(location=""), cv, f, g).location_unverified
+
+
+@pytest.mark.parametrize(
+    ("location", "extra", "passes"),
+    [
+        ("Paris", "No remote work possible.", False),
+        ("Lyon", "Experience with remote control of robots.", False),
+        ("Lyon", "You will process remote sensing data.", False),
+        ("Lyon", "2 jours de télétravail par semaine.", False),
+        ("Paris (Hybrid)", "Remote-first culture.", False),
+        ("Lyon", "This is a fully remote position.", True),
+        ("Anywhere in France", "", True),
+        ("Home-based", "", True),
+        ("Full remote", "", True),
+        ("", "", False),
+    ],
+)
+def test_remote_only_reads_the_marker_in_context(g, cv, location, extra, passes):
+    posting = job(location=location, description=REAL_DESCRIPTION + "\n" + extra)
+    assert score_job(posting, cv, filters(remote_only=True), g).passed_filters is passes
+
+
+def test_remote_only_still_checks_the_country(g, cv):
+    f = filters(remote_only=True, locations=["France"])
+    assert score_job(job(location="Remote, France"), cv, f, g).passed_filters
+    assert score_job(job(location="Remote"), cv, f, g).passed_filters
+    for abroad in ("Remote UK", "Remote Germany", "Remote, Canada"):
+        r = score_job(job(location=abroad), cv, f, g)
+        assert not r.passed_filters and r.reject_reason == "location", abroad
+
+
 def test_excluded_keyword_is_a_whole_word_in_the_title(g, cv):
     f = filters(excluded_keywords=["intern", "Stagiaire"])
     r = score_job(job(title="Robotics Intern"), cv, f, g)
@@ -228,10 +303,61 @@ def test_one_skill_posting_cannot_reach_100(g):
     assert 0 < r.score < 70
 
 
-def test_posting_without_any_known_skill_scores_zero(g, cv):
+def test_posting_without_any_known_skill_falls_back_to_the_title(g, cv):
     description = "Nous cherchons une personne motivée pour rejoindre notre équipe. " * 3
     r = score_job(job(title="Collaborateur", description=description), cv, filters(), g)
-    assert r.passed_filters and not r.provisional and r.score == 0
+    assert r.passed_filters and r.provisional and r.score == 0
+    # Same score as the description-less card: a body that names no skill says nothing.
+    f = filters(keywords=["robotics"])
+    wanted = score_job(job(title="Robotics Engineer", description=description), cv, f, g)
+    assert wanted.provisional and wanted.score == 70
+    by_skill = score_job(job(title="Python Developer", description=description), cv, f, g)
+    assert by_skill.provisional and by_skill.score == 45 and by_skill.covered == ["python"]
+    # A body that only repeats the title's skill is a real, scored posting.
+    body = score_job(job(title="Python Developer", description=description + " Python."), cv, f, g)
+    assert not body.provisional
+
+
+def test_all_required_posting_is_not_capped_by_the_empty_other_tier(g, cv):
+    structured = (
+        "Requirements\n- Python\n- C++\n- ROS 2\n- Docker\n- Linux\n\n"
+        "Benefits\n- A friendly team in a bright office close to the station.\n"
+    )
+    passing = "Day to day the team works with Python, C++, ROS 2, Docker and Linux in production."
+    required = score_job(job(title="Engineer", description=structured), cv, filters(), g)
+    neutral = score_job(job(title="Engineer", description=passing), cv, filters(), g)
+    assert required.score == pytest.approx(100 * (5 / 5.5) * 0.76, abs=0.1)
+    assert neutral.score == pytest.approx(100 * (3 / 3.5) * 0.76, abs=0.1)
+    assert required.score > neutral.score
+
+
+def test_owner_keyword_does_not_lower_the_job_it_targets(cv):
+    description = "Requirements: Robotics, Python\n" + "We are a small team in Paris. " * 3
+    posting = job(title="Robotics Engineer", description=description)
+    plain = Gazetteer.load()
+    keyed = Gazetteer.load(extra_terms=["Ingénieur Robotique", "Python Developer"])
+    base = score_job(posting, cv_skills(CV_TEXT, plain), filters(), plain)
+    with_keywords = score_job(posting, cv_skills(CV_TEXT, keyed), filters(), keyed)
+    assert with_keywords == base and base.covered == ["python", "robotics"]
+    titled = score_job(
+        posting.model_copy(update={"title": "Python Developer"}),
+        cv_skills(CV_TEXT, keyed),
+        filters(),
+        keyed,
+    )
+    assert titled.missing == []
+
+
+def test_jargon_only_posting_is_not_covered_by_c_and_go(g):
+    cv = cv_skills("Python, C, Go, Docker", g)
+    description = (
+        "You partner with C-level leaders on our Go-to-Market strategy after our Series C. "
+        "Go deep on people topics and own the Go/No-Go decisions for Go Live."
+    )
+    r = score_job(job(title="Sr HR Business Partner", description=description), cv, filters(), g)
+    assert r.covered == [] and r.score == 0
+    card = score_job(job(title="Head of Go-to-Market", description=""), cv, filters(), g)
+    assert card.covered == [] and card.score == 0
 
 
 # --- provisional -------------------------------------------------------------------

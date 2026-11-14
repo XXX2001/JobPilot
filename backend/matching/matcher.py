@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.defaults import MIN_MATCH_SCORE
 from backend.latex.artifacts import resolve_base_source
+from backend.matching.cv_parser import latex_to_text
 from backend.matching.filters import JobFilters
 from backend.matching.gazetteer import GAZETTEER_VERSION, Gazetteer
 from backend.matching.scorer import ScoreResult, cv_skills, score_job
@@ -26,12 +27,13 @@ class JobMatcher:
 
     ``extra_terms`` are the owner's search keywords: they extend the gazetteer, so a
     profession the curated list does not cover still counts. Without a CV the skills
-    named in ``filters.keywords`` stand in for it.
+    named in ``filters.keywords`` stand in for it. ``cv_text`` may be LaTeX source.
     """
 
     def __init__(self, cv_text: str = "", extra_terms: Iterable[str] = ()) -> None:
         terms = sorted({" ".join(t.lower().split()) for t in extra_terms} - {""})
         self._gaz = Gazetteer.load(terms)
+        cv_text = latex_to_text(cv_text)  # "R\\&D" is not the skill R
         self._cv = cv_skills(cv_text, self._gaz) if cv_text.strip() else None
         # What a stored score was computed from: a match with another basis is stale.
         digest = hashlib.sha256("\0".join([cv_text, *terms]).encode()).hexdigest()

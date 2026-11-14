@@ -93,3 +93,40 @@ def test_example_cv_skills_include_go_kubernetes_fastapi(g):
 def test_owner_keywords_extend_the_cv_skills():
     g = Gazetteer.load(["soudure tig"])
     assert "soudure tig" in _by_name(r"Soudeur, soudure TIG et MIG.", g)
+
+
+# --- LaTeX escapes -----------------------------------------------------------------
+
+
+def _names(cv_tex: str, g: Gazetteer) -> set[str]:
+    return {entry.text for entry in CVParser().parse(cv_tex, g)}
+
+
+def test_latex_escapes_are_read_as_plain_text(g):
+    cv = r"\begin{rSection}{Exp} Ingénieur R\&D, C\#, ROS~2 \end{rSection}"
+    names = _names(cv, g)
+    assert {"c#", "ros 2"} <= names
+    assert not names & {"r", "c"}
+
+
+def test_latex_accent_macros_are_read_as_letters(g):
+    assert "embedded systems" in _names(r"syst\`emes embarqu\'es", g)
+    assert "embedded systems" in _names(r"syst{\`e}mes embarqu\'{e}s", g)
+
+
+def test_tabular_column_spec_is_not_cv_text(g):
+    cv = r"\begin{tabular}{@{} L C @{\hspace{6ex}} R} Python & Docker \\ \end{tabular}"
+    assert _names(cv, g) == {"python", "docker"}
+    assert _names(r"\begin{tabularx}{\textwidth}{L C R} Python \\ \end{tabularx}", g) == {"python"}
+
+
+def test_latex_line_breaks_and_sections_survive_de_escaping(g):
+    # "\\" before a letter is a line break, not an accent macro; contexts still resolve.
+    cv = r"""
+\begin{rSection}{Experience}
+\textbf{Dev} \hfill 2023 \\
+Rust \\'and Go
+\end{rSection}
+"""
+    by_name = {e.text: e.context for e in CVParser().parse(cv, g)}
+    assert by_name == {"rust": "experience_recent", "go": "experience_recent"}

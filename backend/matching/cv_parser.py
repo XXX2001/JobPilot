@@ -26,6 +26,40 @@ _EXPERIENCE = re.compile(r"\b(?:experiences?|employment)\b")
 # Role header "\textbf{Title} \hfill {Août 2023 -- Présent}": the first one is the recent role.
 _ROLE_RE = re.compile(r"\\(?:textbf|bf)\b[^\n]*?\\hfill")
 
+# A brace group, nested up to three deep ("{@{} l @{\hspace{6ex}} l}").
+_GROUP = r"\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\}"
+_LATEX_RE = re.compile(
+    r"(?P<keep>\\\\)"  # a line break, not the start of an escape
+    # column spec of a table ("{L C R}"), after the width of tabularx / tabular*
+    r"|(?P<spec>\\begin\{(?:tabular[x*]\}\s*" + _GROUP + r"|(?:tabular|longtable|array)\})"
+    r"\s*(?:\[[^\]]*\])?\s*" + _GROUP + r")"
+    r"|\\(?P<char>[&#_%$])"
+    r"|\{\\[`'^\"~]\s*(?P<a>[A-Za-z])\}"  # {\'e}
+    r"|\\[`'^\"~]\s*(?:\{(?P<b>[A-Za-z])\}|(?P<c>[A-Za-z]))"  # \'{e}, \'e
+    r"|\\c(?:\s*\{(?P<d>[A-Za-z])\}|\s+(?P<e>[A-Za-z]))"  # \c{c}, \c c
+    r"|\\,|~"
+)
+
+
+def latex_to_text(cv_tex: str) -> str:
+    """De-escape a LaTeX CV for the gazetteer: ``R\\&D`` is "R&D", ``C\\#`` is "C#".
+
+    Escaped characters become themselves, ``~`` and ``\\,`` a space, accent macros their
+    bare letter (the gazetteer folds accents anyway) and a table's column spec nothing.
+    Commands and environments stay: the parser reads sections from them. Plain text
+    comes back unchanged.
+
+    ponytail: the escapes a CV uses, not a LaTeX reader — ``\\textbackslash``, ``\\oe`` or
+    a user macro pass through as they are. Convert with a real detex if that bites.
+    """
+
+    def plain(m: re.Match[str]) -> str:
+        if m["keep"]:
+            return m[0]
+        return m["char"] or m["a"] or m["b"] or m["c"] or m["d"] or m["e"] or " "
+
+    return _LATEX_RE.sub(plain, cv_tex)
+
 
 @dataclass
 class SkillEntry:
@@ -49,6 +83,7 @@ class CVParser:
         Text outside a profile or experience section (the skills table, or a template
         this parser does not know) counts as the skills section.
         """
+        cv_tex = latex_to_text(cv_tex)
         texts: dict[str, list[str]] = {context: [] for context in CONTEXT_WEIGHTS}
         texts["skills_section"].append(_SECTION_RE.sub(" ", cv_tex))
         for name, body in _SECTION_RE.findall(cv_tex):

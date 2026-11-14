@@ -241,3 +241,24 @@ async def test_load_matcher_without_profile_or_settings_falls_back_to_keywords()
     filters = JobFilters(keywords=["python"])
     job = _make_job(title="Engineer", description="Requirements\n- Python\n")
     assert matcher.matched_keywords(job, filters) == ["python"]
+
+
+def test_latex_cv_escapes_do_not_become_skills():
+    r"""``R\&D`` is not the skill R and ``C\#`` is C#, not C (LaTeX CVs escape both)."""
+    matcher = JobMatcher(cv_text=r"Ingénieur R\&D, C\#, ROS~2")
+    job = _make_job(title="Engineer", description="Requirements\n- R\n- C\n- C#\n- ROS 2\n" + BODY)
+    result = matcher.explain(job, JobFilters())
+    assert result.covered == ["c#", "ros 2"]
+    assert set(result.missing) == {"c", "r"}
+
+
+async def test_load_matcher_de_escapes_the_latex_cv(tmp_path):
+    cv = tmp_path / "cv.tex"
+    cv.write_text(r"\begin{rSection}{Exp} Ingénieur R\&D, C\# \end{rSection}", encoding="utf-8")
+    async with AsyncSessionLocal() as db:
+        db.add(UserProfile(full_name="A", email="a@example.com", base_cv_path=str(cv)))
+        await db.flush()
+        matcher = await load_matcher(db)
+    job = _make_job(title="Engineer", description="Requirements\n- R\n- C#\n" + BODY)
+    result = matcher.explain(job, JobFilters())
+    assert (result.covered, result.missing) == (["c#"], ["r"])

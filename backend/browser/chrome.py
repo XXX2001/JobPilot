@@ -156,3 +156,22 @@ async def open_context(pw, profile_dir: Path, args: list[str]):
         user_data_dir=profile_dir.as_posix(), headless=False, args=args
     )
     return context, False
+
+
+def show_app(app_url: str) -> bool:
+    """Open the JobPilot page in the JobPilot Chrome (starting it), or focus its tab.
+
+    One window then holds the app, the owner's job-site logins and the job tabs.
+    False when Chrome cannot be started: the caller falls back to the default browser.
+    """
+    try:
+        port = ensure_chrome_running(chrome_dir())["port"]
+        base = f"http://127.0.0.1:{port}/json"
+        tabs = json.load(urllib.request.urlopen(f"{base}/list", timeout=5))
+        mine = next((t for t in tabs if t.get("url", "").startswith(app_url)), None)
+        target = f"{base}/activate/{mine['id']}" if mine else f"{base}/new?{app_url}"
+        request = urllib.request.Request(target, method="GET" if mine else "PUT")
+        urllib.request.urlopen(request, timeout=5).read()
+        return True
+    except Exception:  # noqa: BLE001 - no Chrome, no display: not fatal
+        return False

@@ -26,3 +26,12 @@ def test_open_starts_chrome_and_shows_missing_logins(test_app: TestClient, monke
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"running": True, "logged_in": {"linkedin": True}}
     assert opened == [browser.LOGIN_PAGES["indeed"]]  # LinkedIn already has a session
+
+
+def test_show_app_opens_this_apps_page(test_app: TestClient, monkeypatch):
+    seen: list[str] = []
+    monkeypatch.setattr(browser, "show_app", lambda url: seen.append(url) or True)
+    assert test_app.post("/api/browser/show-app").status_code == 200
+    assert seen == ["http://testserver"]
+    monkeypatch.setattr(browser, "show_app", lambda url: False)
+    assert test_app.post("/api/browser/show-app").status_code == 503

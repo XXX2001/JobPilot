@@ -10,6 +10,7 @@
 	import BlockedActionsStrip from '$lib/components/BlockedActionsStrip.svelte';
 	import WeekStats from '$lib/components/WeekStats.svelte';
 	import SourceHealthPills from '$lib/components/SourceHealthPills.svelte';
+	import ReadyStrip from '$lib/components/ReadyStrip.svelte';
 	import type { TodayResponse } from '$lib/types/today';
 	import type { SetupStatus } from '$lib/types/api';
 	import { ONBOARDING_DISMISSED_KEY, shouldAutoRedirect } from '$lib/utils/onboarding';
@@ -147,6 +148,8 @@
 		</button>
 	</div>
 </div>
+
+<ReadyStrip />
 
 <SourceHealthPills />
 

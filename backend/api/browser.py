@@ -10,9 +10,14 @@ import asyncio
 import json
 import urllib.request
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
-from backend.browser.chrome import chrome_dir, ensure_chrome_running, running_endpoint
+from backend.browser.chrome import (
+    chrome_dir,
+    ensure_chrome_running,
+    running_endpoint,
+    show_app,
+)
 
 router = APIRouter(prefix="/api/browser", tags=["browser"], redirect_slashes=False)
 
@@ -40,6 +45,14 @@ async def _logged_in(port: int) -> dict[str, bool]:
             site: any(c["name"] == name for c in await context.cookies(url))
             for site, (url, name) in SESSION_COOKIES.items()
         }
+
+
+@router.post("/show-app")
+async def show_app_here(request: Request):
+    """Open (or focus) this app's page in the JobPilot Chrome."""
+    if not await asyncio.to_thread(show_app, str(request.base_url).rstrip("/")):
+        raise HTTPException(status_code=503, detail="The JobPilot Chrome did not start")
+    return {"running": True}
 
 
 @router.get("/status")

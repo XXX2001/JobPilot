@@ -46,6 +46,9 @@ if str(ROOT) not in sys.path:
 _WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER", "main")
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix=f"jobpilot-test-{_WORKER_ID}-")
 os.environ["JOBPILOT_DATA_DIR"] = _TEST_DATA_DIR
+# The developer's .env may switch the monitor on: tests never poll or push for real.
+os.environ["MONITOR_ENABLED"] = "false"
+os.environ["NTFY_URL"] = ""
 
 # Seed dummy credentials so backend.config.Settings() doesn't refuse to load
 # on fresh checkouts / CI machines that don't have a real ``.env``.

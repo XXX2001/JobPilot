@@ -237,7 +237,7 @@ async def test_rescore_stale_uses_the_owners_cv_and_search_settings(tmp_path):
 
 async def _unmatched_job(db, n: int, **fields) -> Job:
     base = dict(
-        title="Robotics Engineer",
+        title="Robotics Software Engineer",  # not a repost of _match()'s posting
         company=f"ACME {n}",
         location="Paris",
         description=POSTING,

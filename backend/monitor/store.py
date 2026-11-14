@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.matching.filters import JobFilters
 from backend.matching.matcher import JobMatcher, load_matcher
-from backend.matching.scorer import ScoreResult
+from backend.matching.scorer import PROVISIONAL_MIN_CHARS, ScoreResult
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails, RawJob
 from backend.scraping.deduplicator import dedup_key
@@ -158,15 +158,31 @@ async def match_new(
             )
         ).scalars()
     )
+    # A company's tracking boards carry the same posting under other company names
+    # ("LinkedIn Job Wrapping"), which the dedup hash cannot merge: one match per repost.
+    # ponytail: exact description equality; compare a normalised text if reposts differ.
+    described = {j.description for j in jobs if _repost_key(j)}
+    reposted = {
+        _repost_key(j)
+        for j in (
+            await db.execute(
+                select(Job)
+                .join(JobMatch, JobMatch.job_id == Job.id)
+                .where(Job.description.in_(described))
+            )
+        ).scalars()
+    }
     today = naive_utc_now().date()
     created: list[JobMatch] = []
     for job in jobs:
-        if job.id in matched_ids:
+        key = _repost_key(job)
+        if job.id in matched_ids or (key and key in reposted):
             continue
         result = matcher.explain(raw_to_details(job), filters)
         if not result.passed_filters or result.score < min_score:
             continue
         matched_ids.add(job.id)
+        reposted.add(key)
         match = JobMatch(
             job_id=job.id,
             score=result.score,
@@ -181,6 +197,15 @@ async def match_new(
         created.append(match)
     await db.flush()
     return created
+
+
+def _repost_key(job: Job) -> tuple[str, str, str] | None:
+    """Same title, city and description = the same posting. None for a bare card."""
+    description = job.description or ""
+    if len(description) < PROVISIONAL_MIN_CHARS:
+        return None
+    city = (job.location or "").split(",")[0]
+    return (job.title or "").strip().lower(), city.strip().lower(), description
 
 
 def _hits(result: ScoreResult) -> dict[str, bool]:

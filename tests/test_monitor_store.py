@@ -345,6 +345,30 @@ async def test_match_new_skips_low_scores_and_any_existing_status():
         assert await count(db, JobMatch) == 1
 
 
+async def test_match_new_matches_a_repost_under_another_company_once():
+    """A tracking board carries the same posting under another company name."""
+    filters = JobFilters()
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        first, repost, other_city = await upsert_discovered(
+            db,
+            src,
+            [
+                raw(external_id="a", company="Artefact", description=POSTING),
+                raw(external_id="b", company="LinkedIn Job Wrapping", description=POSTING),
+                raw(external_id="c", company="Artefact", location="Lyon", description=POSTING),
+            ],
+        )
+        created = await match_new(db, [first, repost, other_city], filters, 0)
+        assert [m.job_id for m in created] == [first.id, other_city.id]
+        again = (
+            await upsert_discovered(
+                db, src, [raw(external_id="d", company="WTTJ", description=POSTING)]
+            )
+        )[0]
+        assert await match_new(db, [again], filters, 0) == []
+
+
 async def test_match_new_scores_description_less_card_provisionally():
     """LinkedIn and SmartRecruiters cards have no description: the title is scored."""
     filters = JobFilters(keywords=["robotics", "software engineer", "python"])

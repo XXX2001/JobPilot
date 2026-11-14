@@ -6,18 +6,21 @@ close_chrome(ws): graceful CDP Browser.close, flushes cookies
 
 import json
 import os
+import shutil
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
 
-CHROME = "/usr/bin/google-chrome"
+# ponytail: a genuine Chrome on PATH. Windows and macOS install paths when someone runs there.
+CHROME = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or "google-chrome"
 FLAGS = [
     "--remote-debugging-port={port}",  # 0 = Chrome picks a free port, written to DevToolsActivePort
     "--no-first-run",
     "--no-default-browser-check",
-    # Without this, genuine Chrome reports navigator.webdriver=true whenever a debug port is open
-    # (measured, t1). Cost: a dismissible "unsupported command-line flag" infobar; pages cannot see it.
+    # Without this, genuine Chrome reports navigator.webdriver=true when a debug port is open
+    # (measured, t1). Cost: a dismissible "unsupported command-line flag" infobar that
+    # pages cannot see.
     "--disable-blink-features=AutomationControlled",
 ]
 
@@ -30,7 +33,10 @@ def _probe(port: int) -> dict | None:
 
 
 def _active(data_dir: Path) -> dict | None:
-    """Endpoint recorded by *this profile's* Chrome, verified live (stale file / reused port safe)."""
+    """Endpoint recorded by *this profile's* Chrome, verified live.
+
+    Safe against a stale file and a reused port.
+    """
     try:
         port_s, ws_path = (data_dir / "DevToolsActivePort").read_text().split()[:2]
     except (OSError, ValueError):
@@ -86,7 +92,10 @@ def ensure_chrome_running(data_dir, port: int = 0, extra_args=(), timeout: float
 
 
 def close_chrome(ws: str) -> None:
-    """Browser.close over CDP: Chrome shuts down cleanly and flushes the cookie DB (SIGTERM may not)."""
+    """Browser.close over CDP: a clean shutdown that flushes the cookie DB.
+
+    SIGTERM may not.
+    """
     from websockets.sync.client import connect
 
     with connect(ws, max_size=None) as c:

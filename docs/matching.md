@@ -138,7 +138,7 @@ Any edit changes `GAZETTEER_VERSION`, so stored `new` matches are rescored at th
 | `<data dir>/my_skills.txt` | Your skills, in the format above. When it lists at least one skill, jobs are scored against it and the CV is no longer read for skills. A name the vocabulary does not know is added to it; an alias the vocabulary knows (`ros2`) resolves to the vocabulary's skill (`ros 2`). |
 | `<data dir>/skills.txt` | Optional. Replaces the bundled vocabulary entirely. |
 
-Edit the files by hand (applied at the next startup) or use `GET` / `PUT /api/settings/skills` with `{"my_skills": "<file text>"}`, which validates, writes the file and rescores stored matches at once. A line with an empty name or alias is refused with its line number and the old file is kept. An empty `my_skills` removes the file and scoring goes back to the CV. Starting point: `scripts/defaults/my_skills.example.txt`.
+Edit the files by hand (new polls use the file at once; matches already stored are rescored at the next startup) or use `GET` / `PUT /api/settings/skills` with `{"my_skills": "<file text>"}`, which validates, writes the file and rescores stored matches at once. A line with an empty name or alias is refused with its line number and the old file is kept. An empty `my_skills` removes the file and scoring goes back to the CV. Starting point: `scripts/defaults/my_skills.example.txt`.
 
 The fit assessment used for CV tailoring still reads the CV itself.
 

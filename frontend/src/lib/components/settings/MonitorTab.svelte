@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { apiFetch } from '$lib/api';
+	import BrowserLogins from '$lib/components/BrowserLogins.svelte';
 	import { Pause, Play, RefreshCw } from 'lucide-svelte';
 
 	interface MonitorSource {
@@ -78,6 +79,11 @@
 		font-family: 'Outfit', sans-serif;
 	}
 </style>
+
+<div class="mb-6 p-4 bg-card/50 border border-border/30 rounded-xl">
+	<h2 class="text-base font-semibold font-heading mb-2">JobPilot browser</h2>
+	<BrowserLogins />
+</div>
 
 {#if loading}
 	<div class="space-y-3 animate-pulse">

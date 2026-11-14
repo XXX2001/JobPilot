@@ -5,6 +5,7 @@ owns the transaction so a failed poll rolls back as a whole.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import select
@@ -16,6 +17,8 @@ from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails, RawJob
 from backend.scraping.deduplicator import dedup_key
 from backend.utils.time import naive_utc_now
+
+logger = logging.getLogger(__name__)
 
 _matcher = JobMatcher()
 
@@ -42,7 +45,14 @@ async def upsert_discovered(db: AsyncSession, source: JobSource, jobs: list[RawJ
 
     Identity is ``(source.id, external_id)`` first, then ``dedup_hash`` — so the
     same posting seen on a second source refreshes the first row instead of
-    creating another.
+    creating another. A posting found by its ID that was retitled gets the new
+    title and hash, so the second source still lands on it.
+
+    Known miss (accepted): ``jobs.dedup_hash`` is globally unique, so the hash
+    fallback also merges two postings of *one* source that carry different IDs
+    but the same company/title/location — a repost, or two identical openings.
+    The second is not stored; it is logged. Telling them apart needs a
+    source-qualified hash column.
     """
     # ponytail: lookup-then-insert, no savepoint. Two sources inserting the same
     # new hash in the same tick -> IntegrityError on one of them; that poll fails
@@ -60,10 +70,27 @@ async def upsert_discovered(db: AsyncSession, source: JobSource, jobs: list[RawJ
                 )
             ).scalar_one_or_none()
         dedup_hash = dedup_key(raw.company, raw.title, raw.location)
-        if existing is None:
-            existing = (
+        by_hash = None
+        if existing is None or existing.dedup_hash != dedup_hash:
+            by_hash = (
                 await db.execute(select(Job).where(Job.dedup_hash == dedup_hash))
             ).scalar_one_or_none()
+        if existing is None:
+            existing = by_hash
+            if (
+                existing is not None
+                and raw.external_id
+                and existing.source_id == source.id
+                and existing.external_id
+            ):
+                logger.info(
+                    "source %s: posting %r merged into job %d (%r): same company/title/location",
+                    source.name, raw.external_id, existing.id, existing.external_id,
+                )
+        elif existing.dedup_hash != dedup_hash and by_hash is None:
+            # Retitled posting: follow it, unless another row already owns the new hash.
+            existing.title, existing.company = raw.title, raw.company
+            existing.location, existing.dedup_hash = raw.location, dedup_hash
 
         if existing is not None:
             existing.last_seen_at = now

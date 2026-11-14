@@ -524,14 +524,15 @@ class BatchRunner:
                 db.add(job_row)
                 await db.flush()
 
-            # Skip jobs that already have a non-new match (applied/skipped)
+            # Skip jobs that already have a non-new match (applied/skipped/rejected)
             any_actioned = (
                 await db.execute(
                     select(JobMatch).where(
                         JobMatch.job_id == job_row.id,
                         # "applying" = prepared for the user or possibly
                         # submitted (W06): re-queueing it invites a duplicate.
-                        JobMatch.status.in_(["applied", "skipped", "applying"]),
+                        # "rejected" would otherwise take a top-N CV slot every day.
+                        JobMatch.status.in_(["applied", "skipped", "applying", "rejected"]),
                     )
                     .limit(1)
                 )

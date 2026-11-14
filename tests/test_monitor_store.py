@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import func, select
@@ -111,6 +112,48 @@ async def test_same_job_from_two_sources_is_one_row():  # Review Focus 3
         assert (job.source_id, job.external_id) == (greenhouse_src.id, "gh-1")
 
 
+async def test_retitled_posting_is_still_one_row_from_a_second_source():  # Review Focus 3
+    async with AsyncSessionLocal() as db:
+        board = await source(db, "gh-acme")
+        linkedin = await source(db, "linkedin", "linkedin_guest")
+        await upsert_discovered(db, board, [raw(external_id="1")])
+        await upsert_discovered(db, board, [raw(external_id="1", title="Senior Robotics Engineer")])
+        new = await upsert_discovered(
+            db, linkedin, [raw(external_id="li", title="Senior Robotics Engineer")]
+        )
+        assert new == [] and await count(db, Job) == 1
+        job = (await db.execute(select(Job))).scalar_one()
+        assert job.title == "Senior Robotics Engineer"
+        assert job.dedup_hash == store.dedup_key("ACME", "Senior Robotics Engineer", "Paris")
+
+
+async def test_retitle_onto_another_rows_hash_keeps_both_rows_unchanged():
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        await upsert_discovered(db, src, [raw(external_id="1"), raw(external_id="2", title="B")])
+        new = await upsert_discovered(db, src, [raw(external_id="2")])  # "2" now reads like "1"
+        await db.flush()  # a hash collision would raise here
+        assert new == []
+        titles = (await db.execute(select(Job.title).order_by(Job.id))).scalars().all()
+        assert titles == ["Robotics Engineer", "B"]
+
+
+async def test_same_source_merge_by_hash_is_logged(caplog):
+    """Known miss (accepted): one source, two IDs, same company/title/location -> one row."""
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        other = await source(db, "linkedin", "linkedin_guest")
+        with caplog.at_level(logging.INFO, logger=store.__name__):
+            await upsert_discovered(db, src, [raw(external_id="a")])
+            await upsert_discovered(db, src, [raw(external_id="a")])
+            await upsert_discovered(db, other, [raw(external_id="li")])  # cross-source: silent
+            assert caplog.records == []
+            new = await upsert_discovered(db, src, [raw(external_id="b")])
+        assert new == [] and await count(db, Job) == 1
+        (record,) = caplog.records
+        assert "'b'" in record.getMessage() and "'a'" in record.getMessage()
+
+
 async def test_duplicates_inside_one_poll_insert_once():
     async with AsyncSessionLocal() as db:
         src = await source(db)
@@ -120,7 +163,7 @@ async def test_duplicates_inside_one_poll_insert_once():
             [
                 raw(external_id="a"),
                 raw(external_id="a"),  # same ID
-                raw(external_id="b"),  # same hash, other ID
+                raw(external_id="b"),  # same hash, other ID: merged — the accepted miss
                 raw(external_id="", title="No ID"),
                 raw(external_id="", title="No ID"),
             ],
@@ -286,6 +329,36 @@ async def test_batch_path_tolerates_legacy_per_day_matches(monkeypatch):
     async with AsyncSessionLocal() as db:
         stored = await runner._store_matches(db, [(jd, 80.0)], JobFilters())
         assert len(stored) == 1 and await count(db, JobMatch) == 2
+
+
+async def test_batch_path_does_not_return_a_rejected_job(monkeypatch):
+    """A rejected job must not take a top-N CV slot on every later batch."""
+    runner = _runner()
+    ranked = [(JobDetails(title="Robotics Engineer", company="ACME", location="Paris"), 80.0)]
+
+    _freeze_batch_day(monkeypatch, date(2026, 11, 14))
+    async with AsyncSessionLocal() as db:
+        (first,) = await runner._store_matches(db, ranked, JobFilters())
+        (await db.get(JobMatch, first.match_id)).status = "rejected"
+        await db.commit()
+    _freeze_batch_day(monkeypatch, date(2026, 11, 15))
+    async with AsyncSessionLocal() as db:
+        assert await runner._store_matches(db, ranked, JobFilters()) == []
+        assert await count(db, JobMatch) == 1
+
+
+async def test_batch_path_finds_a_monitor_job_despite_case_and_spacing():
+    """The batch runner hashes with ``dedup_key``, not its former un-normalised md5."""
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        jobs = await upsert_discovered(db, src, [raw(external_id="a")])
+        (match,) = await match_new(db, jobs, JobFilters(), 0)
+        await db.commit()
+    dirty = JobDetails(title="robotics  engineer ", company="acme", location="PARIS")
+    async with AsyncSessionLocal() as db:
+        (stored,) = await _runner()._store_matches(db, [(dirty, 80.0)], JobFilters())
+        assert stored.match_id == match.id
+        assert (await count(db, Job), await count(db, JobMatch)) == (1, 1)
 
 
 def test_batch_runner_uses_the_shared_conversion():

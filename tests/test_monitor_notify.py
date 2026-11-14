@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime
 
@@ -62,6 +63,11 @@ def ntfy(monkeypatch):
     return requests
 
 
+async def drain() -> None:
+    """Wait for the ntfy pushes still going out in the background."""
+    await asyncio.gather(*notify._pending)
+
+
 def a_match(**job_kw) -> tuple[JobMatch, Job]:
     job = Job(
         **{
@@ -81,6 +87,7 @@ def a_match(**job_kw) -> tuple[JobMatch, Job]:
 async def test_ntfy_post_has_title_and_click_headers(ntfy, ws):
     match, job = a_match()
     await notify_new_match(match, job, "greenhouse:mirakl")
+    await drain()
 
     assert len(ntfy) == 1
     request = ntfy[0]
@@ -94,6 +101,7 @@ async def test_ntfy_post_has_title_and_click_headers(ntfy, ws):
 async def test_new_match_is_broadcast_with_job_fields(ntfy, ws):
     match, job = a_match()
     await notify_new_match(match, job, "greenhouse:mirakl")
+    await drain()
 
     assert ws.sent == [
         {
@@ -114,6 +122,7 @@ async def test_new_match_is_broadcast_with_job_fields(ntfy, ws):
 async def test_job_without_location_or_date(ntfy, ws):
     match, job = a_match(location=None, posted_at=None)
     await notify_new_match(match, job, "indeed:robotics")
+    await drain()
 
     assert ntfy[0].content.decode() == "Ingénieur Robotique — Mirakl"
     assert ws.sent[0]["location"] == "" and ws.sent[0]["posted_at"] is None
@@ -124,6 +133,7 @@ async def test_ntfy_failure_does_not_raise(ntfy, ws, monkeypatch):
     ntfy.state["status"] = 500
     await notify_new_match(match, job, "greenhouse:mirakl")  # HTTP error: swallowed
     await notify_text("Source disabled", "greenhouse:mirakl: key revoked")
+    await drain()
     assert len(ntfy) == 2
 
     def boom(request: httpx.Request) -> httpx.Response:
@@ -137,6 +147,7 @@ async def test_ntfy_failure_does_not_raise(ntfy, ws, monkeypatch):
     )
     await notify_new_match(match, job, "greenhouse:mirakl")  # network error: swallowed
     await notify_text("Source disabled", "greenhouse:mirakl: key revoked")
+    await drain()
     # the WebSocket frame went out every time regardless
     assert [m["type"] for m in ws.sent] == ["new_match", "new_match"]
 
@@ -146,6 +157,7 @@ async def test_no_ntfy_url_sends_nothing(ntfy, ws, monkeypatch):
     match, job = a_match()
     await notify_new_match(match, job, "greenhouse:mirakl")
     await notify_text("Source disabled", "greenhouse:mirakl: key revoked")
+    await drain()
 
     assert ntfy == [] and ntfy.state["timeouts"] == []  # no client was even built
     assert len(ws.sent) == 1  # the page is still told
@@ -153,6 +165,7 @@ async def test_no_ntfy_url_sends_nothing(ntfy, ws, monkeypatch):
 
 async def test_notify_text_posts_a_plain_alert(ntfy, ws):
     await notify_text("Source disabled", "greenhouse:mirakl: key revoked")
+    await drain()
 
     assert len(ntfy) == 1
     assert ntfy[0].headers["Title"] == "Source disabled"
@@ -179,3 +192,61 @@ async def test_tick_uses_the_real_notifiers(monkeypatch):
     await poller.monitor_tick()
 
     assert seen == [(notify_new_match, notify_text)]
+
+
+async def test_hanging_ntfy_does_not_hold_up_the_tick(ws, monkeypatch):
+    """A black-holed ntfy must cost the tick nothing: pushes go out in the background."""
+    from sqlalchemy import select
+
+    from backend.database import AsyncSessionLocal
+    from backend.models.job import JobSource
+    from backend.models.schemas import RawJob
+    from backend.models.user import SearchSettings
+    from backend.scraping.sources import ADAPTERS, PollResult
+
+    hanging = 0
+
+    async def black_hole(request: httpx.Request) -> httpx.Response:
+        nonlocal hanging
+        hanging += 1
+        await asyncio.sleep(3600)
+        raise AssertionError("unreachable")
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        notify.httpx,
+        "AsyncClient",
+        lambda **kw: real_client(transport=httpx.MockTransport(black_hole), **kw),
+    )
+    monkeypatch.setattr(settings, "NTFY_URL", NTFY_URL)
+    monkeypatch.setattr(notify, "NTFY_TIMEOUT_S", 0.2)  # the deadline of one whole push
+
+    async def poll(client, cfg, etag, last_scraped_at) -> PollResult:
+        return PollResult(
+            jobs=[
+                RawJob(external_id=str(i), title=f"Engineer {i}", company="ACME", url="https://x")
+                for i in range(5)
+            ]
+        )
+
+    monkeypatch.setitem(ADAPTERS, "fake", poll)
+    async with AsyncSessionLocal() as db:
+        db.add(SearchSettings(id=1, keywords=[], min_match_score=0))
+        db.add(
+            JobSource(
+                name="fake",
+                type="fake",
+                config={"adapter": "fake"},
+                last_scraped_at=datetime(2026, 11, 14, 8, 0),  # seeded: new jobs notify
+            )
+        )
+        await db.commit()
+
+    await asyncio.wait_for(poller.monitor_tick(), timeout=5)  # far below 5 x the push deadline
+
+    async with AsyncSessionLocal() as db:
+        source = (await db.execute(select(JobSource))).scalar_one()
+        assert source.fail_count == 0 and source.last_scraped_at is not None
+    assert len(ws.sent) == 5  # the page was told before the tick returned
+    await drain()  # every push gives up at its deadline instead of hanging for ever
+    assert hanging == 5 and not notify._pending

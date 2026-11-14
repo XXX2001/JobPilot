@@ -65,9 +65,13 @@
     return null;
   };
   const submitPattern=new RegExp(limits.submit_pattern,'i');
+  const selectSubmits = e => e.tagName==='SELECT' && [e.onchange,e.oninput]
+    .some(handler=>/\b(?:requestSubmit|submit)\s*\(/.test(String(handler||'')));
   const submits = e => (e.tagName==='INPUT' && ['submit','image'].includes(e.type)) ||
     (e.tagName==='BUTTON' && e.type==='submit' && !!e.form) ||
-    (['button','link'].includes(role(e)) && submitPattern.test(name(e)));
+    selectSubmits(e) ||
+    (['button','link'].includes(role(e)) &&
+      (submitPattern.test(name(e)) || submitPattern.test(e.innerText||'')));
   const files = e => [...(e.files||[])].map(f=>[f.name,f.size,f.lastModified]);
   cache.pageKey=()=>[performance.timeOrigin,location.href,scrollX,scrollY,innerWidth,innerHeight,
     query(document,'input,textarea,select').filter(e=>safe(e)||e.type==='file')
@@ -81,7 +85,7 @@
       e.getAttribute('aria-expanded'),e.getAttribute('aria-checked'),e.getAttribute('aria-selected'),
       e.getAttribute('href'),scope?.innerText?.slice(0,6000)||'',submits(e),files(e),
       e.tagName==='SELECT' ? [...e.options].map(o=>[o.value,o.label,o.disabled,
-        !!o.closest('optgroup[disabled]')]) : null];
+        !!o.closest('optgroup[disabled]')]) : null, e.innerText||''];
   };
   cache.visible=visible;
   cache.closest=closest;
@@ -133,11 +137,12 @@
       const value='value' in e ? String(e.value) :
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
       // Guards need the entire accessible name, including an actually empty name.
-      // decide.build_request whitelists model fields and never serializes full_label.
+      // These unclipped guard fields stay local: decide.build_request uses a whitelist.
       const full_label=name(e).replace(/\s+/g,' ').trim();
+      const full_text=e.innerText||'';
       actions.push({...base,kind:editable?'fill':'click',value,
-        ...(!editable ? {full_label} : {})});
-      if (editable) actions.push({...base,kind:'click',value,full_label,
+        ...(!editable ? {full_label,full_text} : {})});
+      if (editable) actions.push({...base,kind:'click',value,full_label,full_text,
         label:clip('Open '+base.label)});
     }
   }

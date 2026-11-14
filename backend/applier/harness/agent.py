@@ -26,12 +26,14 @@ _STRICT_SUBMIT = re.compile(
     r"enviar|invia|verzenden|solliciteren",
     re.IGNORECASE,
 )
-_UPLOAD = re.compile(r"attach|upload|resume|résumé|\bcv\b|curriculum|cover|lettre|motivation", re.I)
-_LETTER = re.compile(r"cover|lettre|motivation", re.I)
-_CV = re.compile(r"resume|résumé|\bcv\b|curriculum", re.I)
+_UPLOAD = re.compile(
+    r"\b(?:attach|upload|resume|résumé|cv|curriculum|cover|lettre|motivation)\b", re.I
+)
+_LETTER = re.compile(r"\b(?:cover|lettre|motivation)\b", re.I)
+_CV = re.compile(r"\b(?:resume|résumé|cv|curriculum)\b", re.I)
 _CONSENT = re.compile(
-    r"\b(?:accept|agree|ok|got it|close|dismiss|accepter|j'accepte|fermer|"
-    r"tout accepter|alle akzeptieren|schließen)\b",
+    r"^(?:accept(?: cookies)?|agree|got it|close|dismiss|accepter|j'accepte|fermer|"
+    r"tout accepter|alle akzeptieren|schließen)$",
     re.I,
 )
 _NON_SUBMIT_ROLES = {
@@ -45,6 +47,7 @@ _NON_SUBMIT_ROLES = {
     "menuitemradio",
     "gridcell",
 }
+_CHOICE_ROLES = {"radio", "checkbox", "switch"}
 _UPLOAD_TARGET = """e => ({
     label: window.__jobpilotHarness?.guard(e, true)?.[2] || '',
     name: e.name || '', input_id: e.id || '', accept: e.accept || '',
@@ -154,7 +157,8 @@ def _document(target, documents, *, default=False, single_upload=False):
     own = " ".join(
         target.get(key, "") for key in ("full_label", "label", "name", "input_id")
     ).strip()
-    hint = own or target.get("nearby_text", "").strip()
+    # Treat identifier separators as word boundaries (e.g. cover_letter).
+    hint = (own or target.get("nearby_text", "").strip()).replace("_", " ")
     letter, cv = bool(_LETTER.search(hint)), bool(_CV.search(hint))
     if letter and cv:
         return None  # Shared nearby text does not identify either input.
@@ -169,7 +173,7 @@ def _document(target, documents, *, default=False, single_upload=False):
             and re.search(r"pdf|word|\.doc", target.get("accept", ""), re.I)
         )
     ):
-        kind = "cv"
+        kind = default if isinstance(default, str) and not cv else "cv"
     else:
         return None
     return kind if documents.get(kind) else None
@@ -178,6 +182,19 @@ def _document(target, documents, *, default=False, single_upload=False):
 def _append_once(items, value):
     if value not in items:
         items.append(value)
+
+
+def _click_labels(action):
+    return (action["full_label"].strip(), action.get("full_text", "").strip())
+
+
+def _matches(action, pattern):
+    return any(pattern.search(label) for label in _click_labels(action))
+
+
+def _advance_only(action):
+    labels = [label for label in _click_labels(action) if label]
+    return bool(labels) and all(ADVANCE_PATTERN.fullmatch(label) for label in labels)
 
 
 @dataclass
@@ -201,6 +218,8 @@ class _Run:
     attached: set = field(default_factory=set)
     choosers: list = field(default_factory=list)
     clicked_toggles: set = field(default_factory=set)
+    chose_field: bool = False
+    chooser_document: str | None = "cv"
     timeout: asyncio.Timeout | None = None
 
     def check_limits(self):
@@ -214,11 +233,14 @@ class _Run:
             raise StalePage("Page changed since the decision. Observe again.")
 
     def filechooser(self, chooser):
-        self.choosers.append(asyncio.create_task(self.answer_chooser(chooser)))
+        self.choosers.append(
+            asyncio.create_task(self.answer_chooser(chooser, self.chooser_document))
+        )
 
-    async def answer_chooser(self, chooser):
+    async def answer_chooser(self, chooser, opening_document):
         target = await chooser.element.evaluate(_UPLOAD_TARGET)
-        kind = _document(target, self.documents, default=True)
+        # The opening control is a better fallback than a shared parent's text.
+        kind = _document({**target, "nearby_text": ""}, self.documents, default=opening_document)
         await chooser.set_files(self.documents[kind] if kind else [], timeout=1000)
         if kind is None:
             raise HarnessBlocked("No document available for the file chooser")
@@ -303,7 +325,13 @@ class _Run:
             (decision.page_kind == "application_form" and decision.page_kind_p >= 0.5)
             or self.result.typed
             or self.result.uploads
-            or any(a["kind"] == "fill" for a in snap["actions"])
+            or self.chose_field
+            or snap["uploads"]
+            or any(
+                a["kind"] in {"fill", "select"}
+                or (a["kind"] == "click" and a.get("role") in _CHOICE_ROLES)
+                for a in snap["actions"]
+            )
         )
 
     async def form_complete(self, snap):
@@ -313,28 +341,41 @@ class _Run:
 
     def click_stop(self, snap, decision):
         action = decision.action
-        label = action["full_label"]
-        if _STRICT_SUBMIT.search(label):
-            return "submit_point"
-        if not self.form_context(snap, decision):
-            return None
+        label = action["full_label"].strip()
+        on_form = self.form_context(snap, decision)
         identity = _identity(snap, action)
+        strict = _matches(action, _STRICT_SUBMIT)
+        if on_form and not _advance_only(action):
+            # Broad application verbs cannot hide behind an additional strict word
+            # ("Apply and confirm"). Strict-only field names use the identity below.
+            if any(
+                not _STRICT_SUBMIT.fullmatch(match.group())
+                for label in _click_labels(action)
+                for match in SUBMIT_PATTERN.finditer(label)
+            ):
+                return "submit_point" if strict else "ready"
         # Open-field actions share their node with a fill action. Check these
-        # before the combobox/advance allowlist so a filled field cannot reopen.
+        # before strict words: opening "Confirm email" does not submit a form.
         if any(a["kind"] == "fill" and _identity(snap, a) == identity for a in snap["actions"]):
             return "ready" if identity in self.excluded or action.get("value") else None
+        if strict:
+            return "submit_point"
+        if not on_form:
+            return None
         if not label.strip() and action.get("role") == "button":
-            return "ready"
+            return "skip"
         if action.get("role") in {"checkbox", "switch"} and identity in self.clicked_toggles:
-            return "ready"
+            return "skip"
         if (
-            ADVANCE_PATTERN.search(label)
+            _advance_only(action)
             or action.get("role") in _NON_SUBMIT_ROLES
             or _UPLOAD.search(label)
-            or _CONSENT.search(label)
+            or _CONSENT.fullmatch(label)
         ):
             return None
-        return "ready"
+        # Default-deny: an unknown control on a form is never clicked. While fields remain it
+        # is skipped (live Greenhouse: "Enter manually" ended the run with half the form empty).
+        return "skip"
 
     def ready(self, snap, decision):
         self.result.stop = "ready"
@@ -342,18 +383,19 @@ class _Run:
         return self.result
 
     def submit_for_done(self, snap, decision):
-        if decision.submit_action is not None and decision.submit_p >= 0.3:
-            return decision.submit_action
+        chosen = decision.submit_action
+        # submit_target always names some click; trust it only for a submitting control.
+        if chosen is not None and decision.submit_p >= 0.3 and (
+            chosen.get("submits") or _matches(chosen, SUBMIT_PATTERN)
+        ):
+            return chosen
         candidates = [
             action
             for action in snap["actions"]
             if action["kind"] == "click"
             and action.get("submits")
-            and SUBMIT_PATTERN.search(action["full_label"])
-            and not (
-                ADVANCE_PATTERN.search(action["full_label"])
-                and not _STRICT_SUBMIT.search(action["full_label"])
-            )
+            and _matches(action, SUBMIT_PATTERN)
+            and not _advance_only(action)
         ]
         return candidates[0] if len(candidates) == 1 else None
 
@@ -470,6 +512,12 @@ class _Run:
                 skipped = False
                 if decision.operation == "CLICK":
                     stop = self.click_stop(snap, decision)
+                    if stop == "skip":
+                        if await self.form_complete(snap):
+                            await self.require_fresh(snap, action)
+                            return self.ready(snap, decision)
+                        self.skipped_clicks.add(_identity(snap, action))
+                        stop, skipped = None, True
                     if stop:
                         await self.require_fresh(snap, action)
                         if stop == "ready":
@@ -477,24 +525,37 @@ class _Run:
                         self.result.stop, self.result.submit_action = stop, action
                         return self.result
                     kind = _document(action, self.documents, default=True)
-                    if _UPLOAD.search(action["full_label"]) and kind in self.result.uploads:
+                    if skipped:
+                        pass
+                    elif _UPLOAD.search(action["full_label"]) and kind in self.result.uploads:
                         self.skipped_clicks.add(_identity(snap, action))
                         skipped = True
                     else:
-                        await act(self.page, snap, action)
+                        # Input may succeed even when navigation/settling raises.
                         self.result.clicked += 1
                         # Preserve evidence for the runner's no-fallback-after-submit rule.
-                        if action.get("submits") and self.result.typed:
+                        if action.get("submits"):
                             self.result.clicked_submit = True
+                        if action.get("role") in _CHOICE_ROLES:
+                            self.chose_field = True
+                        self.chooser_document = kind
+                        try:
+                            await act(self.page, snap, action)
+                            await self.drain_choosers()
+                        finally:
+                            self.chooser_document = "cv"
                         if action.get("role") in {"checkbox", "switch"}:
                             self.clicked_toggles.add(_identity(snap, action))
-                        await self.drain_choosers()
                 elif decision.operation == "TYPE_TEXT":
                     text, executed = await self.fill(snap, action)
                     skipped = not executed
                 else:
-                    # Known limit: a <select> whose change event submits its form
-                    # is not detected by the click guard.
+                    if action["kind"] == "select":
+                        if action.get("submits"):
+                            return self.ready(snap, decision)
+                        self.chose_field = True
+                    # Indirect submission through arbitrary event listeners cannot
+                    # be inferred from the DOM; explicit select handlers are guarded.
                     await act(self.page, snap, action)
                 self.result.steps += 1
                 self.history.append(
@@ -546,7 +607,6 @@ async def run_harness(
         notify,
     )
     tasks = []
-    page.on("filechooser", run.filechooser)
 
     async def bounded_run():
         # Keep the timeout in the worker task so handoff can restore it during
@@ -556,15 +616,24 @@ async def run_harness(
             return await run.run()
 
     try:
-        if cancel_event is None:
-            return await bounded_run()
-        work = asyncio.create_task(bounded_run())
-        cancelled = asyncio.create_task(cancel_event.wait())
-        tasks = [work, cancelled]
-        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        if cancelled in done:
-            raise HarnessBlocked("Application cancelled")
-        return work.result()
+        try:
+            page.on("filechooser", run.filechooser)
+            if cancel_event is None:
+                return await bounded_run()
+            work = asyncio.create_task(bounded_run())
+            cancelled = asyncio.create_task(cancel_event.wait())
+            tasks = [work, cancelled]
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if cancelled in done:
+                raise HarnessBlocked("Application cancelled")
+            return work.result()
+        finally:
+            page.remove_listener("filechooser", run.filechooser)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*run.choosers, return_exceptions=True)
+            await client.aclose()
     except RequestTooLong as exc:
         raise HarnessBlocked(
             "Decision request is still too long after shrinking", result=run.result
@@ -574,10 +643,8 @@ async def run_harness(
     except HarnessBlocked as exc:
         exc.result = run.result
         raise
-    finally:
-        page.remove_listener("filechooser", run.filechooser)
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await asyncio.gather(*run.choosers, return_exceptions=True)
-        await client.aclose()
+    except asyncio.CancelledError as exc:
+        exc.result = run.result
+        raise
+    except Exception as exc:
+        raise HarnessBlocked(str(exc), result=run.result) from exc

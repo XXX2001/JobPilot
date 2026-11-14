@@ -19,7 +19,8 @@ SUBMIT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ADVANCE_PATTERN = re.compile(
-    r"next|continue|suivant|continuer|weiter|review|save and continue|étape suivante",
+    r"^[^\w]*(?:next|continue|suivant|continuer|weiter|review|save and continue|étape suivante)"
+    r"[^\w]*$",
     re.IGNORECASE,
 )
 LABEL_CHARS = 100

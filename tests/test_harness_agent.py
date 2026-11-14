@@ -9,11 +9,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from backend.applier.harness import agent
 from backend.applier.harness.decide import Decision, DecisionError, RequestTooLong, build_request
-from backend.applier.harness.snapshot import observe
+from backend.applier.harness.snapshot import fresh, observe
 from backend.config import settings
 
 FIXTURES = Path(__file__).parent / "fixtures/harness"
@@ -353,14 +354,14 @@ async def test_leaving_fields_for_owner_still_makes_progress(page):
 
 
 @pytest.mark.parametrize("label", ["Continue to apply", "Review application"])
-async def test_advance_with_broad_apply_label_is_allowed(page, label):
+async def test_advance_requires_the_entire_label_to_be_an_advance_word(page, label):
     await page.set_content(
         "<form onsubmit=\"event.preventDefault();this.textContent='Next step'\">"
         f"<button>{label}</button></form>"
     )
     result = await run(page, ScriptedClient([step("CLICK", label), step("DONE")]))
-    assert result.stop == "ready" and result.steps == 1
-    assert await page.locator("form").inner_text() == "Next step"
+    assert result.stop == "ready" and result.steps == 0
+    assert await page.locator("form").inner_text() == label
 
 
 async def test_writer_replacing_field_reobserves_without_typing(page):
@@ -465,7 +466,7 @@ async def test_confirmation_after_advance_stops_without_more_actions(page):
             ]
         ),
     )
-    assert result.stop == "already_received" and result.steps == 1 and not result.clicked_submit
+    assert result.stop == "already_received" and result.steps == 1 and result.clicked_submit
 
 
 async def test_stale_page_reobserves_without_typing(page):
@@ -505,15 +506,17 @@ async def test_never_types_into_password(page):
     assert await page.locator("#password").input_value() == ""
 
 
-@pytest.mark.parametrize("submit", [None, "Check details"])
+@pytest.mark.parametrize("submit", [None, "Check details", "Submit application"])
 async def test_done_records_model_submit_or_single_matching_control(page, submit):
+    """submit_target always names some click; a non-submitting pick ("Check details",
+    live Greenhouse "Enter manually") falls back to the single submit control."""
     await page.set_content(
         '<button type="button">Check details</button>'
         '<a href="#" onclick="window.clicked=true">Submit application</a>'
     )
     result = await run(page, ScriptedClient([step("DONE", submit=submit)]))
     assert result.stop == "ready"
-    assert result.submit_action["label"] == (submit or "Submit application")
+    assert result.submit_action["label"] == "Submit application"
     assert not await page.evaluate("window.clicked")
 
 
@@ -533,10 +536,9 @@ async def test_model_failure_closes_client_and_removes_filechooser_handler(page,
     await load(page)
     client = ScriptedClient([])
     client.post = AsyncMock(side_effect=error)
-    with pytest.raises(
-        agent.HarnessBlocked if isinstance(error, RequestTooLong) else DecisionError
-    ):
+    with pytest.raises(agent.HarnessBlocked) as exc:
         await run(page, client)
+    assert exc.value.result.clicked == 0
     client.aclose.assert_awaited_once()
     assert not page._impl_obj.listeners("filechooser")
     assert await page.locator("#first_name").input_value() == ""
@@ -795,7 +797,6 @@ async def test_open_filled_or_excluded_field_stops_ready(page, state):
     [
         "Accept cookies",
         "Agree",
-        "OK",
         "Got it",
         "Close",
         "Dismiss",
@@ -1034,7 +1035,9 @@ async def test_click_that_changes_nothing_is_not_offered_again(page):
 
     async def fake_decide(client, snap, goal, history):
         offered.append([a["label"] for a in snap["actions"] if a["kind"] == "click"])
-        click = next((a for a in snap["actions"] if a["kind"] == "click" and a["label"] == "Open City"), None)
+        click = next(
+            (a for a in snap["actions"] if a["kind"] == "click" and a["label"] == "Open City"), None
+        )
         if click is None:
             return Decision("DONE", None, "other", 0.9, None, 0.0, 0.9, 0.0, 1)
         return Decision("CLICK", click, "other", 0.9, None, 0.0, 0.9, 0.9, 1)
@@ -1052,3 +1055,268 @@ async def test_click_that_changes_nothing_is_not_offered_again(page):
         agent.decide = original
     assert "Open City" in offered[0]
     assert "Open City" not in offered[1]
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Accept and apply",
+        "OK",
+        "Agree & apply",
+        "Upload and apply",
+        "Apply with resume",
+        "Apply with my CV",
+        "Discover",
+        "Apply and continue",
+        "Preview and apply",
+        "Accept and proceed",
+        "Next application",
+        "Recovery",
+        "Attachment",
+        "Resumed",
+        "Upload et postuler",
+        "Continue et candidater",
+    ],
+)
+async def test_guard_allow_words_cannot_hide_a_final_click(page, label):
+    await page.set_content(
+        "<label>Email<input></label>"
+        f'<button type="button" onclick="window.submitted=true">{label}</button>'
+    )
+    result = await run(
+        page,
+        ScriptedClient([step("TYPE_TEXT", "Email"), step("CLICK", label), step("DONE")]),
+    )
+    assert not await page.evaluate("!!window.submitted")
+    assert result.clicked == 0
+    assert result.stop == ("submit_point" if agent._STRICT_SUBMIT.search(label) else "ready")
+    if "apply" in label.lower():
+        assert result.submit_action["label"] == label
+
+
+@pytest.mark.parametrize(
+    "role", ["option", "menuitem", "gridcell", "tab", "checkbox", "radio", "switch", "combobox"]
+)
+@pytest.mark.parametrize("source", ["name", "text"])
+async def test_guard_submit_words_override_non_submit_roles(page, role, source):
+    aria = ' aria-label="Choice"' if source == "text" else ""
+    label = "Choice" if source == "text" else "Apply"
+    await page.set_content(
+        "<label>Email<input></label>"
+        f'<div role="{role}" tabindex="0"{aria} onclick="window.submitted=true">Apply</div>'
+    )
+    result = await run(
+        page,
+        ScriptedClient([step("TYPE_TEXT", "Email"), step("CLICK", label), step("DONE")]),
+    )
+    assert not await page.evaluate("!!window.submitted")
+    assert result.stop == "ready" and result.clicked == 0
+
+
+@pytest.mark.parametrize("label", ["Next", "Agree", "Upload", "Choice"])
+@pytest.mark.parametrize("text", ["Submit application", "Apply", "Review " + "x" * 100 + " submit"])
+async def test_guard_checks_unclipped_visible_text_even_with_aria_name(page, label, text):
+    await page.set_content(
+        "<label>Email<input></label>"
+        f'<button type="button" aria-label="{label}" onclick="window.submitted=true">'
+        f"{text}<span hidden>hidden text</span></button>"
+    )
+    result = await run(
+        page,
+        ScriptedClient([step("TYPE_TEXT", "Email"), step("CLICK", label), step("DONE")]),
+    )
+    assert not await page.evaluate("!!window.submitted")
+    assert result.clicked == 0
+    assert result.stop == ("ready" if text == "Apply" else "submit_point")
+    assert result.submit_action["full_text"] == text
+
+
+async def test_guard_full_text_stays_local_and_invalidates_stale_click(page):
+    text = "Review " + "x" * 6100 + " submit"
+    await page.set_content(
+        f'<button style="width:300px;height:40px;overflow:hidden" aria-label="Next">{text}</button>'
+    )
+    snap = await observe(page)
+    action = next(a for a in snap["actions"] if a["kind"] == "click")
+    assert action["full_text"] == text
+    body, _, _ = build_request(snap, "goal", [], "scripted")
+    assert "full_text" not in json.dumps(body) and text not in json.dumps(body)
+    await page.locator("button").evaluate("e => e.textContent += ' changed'")
+    assert not await fresh(page, snap, action)
+
+
+@pytest.mark.parametrize(
+    "kind,p", [("other", 0.9), ("application_form", 0.45), ("job_description", 0.9)]
+)
+@pytest.mark.parametrize("control", ["radio", "checkbox", "switch", "select", "upload"])
+async def test_guard_choices_and_uploads_establish_form_context(page, kind, p, control):
+    if control == "select":
+        markup = "<label>Country<select><option>A</option><option>B</option></select></label>"
+    elif control == "upload":
+        markup = '<input type="file" hidden>'
+    else:
+        markup = f'<div role="{control}" tabindex="0">Yes</div>'
+    await page.set_content(markup + '<button onclick="window.submitted=true">Apply</button>')
+    result = await run(
+        page,
+        ScriptedClient(
+            [
+                step("CLICK", "Apply", page_kind=kind, page_kind_p=p),
+                step("DONE"),
+            ]
+        ),
+    )
+    assert not await page.evaluate("!!window.submitted")
+    assert result.stop == "ready" and result.clicked == 0
+
+
+@pytest.mark.parametrize("control", ["radio", "checkbox", "switch", "select"])
+async def test_guard_remembers_choices_after_controls_disappear(page, control):
+    if control == "select":
+        markup = (
+            '<label>Country<select onchange="this.remove()">'
+            '<option>A</option><option>B</option></select></label>'
+        )
+        choice = step("SELECT", "Country → B", page_kind="other")
+    else:
+        markup = f'<div role="{control}" tabindex="0" onclick="this.remove()">Yes</div>'
+        choice = step("CLICK", "Yes", page_kind="other")
+    await page.set_content(markup + '<button onclick="window.submitted=true">Apply</button>')
+    result = await run(
+        page,
+        ScriptedClient([choice, step("CLICK", "Apply", page_kind="other"), step("DONE")]),
+    )
+    assert not await page.evaluate("!!window.submitted")
+    assert result.stop == "ready" and result.clicked == (control != "select")
+
+
+async def test_guard_iframe_ok_cannot_submit(page):
+    await page.set_content(
+        "<label>Email<input></label>"
+        '<iframe srcdoc="<button onclick=&quot;parent.submitted=true&quot;>OK</button>"></iframe>'
+    )
+    await page.frames[1].locator("button").wait_for()
+    result = await run(
+        page, ScriptedClient([step("TYPE_TEXT", "Email"), step("CLICK", "OK"), step("DONE")])
+    )
+    assert not await page.evaluate("!!window.submitted")
+    assert result.stop == "ready" and result.clicked == 0
+
+
+async def test_guard_open_confirm_email_is_a_field_click(page):
+    await page.set_content('<label>Confirm email<input onclick="window.opened=true"></label>')
+    result = await run(page, ScriptedClient([step("CLICK", "Open Confirm email"), step("DONE")]))
+    assert await page.evaluate("!!window.opened")
+    assert result.stop == "ready" and result.clicked == 1
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["<input aria-label='Apply'>", '<div contenteditable="true" role="textbox">Apply</div>'],
+)
+async def test_guard_open_field_cannot_bypass_apply(page, field):
+    await page.set_content(f'<div onclick="window.submitted=true">{field}</div>')
+    result = await run(page, ScriptedClient([step("CLICK", "Open Apply"), step("DONE")]))
+    assert not await page.evaluate("!!window.submitted")
+    assert result.stop == "ready" and result.clicked == 0
+
+
+@pytest.mark.parametrize("label", ["Apply and confirm", "Postuler et confirmer"])
+async def test_guard_open_field_with_strict_word_still_checks_broad_submit(page, label):
+    await page.set_content(f'<input aria-label="{label}" onclick="window.submitted=true">')
+    result = await run(page, ScriptedClient([step("CLICK", f"Open {label}"), step("DONE")]))
+    assert not await page.evaluate("!!window.submitted")
+    assert result.stop == "submit_point" and result.clicked == 0
+
+
+@pytest.mark.parametrize("typed", [False, True])
+@pytest.mark.parametrize("error_type", [PlaywrightError, RuntimeError, asyncio.CancelledError])
+async def test_guard_counts_click_before_act_can_raise(page, monkeypatch, typed, error_type):
+    await page.set_content(
+        '<form onsubmit="event.preventDefault();window.submitted=true">'
+        "<label>Email<input></label><button>Next</button></form>"
+    )
+    real_act = agent.act
+    error = error_type("failed after click")
+
+    async def failing_act(page_, snap, action, text=None):
+        await real_act(page_, snap, action, text)
+        if action["kind"] == "click":
+            raise error
+
+    monkeypatch.setattr(agent, "act", failing_act)
+    steps = [step("TYPE_TEXT", "Email")] if typed else []
+    client = ScriptedClient(steps + [step("CLICK", "Next")])
+    expected = (
+        asyncio.CancelledError if error_type is asyncio.CancelledError else agent.HarnessBlocked
+    )
+    with pytest.raises(expected) as exc:
+        await run(page, client)
+    assert await page.evaluate("!!window.submitted")
+    assert exc.value.result.clicked == 1 and exc.value.result.clicked_submit
+    assert bool(exc.value.result.typed) == typed
+    if error_type is asyncio.CancelledError:
+        assert exc.value is error
+    else:
+        assert exc.value.__cause__ is error
+    client.aclose.assert_awaited_once()
+    assert not page._impl_obj.listeners("filechooser")
+
+
+async def test_guard_decision_error_carries_completed_work(page):
+    await page.set_content("<label>Email<input></label>")
+    client = ScriptedClient([step("TYPE_TEXT", "Email")])
+    real_post = client.post
+
+    async def post(body):
+        if "operation" in body["questions"] and client.decisions:
+            raise DecisionError("Model unavailable")
+        return await real_post(body)
+
+    client.post = post
+    with pytest.raises(agent.HarnessBlocked, match="Model unavailable") as exc:
+        await run(page, client)
+    assert len(exc.value.result.typed) == 1
+    assert exc.value.result.clicked == 0
+    assert isinstance(exc.value.__cause__, DecisionError)
+
+
+async def test_guard_cleanup_error_carries_result(page):
+    await page.set_content("<label>Email<input></label>")
+    client = ScriptedClient([step("TYPE_TEXT", "Email"), step("DONE")])
+    client.aclose.side_effect = RuntimeError("close failed")
+    with pytest.raises(agent.HarnessBlocked, match="close failed") as exc:
+        await run(page, client)
+    assert len(exc.value.result.typed) == 1
+
+
+@pytest.mark.parametrize("available", ["both", "cv"])
+async def test_guard_cover_letter_chooser_uses_opening_control(page, documents, available):
+    if available == "cv":
+        documents = {"cv": documents["cv"]}
+    await page.set_content(
+        '<label>Resume<input type="file" name="resume"></label>'
+        '<input type="file" id="upload2" hidden>'
+        '<button type="button" onclick="upload2.click()">Attach cover letter</button>'
+    )
+    client = ScriptedClient([step("WAIT"), step("CLICK", "Attach cover letter"), step("DONE")])
+    if available == "cv":
+        with pytest.raises(agent.HarnessBlocked, match="No document") as exc:
+            await run(page, client, documents=documents)
+        assert exc.value.result.uploads == ["cv"] and exc.value.result.clicked == 1
+    else:
+        result = await run(page, client, documents=documents)
+        assert result.uploads == ["cv", "letter"]
+    assert await page.locator("#upload2").evaluate("e => e.files[0]?.name ?? null") == (
+        "letter.pdf" if available == "both" else None
+    )
+
+
+async def test_guard_select_change_autosubmits(page):
+    await page.set_content(
+        '<form onsubmit="event.preventDefault();window.submitted=true">'
+        '<label>Country<select onchange="this.form.requestSubmit()">'
+        '<option>a</option><option value="b">b</option></select></label></form>'
+    )
+    await run(page, ScriptedClient([step("SELECT", "Country → b"), step("DONE")]))
+    assert not await page.evaluate("!!window.submitted")

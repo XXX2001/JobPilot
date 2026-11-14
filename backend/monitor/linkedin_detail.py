@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 MAX_PER_POLL = 5
 MAX_PER_DAY = 80
 GAP_S = (6.0, 18.0)  # between two job pages
+# ponytail: read inside the poll, so a full batch (5 pages) holds the tick for about a
+# minute. Move to a background task if other sources' sightings get late.
 _WALL = re.compile(r"/(?:login|authwall|checkpoint|uas/login|signup)", re.IGNORECASE)
 _ABOUT = re.compile(r"^(?:About the job|À propos de l[’']offre d[’']emploi)\s*$", re.MULTILINE)
 _END = re.compile(
@@ -79,6 +81,10 @@ async def read_jobs(urls: list[str], *, today: date | None = None) -> dict[str, 
     async with async_playwright() as p:
         browser = await p.chromium.connect_over_cdp(f"http://127.0.0.1:{endpoint['port']}")
         context = browser.contexts[0]
+        cookies = await context.cookies("https://www.linkedin.com")
+        if not any(c["name"] == "li_at" for c in cookies):
+            logger.warning("JobPilot Chrome is not logged into LinkedIn: cards stay title-only")
+            return {}
         for n, url in enumerate(urls[:budget]):
             if n:
                 await asyncio.sleep(_rng.uniform(*GAP_S))

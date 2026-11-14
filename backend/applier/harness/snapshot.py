@@ -14,7 +14,8 @@ from playwright.async_api import Error as PlaywrightError
 
 SUBMIT_PATTERN = re.compile(
     r"submit|send|apply|envoyer|postuler|soumettre|finish|complete|terminer|bewerben|absenden|"
-    r"valider ma candidature",
+    r"einreichen|abschicken|postule|postulez|candidater|valider|déposer|transmettre|confirm|"
+    r"enviar|invia|verzenden|solliciteren",
     re.IGNORECASE,
 )
 ADVANCE_PATTERN = re.compile(

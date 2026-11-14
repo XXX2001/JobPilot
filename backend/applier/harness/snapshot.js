@@ -132,8 +132,13 @@
           (rname==='combobox' && ['INPUT','TEXTAREA'].includes(e.tagName)));
       const value='value' in e ? String(e.value) :
         e.isContentEditable || rname==='combobox' ? e.innerText.trim() : '';
-      actions.push({...base,kind:editable?'fill':'click',value});
-      if (editable) actions.push({...base,kind:'click',value,label:clip('Open '+base.label)});
+      // Guards need the entire accessible name, including an actually empty name.
+      // decide.build_request whitelists model fields and never serializes full_label.
+      const full_label=name(e).replace(/\s+/g,' ').trim();
+      actions.push({...base,kind:editable?'fill':'click',value,
+        ...(!editable ? {full_label} : {})});
+      if (editable) actions.push({...base,kind:'click',value,full_label,
+        label:clip('Open '+base.label)});
     }
   }
   const words=[], range=document.createRange(); let length=0;

@@ -25,6 +25,7 @@ frontend/.svelte-kit/
 
 # ─── Runtime Data ─────────────────────────────────────────────────────────────
 data/
+!backend/matching/data/
 bin/
 *.db
 *.db-wal

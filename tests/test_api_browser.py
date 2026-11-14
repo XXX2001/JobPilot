@@ -17,15 +17,22 @@ def test_open_starts_chrome_and_shows_missing_logins(test_app: TestClient, monke
     opened: list[str] = []
 
     async def logged_in(port: int) -> dict[str, bool]:
-        return {"linkedin": True}
+        return {"linkedin": False}
 
     monkeypatch.setattr(browser, "ensure_chrome_running", lambda data_dir: {"port": 9})
     monkeypatch.setattr(browser, "_logged_in", logged_in)
     monkeypatch.setattr(browser, "_open_tab", lambda port, url: opened.append(url))
     resp = test_app.post("/api/browser/open")
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"running": True, "logged_in": {"linkedin": True}}
-    assert opened == [browser.LOGIN_PAGES["indeed"]]  # LinkedIn already has a session
+    assert resp.json() == {"running": True, "logged_in": {"linkedin": False}}
+    assert opened == [browser.LOGIN_PAGES["linkedin"]]
+
+    async def all_in(port: int) -> dict[str, bool]:
+        return {"linkedin": True}
+
+    monkeypatch.setattr(browser, "_logged_in", all_in)
+    test_app.post("/api/browser/open")
+    assert len(opened) == 1  # nothing reopened once logged in
 
 
 def test_show_app_opens_this_apps_page(test_app: TestClient, monkeypatch):

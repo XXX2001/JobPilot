@@ -21,10 +21,9 @@ from backend.browser.chrome import (
 
 router = APIRouter(prefix="/api/browser", tags=["browser"], redirect_slashes=False)
 
-LOGIN_PAGES = {
-    "linkedin": "https://www.linkedin.com/login",
-    "indeed": "https://secure.indeed.com/auth",
-}
+# Login pages shown by "open". Only sites whose login the app can check and use: a tab
+# for a site nothing uses would reopen on every click.
+LOGIN_PAGES = {"linkedin": "https://www.linkedin.com/login"}
 # The cookie whose presence means "logged in". ponytail: LinkedIn only; add a site
 # when its apply flow lands and its session cookie has been checked.
 SESSION_COOKIES = {"linkedin": ("https://www.linkedin.com", "li_at")}

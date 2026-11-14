@@ -532,7 +532,7 @@ deleted, the file was committed elsewhere without the key…) every value
 above becomes mathematically unrecoverable. There is no recovery procedure;
 the affected rows must be re-entered:
 
-- Site credentials → re-enter on the Settings → Credentials page.
+- Job-site logins → log in again by hand in the JobPilot browser (Settings → Monitor). Site passwords are no longer stored.
 - Gmail tokens → click *Disconnect* on the Gmail card and re-run the OAuth
   flow.
 - In-flight OAuth `state` HMACs → harmless; the next callback simply

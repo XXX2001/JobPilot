@@ -113,7 +113,7 @@ Pages consume the stream reactively. For example, `queue/+page.svelte:52-73` run
 - **`StatusBar.svelte`** — bottom status bar reading the WS message stream.
 - **`HotkeyHelp.svelte`** — the `?` shortcut overlay.
 - **`LinkApplicationModal.svelte`** — links an inbox message to an application.
-- Settings tabs under `components/settings/`: `ProfileTab`, `SearchTab`, `SourcesTab`, `SitesTab`, `CredentialsTab`, `IntegrationsTab`, `SystemTab`.
+- Settings tabs under `components/settings/`: `ProfileTab`, `SearchTab`, `SourcesTab`, `SitesTab`, `IntegrationsTab`, `SystemTab`.
 - Flourishes: `FloatingEmoji.svelte`, `EasterEggToast.svelte` (see `utils/easterEggs.ts`).
 
 ### Utilities (`src/lib/utils/`)

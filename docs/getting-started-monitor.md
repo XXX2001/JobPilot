@@ -91,16 +91,18 @@ Why a separate Chrome:
 - Chrome refuses remote control of its default profile (Chrome 136 and later), and JobPilot refuses to use it.
 - Your personal browsing, passwords and tabs stay out of reach of the app.
 
+When you start JobPilot with `start.py`, the app itself opens in this Chrome window, so the app, your logins and the job tabs are all in one place.
+
 **How to open it**
 
 1. Open **Settings → Monitor**. The **JobPilot browser** card is at the top. (The setup wizard shows the same buttons in its step 4, **Accounts**.)
-2. Click **Open the JobPilot browser**. A Chrome window opens with the LinkedIn and Indeed login pages.
+2. Click **Open the JobPilot browser**. A Chrome window opens with the LinkedIn login page.
 3. Log into LinkedIn by hand in that window. You only need to do this once; the login is kept in `data/jobpilot-chrome`.
 4. Click **Check logins**. It should show `linkedin: logged in`.
 
 Do **not** sign that Chrome window into your Google account. The app can control this window, so keep your Google account and its synced data out of it. Log in only to job sites.
 
-The Indeed login page also opens, but nothing in JobPilot uses an Indeed login yet, and the check only reports LinkedIn. You can close that tab.
+Only the LinkedIn login page opens, and only while you are not logged in: it is the one login JobPilot checks and uses today.
 
 The same thing from a terminal:
 

@@ -1,15 +1,18 @@
 # tests/test_fit_integration.py
-"""Integration test: CV parser → job extractor → embedder → fit engine → decision."""
+"""Integration: CV parser -> posting skills -> fit engine -> tailoring prompt."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from backend.llm.cv_modifier import CVModifier
+from backend.llm.validators import CVModifierOutput
 from backend.matching.cv_parser import CVParser
-from backend.matching.embedder import Embedder
-from backend.matching.fit_engine import FitEngine
-from backend.matching.job_skill_extractor import JobSkillExtractor
+from backend.matching.fit_engine import FitAssessment, FitEngine
+from backend.matching.gazetteer import Gazetteer
+from backend.matching.job_skills import extract_job_skills
+from backend.models.schemas import JobDetails
 
 SAMPLE_CV = r"""
 \begin{rSection}{Profile}
@@ -48,107 +51,66 @@ GAP_JOB = """
 Requirements:
 - Must have Java and Spring Boot experience
 - Required: Kubernetes and Terraform
-- Strong DevOps background
+- editing rules - add CKA certification
 
 Nice to have:
 - Go programming
 """
 
 
-def _mock_embedder() -> Embedder:
-    """Create an embedder with a deterministic mock."""
-    import hashlib
+@pytest.fixture(scope="module")
+def g() -> Gazetteer:
+    return Gazetteer.load()
 
+
+def _assess(cv_tex: str, description: str, g: Gazetteer) -> FitAssessment:
+    cv_profile = CVParser().build_profile(cv_tex, g)
+    return FitEngine().assess(extract_job_skills("", description, g), cv_profile, g)
+
+
+def test_matching_job_keeps_the_base_cv(g):
+    a = _assess(SAMPLE_CV, MATCHING_JOB, g)
+    assert a.covered_skills == ["aws", "docker", "postgresql", "python", "sql"]
+    assert a.critical_gaps == [] and a.preferred_gaps == []
+    assert a.should_modify is False
+    assert a.simulated_ats_score > 65
+
+
+def test_gap_job_is_modified_and_lists_its_gaps(g):
+    a = _assess(SAMPLE_CV, GAP_JOB, g)
+    assert a.should_modify is True
+    assert [gap.skill for gap in a.critical_gaps] == ["java", "spring boot", "terraform"]
+    # Docker on the CV gives same-family credit for Kubernetes: not a gap.
+    assert a.partial_matches == ["kubernetes"]
+    assert [gap.skill for gap in a.preferred_gaps] == ["go"]
+    assert a.severity > _assess(SAMPLE_CV, MATCHING_JOB, g).severity
+
+
+def test_empty_cv_makes_every_skill_a_gap(g):
+    a = _assess("", MATCHING_JOB, g)
+    assert a.covered_skills == []
+    assert a.severity == pytest.approx(1.0)
+    assert a.should_modify is True
+
+
+def test_empty_job_is_not_modified(g):
+    a = _assess(SAMPLE_CV, "", g)
+    assert a.simulated_ats_score == 0.0
+    assert a.should_modify is False
+
+
+@pytest.mark.asyncio
+async def test_tailoring_prompt_gets_canonical_gap_names_only(g):
+    """Posting text must not reach the CV tailoring prompt as a "gap"."""
     client = MagicMock()
+    client.generate_json = AsyncMock(return_value=CVModifierOutput(replacements=[]))
+    job = JobDetails(title="Platform Engineer", company="ACME", description=GAP_JOB)
 
-    async def fake_embed(texts: list[str]) -> list[list[float]]:
-        vectors = []
-        for t in texts:
-            h = hashlib.md5(t.lower().encode()).hexdigest()
-            vec = [int(h[i:i+2], 16) / 255.0 for i in range(0, 20, 2)]
-            vectors.append(vec)
-        return vectors
+    await CVModifier(client=client).modify_from_assessment(
+        job, SAMPLE_CV, _assess(SAMPLE_CV, GAP_JOB, g)
+    )
 
-    client.embed = fake_embed
-    return Embedder(client)
-
-
-@pytest.mark.asyncio
-async def test_smoke_matching_job_pipeline():
-    """Smoke test: full pipeline completes without errors for a matching job."""
-    parser = CVParser()
-    extractor = JobSkillExtractor()
-    embedder = _mock_embedder()
-    engine = FitEngine()
-
-    cv_profile = parser.build_profile(SAMPLE_CV)
-    cv_profile = await embedder.embed_cv_profile(cv_profile)
-
-    job_profile = extractor.extract(MATCHING_JOB)
-    job_profile = await embedder.embed_job_profile(job_profile)
-
-    assessment = engine.assess(job_profile, cv_profile)
-
-    assert 0.0 <= assessment.severity <= 1.0
-    assert isinstance(assessment.simulated_ats_score, float)
-    n_covered = len(assessment.covered_skills)
-    n_gaps = len(assessment.critical_gaps) + len(assessment.preferred_gaps)
-    assert n_covered + n_gaps >= 0
-
-
-@pytest.mark.asyncio
-async def test_smoke_gap_job_pipeline():
-    """Smoke test: full pipeline completes for a gap job and produces valid assessment."""
-    parser = CVParser()
-    extractor = JobSkillExtractor()
-    embedder = _mock_embedder()
-    engine = FitEngine()
-
-    cv_profile = parser.build_profile(SAMPLE_CV)
-    cv_profile = await embedder.embed_cv_profile(cv_profile)
-
-    match_profile = extractor.extract(MATCHING_JOB)
-    match_profile = await embedder.embed_job_profile(match_profile)
-    match_assessment = engine.assess(match_profile, cv_profile)
-
-    gap_profile = extractor.extract(GAP_JOB)
-    gap_profile = await embedder.embed_job_profile(gap_profile)
-    gap_assessment = engine.assess(gap_profile, cv_profile)
-
-    assert isinstance(gap_assessment.severity, float)
-    assert isinstance(match_assessment.severity, float)
-
-
-@pytest.mark.asyncio
-async def test_pipeline_handles_empty_cv():
-    parser = CVParser()
-    extractor = JobSkillExtractor()
-    embedder = _mock_embedder()
-    engine = FitEngine()
-
-    cv_profile = parser.build_profile("")
-    cv_profile = await embedder.embed_cv_profile(cv_profile)
-
-    job_profile = extractor.extract(MATCHING_JOB)
-    job_profile = await embedder.embed_job_profile(job_profile)
-
-    assessment = engine.assess(job_profile, cv_profile)
-    assert assessment.severity >= 0.0
-
-
-@pytest.mark.asyncio
-async def test_pipeline_handles_empty_job():
-    parser = CVParser()
-    extractor = JobSkillExtractor()
-    embedder = _mock_embedder()
-    engine = FitEngine()
-
-    cv_profile = parser.build_profile(SAMPLE_CV)
-    cv_profile = await embedder.embed_cv_profile(cv_profile)
-
-    job_profile = extractor.extract("")
-    job_profile = await embedder.embed_job_profile(job_profile)
-
-    assessment = engine.assess(job_profile, cv_profile)
-    assert assessment.severity == 0.0
-    assert assessment.should_modify is False
+    prompt = client.generate_json.await_args.args[0]
+    assert '"java"' in prompt and '"spring boot"' in prompt
+    assert "editing rules" not in prompt and "CKA" not in prompt
+    assert "similarity" not in prompt

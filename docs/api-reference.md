@@ -163,8 +163,8 @@ Profile, search config, sources, credentials, custom sites, and the onboarding/s
 | GET | `/api/settings/sources` | `SourcesOut` | Read enabled job sources |
 | PUT | `/api/settings/sources` | `SourcesUpdateResponse` | Update sources |
 | GET | `/api/settings/status` | `SetupStatus` | Onboarding/setup completeness (config presence only), plus `auto_submit_enabled` (whether the UI may offer Auto apply) |
-| POST | `/api/settings/test-connection` | _(dict)_ | Live-probe the configured generation + embedding endpoints (actually calls them) |
-| GET | `/api/settings/models` | _(dict)_ | List model ids advertised by the configured endpoint's `/models` route (`?role=llm\|embedding`) |
+| POST | `/api/settings/test-connection` | _(dict)_ | Live-probe the configured generation endpoint (actually calls it) |
+| GET | `/api/settings/models` | _(dict)_ | List model ids advertised by the configured endpoint's `/models` route (`?role=llm`) |
 | POST | `/api/settings/profile/cv-upload` | `CvUploadResponse` | Upload base CV (multipart `UploadFile`) |
 | GET | `/api/settings/sites` | `list[SiteOut]` | List configured sites |
 | PUT | `/api/settings/sites/{site_name}` | `SiteToggleResponse` | Enable/disable a site |
@@ -177,20 +177,19 @@ Profile, search config, sources, credentials, custom sites, and the onboarding/s
 
 ### `POST /api/settings/test-connection`
 
-Unlike `GET /api/settings/status` (which only checks that config is *present*), this route actually calls the configured generation and embedding endpoints and reports whether each responded. It takes no request body. Each probe is bounded to ~45s. The response is two probe objects:
+Unlike `GET /api/settings/status` (which only checks that config is *present*), this route actually calls the configured generation endpoint and reports whether it responded. It takes no request body. The probe is bounded to ~45s. The response is one probe object:
 
 ```json
 {
-  "generation": {"ok": true, "latency_ms": 634, "detail": "model responded (2 chars)", "error": null},
-  "embedding":  {"ok": true, "latency_ms": 168, "detail": "dimension=1024", "error": null}
+  "generation": {"ok": true, "latency_ms": 634, "detail": "model responded (2 chars)", "error": null}
 }
 ```
 
-Each probe is `{ok: bool, latency_ms: int|null, detail: string|null, error: string|null}`. On failure `ok=false` and `error` carries an actionable message — a timeout suggests raising `LLM_TIMEOUT_SECONDS` or setting `LLM_DISABLE_THINKING`; a chat-only server that can't embed reports that the endpoint doesn't serve `/v1/embeddings`.
+The probe is `{ok: bool, latency_ms: int|null, detail: string|null, error: string|null}`. On failure `ok=false` and `error` carries an actionable message — a timeout suggests raising `LLM_TIMEOUT_SECONDS` or setting `LLM_DISABLE_THINKING`.
 
 ### `GET /api/settings/models`
 
-Lists the model ids advertised by the configured endpoint's `/models` route — useful for prefilling the model field for a local server. The `role` query parameter selects which endpoint to query: `role=llm` (default) or `role=embedding`. Parsing is tolerant of both OpenAI-shaped (`data[].id`) and Ollama-shaped (`models[].id` / `model` / `name`) responses.
+Lists the model ids advertised by the configured endpoint's `/models` route — useful for prefilling the model field for a local server. The `role` query parameter accepts only `llm` (the default). Parsing is tolerant of both OpenAI-shaped (`data[].id`) and Ollama-shaped (`models[].id` / `model` / `name`) responses.
 
 ```json
 {"base_url": "http://localhost:8080/v1", "models": ["Qwen3.6-27B-MTP"], "error": null}

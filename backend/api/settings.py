@@ -198,7 +198,6 @@ class ProbeResult(BaseModel):
 
 class TestConnectionResponse(BaseModel):
     generation: ProbeResult
-    embedding: ProbeResult
 
 
 class ModelListResponse(BaseModel):
@@ -372,51 +371,15 @@ async def _probe_generation() -> ProbeResult:
         return ProbeResult(ok=False, error=str(exc)[:300])
 
 
-async def _probe_embedding() -> ProbeResult:
-    from backend.llm.factory import make_embedding_client
-
-    t0 = time.monotonic()
-    try:
-        client = make_embedding_client()
-        vecs = await asyncio.wait_for(
-            client.embed(["connection test"]), timeout=_PROBE_TIMEOUT_S
-        )
-        dt = int((time.monotonic() - t0) * 1000)
-        dim = len(vecs[0]) if vecs and vecs[0] else 0
-        return ProbeResult(
-            ok=dim > 0,
-            latency_ms=dt,
-            detail=f"dimension={dim}",
-            error=None if dim > 0 else "Endpoint returned no embedding vector.",
-        )
-    except asyncio.TimeoutError:
-        return ProbeResult(ok=False, error=f"No response within {int(_PROBE_TIMEOUT_S)}s.")
-    except Exception as exc:  # noqa: BLE001
-        # A chat-only local server often returns 404/501 on /embeddings — make
-        # that the most common failure mode legible.
-        msg = str(exc)
-        if "404" in msg or "501" in msg or "not found" in msg.lower():
-            msg = (
-                "Endpoint does not serve /v1/embeddings (chat-only server?). "
-                "Point EMBEDDING_BASE_URL at a server that hosts an embedding model. "
-                f"[{msg[:150]}]"
-            )
-        return ProbeResult(ok=False, error=msg[:300])
-
-
 @router.post("/test-connection", response_model=TestConnectionResponse)
 async def test_connection() -> TestConnectionResponse:
-    """Live-probe the configured generation + embedding endpoints.
+    """Live-probe the configured generation endpoint.
 
     Unlike ``/status`` (which only checks that a key/base_url is *present*),
-    this actually calls each endpoint, so a wrong base_url, a chat-only server
-    that can't embed, or a too-slow model surfaces at setup instead of failing
-    silently mid-run.
+    this actually calls the endpoint, so a wrong base_url or a too-slow model
+    surfaces at setup instead of failing silently mid-run.
     """
-    return TestConnectionResponse(
-        generation=await _probe_generation(),
-        embedding=await _probe_embedding(),
-    )
+    return TestConnectionResponse(generation=await _probe_generation())
 
 
 def _parse_model_ids(data: Any) -> list[str]:
@@ -438,22 +401,17 @@ def _parse_model_ids(data: Any) -> list[str]:
 
 
 @router.get("/models", response_model=ModelListResponse)
-async def list_models(role: Literal["llm", "embedding"] = "llm") -> ModelListResponse:
+async def list_models(
+    role: Literal["llm"] = "llm",  # noqa: ARG001 - the only role left
+) -> ModelListResponse:
     """List model ids the configured endpoint advertises at ``/models``.
 
     Lets the setup UI prefill the model field for a local/self-hosted server
     instead of the user having to know the exact served id. Only meaningful
     when a base_url is set (hosted OpenAI uses fixed, well-known model names).
     """
-    if role == "llm":
-        base = settings.LLM_BASE_URL or ""
-        key = settings.LLM_API_KEY.get_secret_value() or settings.OPENAI_API_KEY.get_secret_value()
-    else:
-        base = settings.EMBEDDING_BASE_URL or ""
-        key = (
-            settings.EMBEDDING_API_KEY.get_secret_value()
-            or settings.OPENAI_API_KEY.get_secret_value()
-        )
+    base = settings.LLM_BASE_URL or ""
+    key = settings.LLM_API_KEY.get_secret_value() or settings.OPENAI_API_KEY.get_secret_value()
 
     if not base.strip():
         return ModelListResponse(

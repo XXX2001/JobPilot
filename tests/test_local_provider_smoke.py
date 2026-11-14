@@ -22,11 +22,8 @@ import urllib.request
 import pytest
 from pydantic import BaseModel
 
-from backend.llm import base, factory
-from backend.llm.providers.openai_compat import (
-    OpenAICompatClient,
-    OpenAICompatEmbeddingClient,
-)
+from backend.llm import factory
+from backend.llm.providers.openai_compat import OpenAICompatClient
 
 LOCAL_URL = os.environ.get("JOBPILOT_LOCAL_LLM_URL", "http://192.168.1.50:8080/v1")
 LOCAL_MODEL = os.environ.get("JOBPILOT_LOCAL_LLM_MODEL", "Qwen3.6-27B-MTP")
@@ -90,26 +87,6 @@ async def test_factory_routes_generation_to_local(monkeypatch):
 
     out = await client.generate_text("Reply with exactly one word: OK")
     assert out.strip() != ""
-
-
-async def test_embeddings_surface_cleanly():
-    """Embeddings may or may not be served by a given build. Either way the
-    adapter must behave: return well-formed vectors, or translate the provider
-    error into the neutral LLMCallFailed (never leak a raw SDK exception).
-
-    The default target (llama.cpp Qwen build) answers 501 here, so this asserts
-    the clean-error path and skips; a build that supports embeddings asserts the
-    vector shape instead."""
-    emb = OpenAICompatEmbeddingClient(
-        api_key="not-needed", model=LOCAL_MODEL, base_url=LOCAL_URL
-    )
-    try:
-        vectors = await emb.embed(["hello world"])
-    except base.LLMCallFailed:
-        pytest.skip("endpoint does not serve embeddings — error correctly translated to LLMCallFailed")
-    else:
-        assert vectors and isinstance(vectors[0], list)
-        assert len(vectors[0]) > 0
 
 
 def test_factory_browser_llm_points_at_local(monkeypatch):

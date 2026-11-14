@@ -24,7 +24,7 @@ defaults   ─┘    (config.py)     (friendly errors)     (provider-aware, fail
 
 ## AI provider selection
 
-JobPilot has three independent LLM roles — generation, embeddings, and the browser agent — each with its own provider/model/base-URL/key. You can mix providers (e.g. local generation + a hosted embedding provider). `openai` here means **any** OpenAI-compatible endpoint — hosted OpenAI, a local server (Ollama, LM Studio, vLLM, llama.cpp), or another vendor's OpenAI-compatible endpoint — selected with `*_BASE_URL`.
+JobPilot has two independent LLM roles — generation and the browser agent — each with its own provider/model/base-URL/key, so you can mix providers. Job scoring and fit assessment use no model at all (see [Matching](matching.md)); `EMBEDDING_*` keys left in an older `.env` are ignored. `openai` here means **any** OpenAI-compatible endpoint — hosted OpenAI, a local server (Ollama, LM Studio, vLLM, llama.cpp), or another vendor's OpenAI-compatible endpoint — selected with `*_BASE_URL`.
 
 ### Generation (`LLM_*`)
 
@@ -38,17 +38,6 @@ JobPilot has three independent LLM roles — generation, embeddings, and the bro
 
 `config.py:49-52`. Provider-default and base-URL details are wired through `backend/llm/factory.py` (`make_llm_client`, used at `backend/main.py:141`).
 
-### Embeddings (`EMBEDDING_*`)
-
-| Env var | Field | Default | Required? |
-|---|---|---|---|
-| `EMBEDDING_PROVIDER` | `EMBEDDING_PROVIDER` | `openai` | `openai` only (anthropic has no embeddings API) |
-| `EMBEDDING_MODEL` | `EMBEDDING_MODEL` | `text-embedding-3-small` | Optional |
-| `EMBEDDING_BASE_URL` | `EMBEDDING_BASE_URL` | `""` | OpenAI-compatible endpoint |
-| `EMBEDDING_API_KEY` | `EMBEDDING_API_KEY` (secret) | `""` | See validation rules |
-
-`config.py:54-57`. Note: many local builds (e.g. llama.cpp Qwen) do **not** serve `/v1/embeddings` (HTTP 501). Keep embeddings on an OpenAI-compatible endpoint that serves an embedding model — or fit-scoring breaks (`.env.example:69-72`).
-
 ### Browser agent (`BROWSER_LLM_*`)
 
 | Env var | Field | Default | Required? |
@@ -60,7 +49,7 @@ JobPilot has three independent LLM roles — generation, embeddings, and the bro
 
 `config.py:58-62`.
 
-> Changes to any `LLM_*` / `EMBEDDING_*` / `BROWSER_LLM_*` value are **applied on restart** — clients are constructed once in the lifespan, not per-request.
+> Changes to any `LLM_*` / `BROWSER_LLM_*` value are **applied on restart** — clients are constructed once in the lifespan, not per-request.
 
 ### Using a local / self-hosted OpenAI-compatible server
 
@@ -120,7 +109,7 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 
 ## Models
 
-Model names are configured per role via `LLM_MODEL` / `EMBEDDING_MODEL` / `BROWSER_LLM_MODEL` (see the provider tables above). Each is optional; when empty the provider adapter falls back to a sensible default (e.g. `text-embedding-3-small` for OpenAI-compatible embeddings).
+Model names are configured per role via `LLM_MODEL` / `BROWSER_LLM_MODEL` (see the provider tables above). Each is optional; when empty the provider adapter falls back to a sensible default.
 
 ---
 
@@ -175,13 +164,6 @@ The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and
 | invalid value | Must be one of `openai` \| `anthropic` |
 | `openai` | `LLM_BASE_URL` (local/self-hosted) **or** `LLM_API_KEY` **or** `OPENAI_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` (or `LLM_API_KEY`) |
-
-### Embeddings (`EMBEDDING_PROVIDER`)
-
-| Provider | Requirement |
-|---|---|
-| invalid value | Must be `openai` (anthropic has no embeddings API) |
-| `openai` | `EMBEDDING_BASE_URL` **or** `EMBEDDING_API_KEY` **or** `OPENAI_API_KEY` |
 
 ### Browser agent (`BROWSER_LLM_PROVIDER`)
 

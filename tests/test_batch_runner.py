@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
-import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -348,7 +346,7 @@ async def test_dry_run_returns_preview_and_writes_nothing(sqlite_factory):
     This is the M2-T6 guarantee: previewing today's matches must not burn
     LLM quota or commit any rows. We assert (a) a preview list comes back,
     (b) the ``job_matches`` and ``tailored_documents`` tables stay empty, and
-    (c) the embedder (LLM) and CV pipeline are never touched.
+    (c) the fit engine and CV pipeline are never touched.
     """
     from backend.models.document import TailoredDocument
 
@@ -357,17 +355,15 @@ async def test_dry_run_returns_preview_and_writes_nothing(sqlite_factory):
     matcher = MockMatcher(score=80.0)
     cv_pipeline = MockCVPipeline()
 
-    # Wire an embedder spy to prove the fit-assessment / LLM path is skipped.
-    embedder = MagicMock()
-    embedder.embed_cv_profile = AsyncMock(side_effect=lambda p: p)
-    embedder.embed_job_profile = AsyncMock(side_effect=lambda p: p)
+    # A fit-engine spy proves the fit-assessment path is skipped.
+    fit_engine = MagicMock()
 
     runner = BatchRunner(
         scraper=scraper,
         matcher=matcher,
         cv_pipeline=cv_pipeline,
         db_factory=sqlite_factory,
-        embedder=embedder,
+        fit_engine=fit_engine,
     )
 
     with patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock):
@@ -383,8 +379,7 @@ async def test_dry_run_returns_preview_and_writes_nothing(sqlite_factory):
 
     # No LLM / CV-generation calls
     assert cv_pipeline.calls == []
-    embedder.embed_cv_profile.assert_not_awaited()
-    embedder.embed_job_profile.assert_not_awaited()
+    fit_engine.assess.assert_not_called()
 
     # No DB writes: both tables empty
     async with sqlite_factory() as db:
@@ -475,51 +470,28 @@ async def test_normal_run_returns_none(tmp_path):
     assert result is None
 
 
-# ── Concurrency regression: Step 3.5 fit-assessment loop ────────────────────
+# ── Step 3.5: fit assessment on the gazetteer ───────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_fit_assessments_run_concurrently():
-    """PC-02: Per-match embed + FitEngine.assess must run concurrently.
-
-    With 5 matches and a 100ms-per-call embedder, the serial baseline is ~500ms;
-    with the semaphore-gated gather (CONCURRENCY_LLM=3) it should land near
-    ~200ms (two batches: ceil(5/3) * 100ms). We assert <350ms to stay
-    deterministic on slow CI while still failing if someone reverts to serial.
-    """
-    runner, _db, _cv_pipe = _make_runner(jobs=[_raw_job(url=f"https://x.com/{i}") for i in range(5)])
-
-    # Wire up the embedder + cv_profile so the fit-assessment branch engages.
-    fake_embedder = MagicMock()
-
-    async def slow_embed_job_profile(profile):
-        await asyncio.sleep(0.1)  # 100ms per call — what we want to parallelise
-        return profile
-
-    fake_embedder.embed_job_profile = AsyncMock(side_effect=slow_embed_job_profile)
-    fake_embedder.embed_cv_profile = AsyncMock(side_effect=lambda p: p)
-    runner._embedder = fake_embedder
-
-    # Stub extractor → JobProfile with ≥ MIN_JOB_SKILLS_FOR_FIT_ENGINE skills.
-    fake_job_profile = MagicMock()
-    fake_job_profile.skills = ["python", "fastapi", "docker"]  # 3 skills, above the threshold
-    runner._job_extractor = MagicMock()
-    runner._job_extractor.extract = MagicMock(return_value=fake_job_profile)
-
-    # Stub FitEngine.assess to return a minimal assessment quickly.
-    fake_assessment = MagicMock()
-    fake_assessment.severity = 0.4
-    fake_assessment.simulated_ats_score = 75.0
-    fake_assessment.should_modify = False
-    fake_assessment.covered_skills = ["python"]
-    fake_assessment.critical_gaps = []
-    fake_assessment.to_dict = MagicMock(return_value={"severity": 0.4})
-    runner._fit_engine = MagicMock()
-    runner._fit_engine.assess = MagicMock(return_value=fake_assessment)
-
-    # Pretend the CV parser produced a profile (it gets handed to embed_cv_profile).
-    runner._cv_parser = MagicMock()
-    runner._cv_parser.build_profile = MagicMock(return_value=MagicMock())
+async def test_fit_step_assesses_each_stored_match(tmp_path):
+    """Each stored match is assessed against the CV's gazetteer skills, with no LLM or
+    embedding call; a posting naming too few skills gets no assessment."""
+    jobs = [_raw_job(url=f"https://x.com/{i}") for i in range(3)]
+    runner, _db, _cv_pipe = _make_runner(jobs=jobs)
+    stored = [
+        StoredMatch(1, JobDetails(id=1, title="SWE", company="ACME",
+                                  description="Requirements:\n- Python and Docker")),
+        StoredMatch(2, JobDetails(id=2, title="SWE", company="ACME",
+                                  description="Requirements:\n- Java, Kubernetes and Terraform")),
+        StoredMatch(3, JobDetails(id=3, title="SWE", company="ACME",
+                                  description="A great place to work.")),
+    ]
+    cv_path = tmp_path / "base.tex"
+    cv_path.write_text(
+        "\\documentclass{article}\\begin{document}Python, Docker, SQL\\end{document}",
+        encoding="utf-8",
+    )
 
     with (
         patch.object(runner, "_load_settings", new_callable=AsyncMock) as mock_settings,
@@ -529,18 +501,17 @@ async def test_fit_assessments_run_concurrently():
             runner,
             "_store_matches",
             new_callable=AsyncMock,
-            return_value=_stored(1, 2, 3, 4, 5),
+            return_value=stored,
         ),
         patch.object(runner, "_store_tailored_doc", new_callable=AsyncMock),
         patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock),
-        patch("backend.scheduler.batch_runner.broadcast_job_assessment", new_callable=AsyncMock),
+        patch(
+            "backend.scheduler.batch_runner.broadcast_job_assessment", new_callable=AsyncMock
+        ) as broadcast,
         patch("backend.scheduler.batch_runner.DailyLimitGuard") as MockGuard,
         # match_row lookup → return None so we don't try to set attrs on a Mock
         patch("backend.scheduler.batch_runner.select"),
-        # Make the cv_path resolution succeed (the runner reads the file)
-        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=Path("/tmp/base.tex")),
-        patch("pathlib.Path.exists", return_value=True),
-        patch("pathlib.Path.read_text", return_value="\\documentclass{article}\\begin{document}cv\\end{document}"),
+        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=cv_path),
     ):
         settings_obj = MagicMock()
         settings_obj.keywords = ["python"]
@@ -575,15 +546,17 @@ async def test_fit_assessments_run_concurrently():
         db.close = AsyncMock()
         runner._db_factory = lambda: db
 
-        start = time.perf_counter()
         await runner.run_batch()
-        elapsed = time.perf_counter() - start
 
-    # 5 embeddings × 100ms serial = 500ms. With CONCURRENCY_LLM=3 we expect
-    # ~200ms. We assert <350ms to leave plenty of slack for slow CI machines
-    # while still catching a regression back to serial execution.
-    assert fake_embedder.embed_job_profile.await_count == 5
-    assert elapsed < 0.35, f"Expected concurrent execution under 350ms, took {elapsed:.3f}s"
+    frames = {c.kwargs["match_id"]: c.kwargs for c in broadcast.await_args_list}
+    assert set(frames) == {1, 2}  # match 3 names no skill
+    assert frames[1]["decision"] == "base_cv"
+    assert frames[1]["covered"] == ["docker", "python"] and frames[1]["gaps"] == []
+    assert frames[2]["decision"] == "modify"
+    assert [g["skill"] for g in frames[2]["gaps"]] == ["java", "terraform"]
+    assert frames[2]["covered"] == ["kubernetes"]  # same family as Docker
+    assert frames[1]["ats_score"] > frames[2]["ats_score"]
+    assert frames[2]["gap_severity"] == pytest.approx(1 - frames[2]["ats_score"] / 100, abs=1e-3)
 
 
 # ── W03 / F01: job identity survives the whole batch ────────────────────────

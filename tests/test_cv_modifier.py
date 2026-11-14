@@ -110,7 +110,7 @@ async def test_cv_modifier_from_assessment():
         covered_skills=["Python", "SQL"],
         partial_matches=[],
         critical_gaps=[
-            SkillGap(skill="Docker", criticality=0.9, best_cv_match="CI/CD", similarity=0.58),
+            SkillGap(skill="docker", criticality=0.9),
         ],
         preferred_gaps=[],
     )

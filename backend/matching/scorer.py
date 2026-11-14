@@ -221,7 +221,20 @@ def _reject_reason(job: JobDetails, filters: JobFilters) -> tuple[str | None, bo
     return (None, unverified) if passes else ("location", False)
 
 
-def _coverage(weights: dict[str, float], credit: dict[str, float]) -> float:
+def skill_credit(weights: dict[str, float], cv: frozenset[str], gaz: Gazetteer) -> dict[str, float]:
+    """Per posting skill: 1.0 on the CV, FAMILY_CREDIT for a same-family CV skill, else 0.0."""
+    return {
+        skill: 1.0
+        if skill in cv
+        else FAMILY_CREDIT
+        if any(gaz.related(skill, have) for have in cv)
+        else 0.0
+        for skill in weights
+    }
+
+
+def coverage(weights: dict[str, float], credit: dict[str, float]) -> float:
+    """Criticality-weighted share (0-1) of the posting's skills the CV covers."""
     def cov(skills: list[str]) -> float:
         total = sum(weights[s] for s in skills)
         return sum(weights[s] * credit[s] for s in skills) / (total + SHRINK)
@@ -250,14 +263,7 @@ def score_job(
     # Nothing to cover in the body: coverage is undefined, the title is all there is.
     provisional = not weights
     weights.update(dict.fromkeys(title_skills, REQUIRED))
-    credit = {
-        skill: 1.0
-        if skill in cv
-        else FAMILY_CREDIT
-        if any(gaz.related(skill, have) for have in cv)
-        else 0.0
-        for skill in weights
-    }
+    credit = skill_credit(weights, cv, gaz)
     covered = sorted(s for s, c in credit.items() if c == 1.0)
     partial = sorted(s for s, c in credit.items() if c == FAMILY_CREDIT)
     missing = sorted((s for s, c in credit.items() if c == 0.0), key=lambda s: (-weights[s], s))
@@ -283,7 +289,7 @@ def score_job(
             factor = TITLE_MATCH
         else:
             factor = TITLE_NEUTRAL
-        score = 100 * _coverage(weights, credit) * ((1 - TITLE_WEIGHT) + TITLE_WEIGHT * factor)
+        score = 100 * coverage(weights, credit) * ((1 - TITLE_WEIGHT) + TITLE_WEIGHT * factor)
     return ScoreResult(
         round(score, 2), True, None, covered, partial, missing, provisional, unverified
     )

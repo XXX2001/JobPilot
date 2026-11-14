@@ -7,10 +7,11 @@ Files in this module:
 | File | Brief |
 |---|---|
 | `backend/matching/matcher.py` | `JobMatcher` — weighted multi-factor job relevance scoring |
-| `backend/matching/fit_engine.py` | `FitEngine` — embedding-based skill-gap assessment |
-| `backend/matching/cv_parser.py` | `CVParser` — LaTeX CV skill extraction with context weights |
-| `backend/matching/embedder.py` | `Embedder` — populates `SkillEntry.embedding` vectors |
-| `backend/matching/skill_patterns.py` | `TECH_PATTERN` — compiled regex for tech skill extraction |
+| `backend/matching/fit_engine.py` | `FitEngine` — gazetteer-coverage skill-gap assessment |
+| `backend/matching/cv_parser.py` | `CVParser` — the gazetteer skills of a LaTeX CV, with context weights |
+| `backend/matching/gazetteer.py` | `Gazetteer` — curated skill list (`data/skills.txt`), word-boundary extraction |
+| `backend/matching/job_skills.py` | `extract_job_skills` — a posting's skills with a criticality each |
+| `backend/matching/scorer.py` | `score_job` — hard filters, coverage, title factor |
 | `backend/matching/filters.py` | `JobFilters` dataclass for search parameter passing |
 
 ---
@@ -56,50 +57,47 @@ Matched jobs are inserted as `JobMatch` rows with `status="new"`. Existing match
 
 **File:** `backend/matching/fit_engine.py`
 
-Performs a deeper, embedding-based assessment of how well the user's CV matches a specific job's requirements. Used inside `CVPipeline` to decide whether to tailor the CV and to guide the `CVModifier`.
+Decides whether a job warrants a tailored CV, from the gazetteer coverage of the posting's skills by the CV. No embeddings, no LLM. Called by `BatchRunner._assess_one`; the result guides `CVModifier.modify_from_assessment`.
 
-### Flow
+```python
+FitEngine().assess(job_skills, cv_profile, gaz, sensitivity="balanced") -> FitAssessment
+```
 
-1. Parse the user's CV into `SkillEntry` list via `CVParser.build_profile()`.
-2. Embed all skill texts in batch via the embedding client's `embed()` (using `text-embedding-3-small`).
-3. Embed the job's `required_skills` and `nice_to_have_skills` from `JobContext`.
-4. Compute cosine similarity between each job requirement and all CV skills.
-5. For each requirement, take the max cosine similarity across all CV skills.
-6. Compute `ats_score` as the weighted average (required skills weight more than nice-to-have).
+`job_skills` is `extract_job_skills(title, description, gaz)` (`job_skills.py`): canonical skill → criticality. Details in [matching.md](../matching.md).
 
 ### Sensitivity Modes
 
-`SearchSettings.cv_modification_sensitivity` maps to thresholds:
+`SearchSettings.cv_modification_sensitivity` maps to a gap-severity threshold; the CV is modified when `severity >= threshold`:
 
-| Mode | Apply threshold | Description |
-|---|---|---|
-| `conservative` | 0.75 | Only apply when there is a strong fit signal |
-| `balanced` | 0.60 | Default; apply when fit is reasonable |
-| `aggressive` | 0.45 | Apply even on weaker signals |
+| Mode | Threshold |
+|---|---|
+| `conservative` | 0.3 |
+| `balanced` | 0.5 |
+| `aggressive` | 0.7 |
 
 ### `FitAssessment`
 
 ```python
 @dataclass
 class FitAssessment:
-    ats_score: float          # 0–100 compatibility score
-    gap_severity: float       # 0.0–1.0; higher means more missing skills
-    gaps: list[SkillGap]      # per-requirement gap analysis
-    covered: list[str]        # requirement strings the CV already covers
-    decision: str             # "apply" | "skip" | "apply_with_tailoring"
+    severity: float               # 1 - coverage
+    should_modify: bool
+    simulated_ats_score: float    # 100 * coverage
+    covered_skills: list[str]     # on the CV, then same-family
+    partial_matches: list[str]    # the same-family ones
+    critical_gaps: list[SkillGap]
+    preferred_gaps: list[SkillGap]  # nice-to-have only
 ```
 
-`FitAssessment.to_dict()` serialises to a JSON-compatible dict stored in `JobMatch.fit_assessment_json` and `TailoredDocument.fit_assessment_json`.
+`FitAssessment.to_dict()` serialises to a JSON-compatible dict stored in `JobMatch.fit_assessment_json`.
 
 ### `SkillGap`
 
 ```python
 @dataclass
 class SkillGap:
-    requirement: str    # the job requirement text
-    best_match: str     # closest CV skill found
-    similarity: float   # cosine similarity score [0, 1]
-    severity: float     # 1 - similarity; how significant the gap is
+    skill: str          # canonical gazetteer name, never posting text
+    criticality: float  # 1.0 required, 0.6 neutral, 0.4 blurb, 0.3 nice-to-have
 ```
 
 ---
@@ -108,74 +106,29 @@ class SkillGap:
 
 **File:** `backend/matching/cv_parser.py`
 
-Extracts skills from a LaTeX CV source string with context-based weighting. Produces a `CVProfile` used by `FitEngine` and `Embedder`.
+Lists the gazetteer skills a LaTeX CV names, each once, tagged with the strongest context naming it. Produces the `CVProfile` used by `FitEngine`.
 
 ### Context Weights
 
 ```python
 CONTEXT_WEIGHTS = {
-    "experience_recent": 1.0,   # from most recent / current role bullets
-    "skills_section":    0.6,   # from the Skills or Technical Skills section
-    "profile":           0.5,   # from the Profile / Summary section
-    "experience_older":  0.4,   # from older role bullets
+    "experience_recent": 1.0,   # first role of the experience section
+    "skills_section":    0.6,   # any other text (skills table, unknown template)
+    "profile":           0.5,   # Profile / Summary section
+    "experience_older":  0.4,   # later roles
 }
 ```
 
-These weights mirror the signal strength used by real Applicant Tracking Systems (ATS).
-
-### Three-Pass Extraction
-
-1. **Profile section:** Scans for `\begin{rSection}{Profile}` (and equivalent names). Checks for multi-word skills first, then runs `TECH_PATTERN` across the section text.
-2. **Skills section:** Tries `\cvskill{}{skills}` pattern first, then falls back to table-row pattern (`& skill1, skill2 \\`).
-3. **Experience section:** Detects role headers with `_ROLE_RE` to distinguish recent (first / "Present") from older roles. Extracts skill mentions from `\item` bullets in each role.
-
-### Fallback
-
-If fewer than 3 skills are extracted via the section passes, a full-text scan is performed using `TECH_PATTERN` and `_MULTI_WORD_SKILLS`. All fallback skills receive `skills_section` context weight.
-
-### `build_profile(cv_tex)`
+### `build_profile(cv_tex, gaz)`
 
 Calls `parse()` and wraps the result in a `CVProfile`:
 
 ```python
 @dataclass
 class CVProfile:
-    skills: list[SkillEntry]
-    raw_text_hash: str  # SHA-256 of the original LaTeX source (for cache invalidation)
+    skills: list[SkillEntry]   # SkillEntry(text, context, weight)
+    raw_text_hash: str         # SHA-256 of the original LaTeX source
 ```
-
----
-
-## Embedder
-
-**File:** `backend/matching/embedder.py`
-
-Post-processes a `CVProfile` by populating the `embedding` field of each `SkillEntry`. Called lazily by `FitEngine` before cosine-similarity computation.
-
-```python
-async def embed_profile(profile: CVProfile, embedding_client: EmbeddingClient) -> CVProfile:
-    texts = [s.text for s in profile.skills]
-    vectors = await embedding_client.embed(texts)
-    for skill, vector in zip(profile.skills, vectors):
-        skill.embedding = vector
-    return profile
-```
-
----
-
-## skill_patterns.py
-
-**File:** `backend/matching/skill_patterns.py`
-
-Defines `TECH_PATTERN`: a compiled regex that matches technology skill mentions in plain or LaTeX text. The pattern covers:
-
-- Exact-match keywords (Python, Go, Rust, Java, etc.)
-- Framework/library names (FastAPI, React, PyTorch, etc.)
-- Cloud and DevOps terms (AWS, GCP, Docker, Kubernetes, etc.)
-- Database names (PostgreSQL, MongoDB, Redis, etc.)
-- Methodology terms (Agile, Scrum, CI/CD, etc.)
-
-The pattern uses word boundaries (`\b`) and case-insensitive matching. It returns `match.group(1)` for the extracted skill text.
 
 ---
 

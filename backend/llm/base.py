@@ -42,16 +42,3 @@ class LLMClient(Protocol):
     ) -> str: ...
 
     async def generate_json(self, prompt: str, schema: Type[T]) -> T: ...
-
-
-@runtime_checkable
-class EmbeddingClient(Protocol):
-    """Embedding contract implemented by embedding-capable adapters."""
-
-    @property
-    def model_id(self) -> str: ...
-
-    @property
-    def dimension(self) -> int: ...
-
-    async def embed(self, texts: list[str]) -> list[list[float]]: ...

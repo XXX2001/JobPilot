@@ -51,7 +51,6 @@ os.environ["JOBPILOT_DATA_DIR"] = _TEST_DATA_DIR
 # on fresh checkouts / CI machines that don't have a real ``.env``.
 os.environ.setdefault("JOBPILOT_ALLOWED_HOSTS", "testserver")  # TestClient Host header (W07)
 os.environ.setdefault("LLM_API_KEY", "test-key-not-real")
-os.environ.setdefault("EMBEDDING_API_KEY", "test-key-not-real")
 os.environ.setdefault("BROWSER_LLM_API_KEY", "test-key-not-real")
 os.environ.setdefault("ADZUNA_APP_ID", "test-adzuna-id")
 os.environ.setdefault("ADZUNA_APP_KEY", "test-adzuna-key")
@@ -164,7 +163,6 @@ def test_settings(monkeypatch):
         sys.path.insert(0, os.getcwd())
 
     monkeypatch.setenv("LLM_API_KEY", "test-key-not-real")
-    monkeypatch.setenv("EMBEDDING_API_KEY", "test-key-not-real")
     monkeypatch.setenv("BROWSER_LLM_API_KEY", "test-key-not-real")
     monkeypatch.setenv("ADZUNA_APP_ID", "test-adzuna-id")
     monkeypatch.setenv("ADZUNA_APP_KEY", "test-adzuna-key")

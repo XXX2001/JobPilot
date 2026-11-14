@@ -1,15 +1,15 @@
 # Matching & fit scoring
 
-How JobPilot turns a scraped job + your CV into a numeric fit score, using regex skill extraction, provider-agnostic embeddings, and weighted cosine-similarity gap analysis.
+How JobPilot turns a scraped job + your CV into a numeric fit score, using a curated skill gazetteer and criticality-weighted coverage. No embeddings, no LLM, no network.
 
 The `backend/matching/` package contains two distinct scoring layers:
 
 | Layer | Entry point | Inputs | Output | Used for |
 | --- | --- | --- | --- |
 | **Relevance ranking** | `JobMatcher.score` (`backend/matching/matcher.py:17`) | `JobDetails` + `JobFilters` | `0–100` heuristic score | Filtering/ranking scraped jobs before deeper analysis |
-| **Fit / gap analysis** | `FitEngine.assess` (`backend/matching/fit_engine.py:82`) | `JobProfile` + `CVProfile` | `FitAssessment` (severity, ATS score, gaps) | Deciding whether to tailor the CV per job |
+| **Fit / gap analysis** | `FitEngine.assess` (`backend/matching/fit_engine.py:82`) | posting skills + `CVProfile` | `FitAssessment` (severity, ATS score, gaps) | Deciding whether to tailor the CV per job |
 
-The relevance layer is cheap string matching; the fit layer is semantic and requires embeddings. Both are orchestrated by the scheduler (`backend/scheduler/batch_runner.py`).
+Both layers read skills through the same gazetteer and are orchestrated by the scheduler (`backend/scheduler/batch_runner.py`).
 
 ---
 
@@ -29,113 +29,60 @@ The relevance layer is cheap string matching; the fit layer is semantic and requ
 
 `JobFilters` (`backend/matching/filters.py:9`) is a plain dataclass holding `keywords`, `excluded_keywords`, `locations`, `salary_min`, `experience_range`, `remote_only`, `excluded_companies`, etc.
 
-> Note: these helpers are heuristic. `_experience_match` regex-scrapes `"5+ years"` mentions from the description; `_location_match` does substring checks. No embeddings are involved here.
+> Note: these helpers are heuristic. `_experience_match` regex-scrapes `"5+ years"` mentions from the description; `_location_match` does substring checks.
 
 ---
 
 ## 2. CV parsing → `CVProfile` (`cv_parser.py`)
 
-`CVParser.build_profile` (`backend/matching/cv_parser.py:116`) takes raw LaTeX CV source and returns a `CVProfile` (line 72), which is a list of `SkillEntry` plus a `raw_text_hash` (SHA-256 of the source, used for caching).
+`CVParser.build_profile(cv_tex, gaz)` takes the raw LaTeX CV source and a `Gazetteer` and returns a `CVProfile`: a list of `SkillEntry` plus a `raw_text_hash` (SHA-256 of the source).
 
-`parse` (line 81) splits the LaTeX into sections via `_SECTION_RE` and extracts skills from three context buckets, each tagged with an ATS-style **context weight** (`CONTEXT_WEIGHTS`, line 15):
+The skills are exactly `Gazetteer.skills(cv_tex)` — canonical names from the curated list (`backend/matching/data/skills.txt`) and the owner's search keywords — each listed once. `parse` also tags every skill with the strongest context that names it (`CONTEXT_WEIGHTS`):
 
 | Context | Weight | Source |
 | --- | --- | --- |
-| `experience_recent` | 1.0 | First role / role marked "Present" |
-| `skills_section` | 0.6 | `\cvskill{}{}` or table rows |
+| `experience_recent` | 1.0 | First role of the experience section |
+| `skills_section` | 0.6 | Any other text (skills table, education, unknown template) |
 | `profile` | 0.5 | Profile/Summary section |
-| `experience_older` | 0.4 | Earlier roles |
+| `experience_older` | 0.4 | Later roles, or an experience section with no role header |
 
-Each `SkillEntry` (line 64) carries `text`, `context`, `weight`, and an initially empty `embedding`. Extraction uses `TECH_PATTERN` (from `skill_patterns.py`) plus a hardcoded `_MULTI_WORD_SKILLS` set ("machine learning", "ci/cd", …) and a `_STOP_WORDS` filter. If fewer than 3 skills are found, `parse` logs a warning and falls back to `_fallback_extract` (line 211), a full-text scan.
-
----
-
-## 3. Job parsing → `JobProfile` (`job_skill_extractor.py`)
-
-`JobSkillExtractor.extract` (`backend/matching/job_skill_extractor.py:55`) turns a job description string into a `JobProfile` (line 46): a list of `JobSkill` plus `knockout_filters`.
-
-The pipeline:
-
-1. **Knockouts** — `KNOCKOUT_PATTERN` (`skill_patterns.py:55`) captures hard requirements like `"5+ years experience"` or `"PhD in"`.
-2. **Section split** — `_split_sections` (line 76) detects headers and classifies each block as `required` / `preferred` / `neutral` via `classify_section` (`skill_patterns.py:61`).
-3. **Per-block extraction** — `_extract_from_block` (line 99) assigns a base **criticality** from the section type (`required`=1.0, `preferred`=0.5, `neutral`=0.3), then raises it per-line if a linguistic modifier is present (`extract_linguistic_modifier`: "must/essential" → 1.0, "bonus/nice to have" → 0.3). Skills are pulled from `SKILL_PHRASE_PATTERNS` ("experience with X") and `TECH_PATTERN`, de-duplicated via a `seen` set and validated by `_is_valid_skill` (line 141).
-
-Each `JobSkill` (line 38) holds `text`, `criticality` (the weight that matters for scoring), `section`, and an empty `embedding`.
+The context is informational: coverage only asks whether the CV names a skill.
 
 ---
 
-## 4. Embedding both profiles (`embedder.py`)
+## 3. Posting skills (`job_skills.py`)
 
-`Embedder` (`backend/matching/embedder.py:13`) is a thin wrapper over **any** object implementing the `EmbeddingClient` protocol (`backend/llm/base.py:48`). It does not know or care which provider is behind it.
-
-- `embed_cv_profile` (line 19) and `embed_job_profile` (line 39) collect skills whose `embedding` is still empty, send their `text` values as one batch to `client.embed(texts)`, and write the returned vectors back onto each `SkillEntry`/`JobSkill` in order (`zip`). Skills that already have an embedding are skipped — so a `CVProfile` is embedded once and reused across many jobs in a run.
-
-The concrete client comes from `make_embedding_client()` (`backend/llm/factory.py:25`), selected by the `EMBEDDING_PROVIDER` setting.
-
-### Provider choice determines vector dimension
-
-The `EmbeddingClient` protocol exposes a `dimension` property (`backend/llm/base.py:55`). Each provider returns a different fixed size:
-
-| `EMBEDDING_PROVIDER` | Model | `dimension` | Source |
-| --- | --- | --- | --- |
-| `openai` (default) | `text-embedding-3-small` | **1536** | `openai_compat.py:19,87` |
-| `openai` | `text-embedding-3-large` | **3072** | `openai_compat.py:19` |
-| `anthropic` | — | n/a (rejected) | `factory.py:35` |
-
-Anthropic has no embeddings API, so `make_embedding_client()` raises `ValueError` for `EMBEDDING_PROVIDER=anthropic`.
-
-**Critical consequence:** the CV profile and the job profile **must be embedded by the same provider**. A 768-dim CV vector and a 1536-dim job vector cannot be compared — see the dimension guard below. Switching providers mid-stream (or comparing cached vectors from an old provider) silently produces zero similarity rather than crashing.
+`extract_job_skills(title, description, gaz)` returns `{canonical skill: criticality}`, the strongest non-negated mention winning: required `1.0`, neutral `0.6`, company/stack blurb `0.4`, nice-to-have `0.3`. A skill named in the title is required. Free text never becomes a skill, so nothing a posting writes can reach the CV-tailoring prompt as a "gap".
 
 ---
 
-## 5. Fit scoring (`fit_engine.py`)
+## 4. Fit scoring (`fit_engine.py`)
 
-### `cosine_similarity` and the dimension guard
+`FitEngine.assess(job_skills, cv_profile, gaz, sensitivity)` returns a `FitAssessment`. No embeddings, no LLM, no network.
 
-`cosine_similarity(a, b)` (`backend/matching/fit_engine.py:67`) is a pure-Python cosine. Its first line is the **dimension guard**:
-
-```python
-if len(a) != len(b) or not a:
-    return 0.0
-```
-
-Mismatched-length vectors (e.g. a 768-dim CV vs a 1536-dim OpenAI job from different providers, or an un-embedded empty list) return `0.0` instead of raising. Zero-norm vectors also short-circuit to `0.0`. This makes provider mismatches fail safe (everything looks like a gap) rather than throwing.
-
-### `FitEngine.assess`
-
-`assess` (line 82) compares every `JobSkill` against the whole `CVProfile` and returns a `FitAssessment` (line 36). For each job skill it calls `_best_match` (line 147):
-
-1. Compute `cosine_similarity` against every CV skill's embedding; keep the highest (ties broken by the CV skill's context `weight`).
-2. Convert raw similarity to a **coverage** score using thresholds from `backend/defaults.py`:
-   - `sim >= SIMILARITY_FULL_MATCH` (0.82) → coverage `1.0` (full)
-   - `sim >= SIMILARITY_PARTIAL_MATCH` (0.60) → coverage `0.5 + 0.5 * weight` (partial, scaled by CV context weight)
-   - otherwise → coverage `0.0` (gap)
-
-Per skill, `gap = 1.0 - coverage`, accumulated as `weighted_gaps += gap * job_skill.criticality`. The final **severity** is `weighted_gaps / total_weight` (criticality-weighted average gap), so missing a `required` skill (criticality 1.0) hurts far more than a `neutral` one (0.3).
+Each posting skill gets a credit: `1.0` when the CV names it, `0.5` when the CV names a skill of the same `@family` (Django for FastAPI), else `0.0` (`scorer.skill_credit`). **Coverage** is the criticality-weighted share of credited skills, required skills counting for 65% (`scorer.coverage`) — the same number the match score is built on.
 
 Outputs on `FitAssessment`:
 
-- `severity` — 0 (perfect) to 1 (everything missing).
-- `simulated_ats_score = (1.0 - severity) * 100`.
-- `should_modify = severity >= threshold`, where the threshold comes from the `sensitivity` arg via `THRESHOLDS` (line 21): `conservative`=0.3, `balanced`=0.5 (default), `aggressive`=0.7 (`backend/defaults.py:24-26`). Lower threshold = more eager to rewrite the CV.
-- `covered_skills`, `partial_matches`, and `critical_gaps` / `preferred_gaps` (lists of `SkillGap`, split by the job skill's `section` and sorted by criticality).
+- `simulated_ats_score = 100 * coverage`.
+- `severity = 1 - coverage` — 0 (everything covered) to 1 (everything missing).
+- `should_modify = severity >= threshold`, the threshold coming from `sensitivity` via `THRESHOLDS`: `conservative`=0.3, `balanced`=0.5 (default), `aggressive`=0.7 (`backend/defaults.py`). Lower threshold = more eager to rewrite the CV.
+- `covered_skills` — skills on the CV, then the same-family ones; `partial_matches` — the same-family ones alone.
+- `critical_gaps` / `preferred_gaps` — lists of `SkillGap(skill, criticality)` for skills with no credit, sorted by criticality; a nice-to-have (`0.3`) gap is "preferred", anything above is "critical".
 
-An empty `JobProfile` (no skills) short-circuits to a perfect score (`severity=0.0`, `ats_score=100.0`). `FitAssessment.to_dict` (line 46) serializes the result for JSON storage in the DB.
+A posting with no recognised skill gives `simulated_ats_score=0`, `should_modify=False` (nothing to close, and no evidence of a fit). `FitAssessment.to_dict` serializes the result for JSON storage in the DB.
 
 ---
 
-## 6. End-to-end: how a job gets a fit score
+## 5. End-to-end: how a job gets a fit score
 
-Orchestration lives in `backend/scheduler/batch_runner.py`:
+Orchestration lives in `backend/scheduler/batch_runner.py` (step 3.5 of the batch):
 
-1. **CV side (once per run)** — `CVParser.build_profile` parses the LaTeX CV, then `Embedder.embed_cv_profile` embeds it (`batch_runner.py:262-263`). The hash on `CVProfile` enables caching.
-2. **Job side (per match, concurrently)** — `_assess_one` (`batch_runner.py:429`) runs:
-   - `JobSkillExtractor.extract(jd.description)` → `JobProfile`.
-   - If `len(skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE` (2, `defaults.py:30`), it returns `None` (too little signal; caller records a fallback).
-   - Otherwise `Embedder.embed_job_profile` embeds the job skills, then `FitEngine.assess(job_profile, cv_profile, sensitivity)` produces the `FitAssessment`.
-3. **Concurrency** — assessments run under an `asyncio.Semaphore(CONCURRENCY_LLM)` (`batch_runner.py:279`, default 3). DB writes and WebSocket broadcasts happen sequentially *after* the `gather`, because the `AsyncSession` is not concurrency-safe.
+1. **CV side (once per run)** — `Gazetteer.load(keywords)` then `CVParser.build_profile` on the base CV. Skipped when no base CV exists.
+2. **Job side (per stored match)** — `_assess_one` runs `extract_job_skills(title, description)`. With fewer than `MIN_JOB_SKILLS_FOR_FIT_ENGINE` (2) skills it returns `None` (too little signal; the job is tailored through the original LLM pipeline). Otherwise `FitEngine.assess` produces the `FitAssessment`.
+3. The assessment is stored on the `JobMatch` (`ats_score`, `gap_severity`, `fit_assessment_json`) and broadcast as a `job_progress` WebSocket frame. The whole step is synchronous CPU work of a few milliseconds per job.
 
-So the relevance score (`JobMatcher`) gates *which* jobs proceed, and the fit score (`FitEngine`) decides *whether each surviving job warrants a tailored CV*.
+So the match score (`JobMatcher`) gates *which* jobs proceed, and the fit assessment (`FitEngine`) decides *whether each surviving job warrants a tailored CV*.
 
 ---
 

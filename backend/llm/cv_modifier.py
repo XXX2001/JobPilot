@@ -84,16 +84,11 @@ class CVModifier:
             logger.warning("CV body exceeds 50KB (%d chars), truncating", len(body))
             body = body[:50_000]
 
-        # Build gaps section
-        gaps_lines = []
-        for i, gap in enumerate(assessment.critical_gaps[:5], 1):
-            match_info = (
-                f"closest CV skill: \"{gap.best_cv_match}\" (similarity: {gap.similarity:.2f})"
-                if gap.best_cv_match else "no match on CV"
-            )
-            gaps_lines.append(
-                f"{i}. \"{gap.skill}\" (criticality: {gap.criticality:.1f}) — {match_info}"
-            )
+        # Build gaps section. A gap is a canonical gazetteer name, never posting text.
+        gaps_lines = [
+            f"{i}. \"{gap.skill}\" (criticality: {gap.criticality:.1f})"
+            for i, gap in enumerate(assessment.critical_gaps[:5], 1)
+        ]
         gaps_section = "\n".join(gaps_lines) if gaps_lines else "No critical gaps identified."
 
         # Build covered section

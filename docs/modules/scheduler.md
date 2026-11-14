@@ -60,7 +60,6 @@ class BatchRunner:
         matcher: JobMatcher,
         cv_pipeline: CVPipeline,
         db_factory: Callable[[], AsyncSession],
-        embedder: Embedder | None = None,
         fit_engine: FitEngine | None = None,
     ) -> None
 ```
@@ -73,8 +72,7 @@ class BatchRunner:
 | `matcher` | `JobMatcher` | Scores `JobDetails` objects against `JobFilters`. |
 | `cv_pipeline` | `CVPipeline` | Generates tailored LaTeX/PDF CVs. |
 | `db_factory` | `Callable[[], AsyncSession]` | Factory that returns a new async DB session per call. In production this is `AsyncSessionLocal` from `backend.database`. |
-| `embedder` | `Embedder \| None` | Optional embedder backed by the configured LLM provider; populated in production wiring (`backend.main.lifespan`). When present, enables the fit-assessment skill-gap path. |
-| `fit_engine` | `FitEngine \| None` | Optional skill-gap fit engine; paired with `embedder`. When present, `_assess_one` runs cosine-similarity-based gap assessment for each ranked match. |
+| `fit_engine` | `FitEngine \| None` | Skill-gap fit engine (defaults to `FitEngine()`). `_assess_one` runs the gazetteer-coverage gap assessment for each stored match; no model call. |
 
 ---
 
@@ -94,7 +92,7 @@ Public entry point for the full pipeline. Opens a DB session via `db_factory`, d
 |--------|-----------|-------------|
 | `_broadcast_and_track` | `(message: str, progress: float) -> None` *(async)* | Constructs a `Status(message=, progress=)` model, broadcasts via `manager.broadcast`, and updates `self.last_status`. |
 | `_run_batch_inner` | `(db: AsyncSession) -> None` *(async)* | Executes all six pipeline steps. |
-| `_assess_one` | `(db, match_id, jd) -> tuple[int, FitAssessment \| None]` *(async)* | Runs the fit-assessment for a single match; returns `(match_id, FitAssessment)` or `(match_id, None)` when fit-engine is disabled or job has no description. Designed to be `asyncio.gather`-ed under a semaphore. |
+| `_assess_one` | `(jd, cv_profile, gaz, sensitivity) -> FitAssessment \| None` | Fit assessment of a single match from gazetteer coverage (pure CPU, no LLM); `None` when the posting names fewer than `MIN_JOB_SKILLS_FOR_FIT_ENGINE` skills. |
 | `_load_settings` | `(db: AsyncSession) -> SearchSettings` *(async)* | Fetches the first `SearchSettings` row; returns safe defaults if none exists. |
 | `_load_profile` | `(db: AsyncSession) -> UserProfile \| None` *(async)* | Fetches the first `UserProfile` row. |
 | `_load_sources` | `(db: AsyncSession) -> list[JobSource]` *(async)* | Fetches all `JobSource` rows where `enabled = True`. |
@@ -138,10 +136,10 @@ Step 3 — STORE MATCHES
 
         │
         ▼
-Step 4 — FIT ASSESS  (only when embedder + fit_engine are wired)
-  Embedder.embed_cv_profile(cv_profile) — one batched call
-  For each (match_id, JobDetails) — up to CONCURRENCY_LLM concurrently:
-    _assess_one() → FitAssessment | None
+Step 4 — FIT ASSESS  (only when a base CV exists; no LLM, no network)
+  CVParser.build_profile(cv_tex, gazetteer) — the CV's gazetteer skills
+  For each (match_id, JobDetails):
+    _assess_one() → FitAssessment | None   (None: fewer than 2 skills in the posting)
   Persist ats_score / gap_severity / fit_assessment_json on JobMatch rows
   Broadcast per-job assessment via WebSocket (job_progress payload)
                                                 [WebSocket: 60% progress]

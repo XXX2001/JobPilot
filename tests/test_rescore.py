@@ -135,7 +135,7 @@ async def test_rescore_updates_the_provisional_and_location_flags():
         await rescore_all(db, matcher, JobFilters(keywords=["robotics"], locations=["France"]))
         await db.commit()
         await db.refresh(match)
-        assert (match.score, match.provisional, match.location_unverified) == (70.0, True, True)
+        assert (match.score, match.provisional, match.location_unverified) == (50.0, True, True)
         job.description, job.location = POSTING, "Paris"
         await rescore_all(db, matcher, JobFilters(keywords=["robotics"]), force=True)
         await db.commit()

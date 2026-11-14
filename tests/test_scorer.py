@@ -379,7 +379,7 @@ def test_one_skill_posting_is_scored_on_its_title(g):
     wanted = score_job(
         job(title="Python Developer", description=description), cv, filters(keywords=["python"]), g
     )
-    assert wanted.provisional and wanted.score == 70
+    assert wanted.provisional and wanted.score == 50
     assert wanted.covered == ["python"] and wanted.missing == []
     unrelated = score_job(
         job(title="Chief of Staff to the CMO", description=description), cv, filters(), g
@@ -401,9 +401,9 @@ def test_posting_without_any_known_skill_falls_back_to_the_title(g, cv):
     # Same score as the description-less card: a body that names no skill says nothing.
     f = filters(keywords=["robotics"])
     wanted = score_job(job(title="Robotics Engineer", description=description), cv, f, g)
-    assert wanted.provisional and wanted.score == 70
+    assert wanted.provisional and wanted.score == 50
     by_skill = score_job(job(title="Python Developer", description=description), cv, f, g)
-    assert by_skill.provisional and by_skill.score == 45 and by_skill.covered == ["python"]
+    assert by_skill.provisional and by_skill.score == 40 and by_skill.covered == ["python"]
     # A body that names two skills is a real, scored posting.
     body = score_job(
         job(title="Python Developer", description=description + " Python, Docker."), cv, f, g
@@ -489,13 +489,13 @@ def test_description_less_card_gets_provisional_title_score(g, cv):  # Review Fo
     r = score_job(
         job(title="Robotics Engineer", description=""), cv, filters(keywords=["robotics"]), g
     )
-    assert r.provisional and r.score == 70
+    assert r.provisional and r.score == 50
 
 
 def test_keyword_named_in_the_title_by_an_alias_counts(g, cv):  # Review Focus 1
     f = filters(keywords=["robotics"])
     card = score_job(job(title="Ingénieur Robotique", description=""), cv, f, g)
-    assert card.provisional and card.score == 70
+    assert card.provisional and card.score == 50
     # The described posting gets the full title factor too.
     described = score_job(job(title="Ingénieur Robotique"), cv, f, g)
     literal = score_job(job(title="Robotics Engineer"), cv, f, g)
@@ -505,7 +505,7 @@ def test_keyword_named_in_the_title_by_an_alias_counts(g, cv):  # Review Focus 1
 def test_provisional_score_tiers(g, cv):
     f = filters(keywords=["robotics"])
     only_cv_skill = score_job(job(title="Python Developer", description="  "), cv, f, g)
-    assert only_cv_skill.provisional and only_cv_skill.score == 45
+    assert only_cv_skill.provisional and only_cv_skill.score == 40
     assert only_cv_skill.covered == ["python"]
     neither = score_job(job(title="Office Manager", description="Apply now"), cv, f, g)
     assert neither.provisional and neither.score == 0 and neither.passed_filters

@@ -36,8 +36,8 @@ PROVISIONAL_MIN_CHARS = 80  # a shorter description is a card, not a posting
 PROVISIONAL_MIN_SKILLS = 2
 # Bump when a scoring rule or the location data changes: stored scores go stale.
 SCORER_VERSION = 2
-PROVISIONAL_KEYWORD_SCORE = 70.0
-PROVISIONAL_CV_SKILL_SCORE = 45.0
+PROVISIONAL_KEYWORD_SCORE = 50.0
+PROVISIONAL_CV_SKILL_SCORE = 40.0
 
 # Both run on accent-folded, lowercased text.
 _NON_TECHNICAL = re.compile(

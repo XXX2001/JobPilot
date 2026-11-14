@@ -46,7 +46,7 @@ A town neither table knows ("Massy", "Remote") cannot be placed: it passes with 
 
 **Without a CV** the skills named by the search keywords stand in for it, and only those are scored: the score is how strongly the posting asks for the owner's terms, and the posting's other skills are not missing ones.
 
-**Provisional score.** A posting with no description (LinkedIn and SmartRecruiters cards, under 80 characters) or whose description names fewer than two known skills has no coverage worth computing: one incidental "Python" would be 67% coverage. It is scored on the title alone and flagged `provisional`: `70` with a search keyword in the title, `45` with a CV skill in the title, else `0`. The flag is stored on the match (`job_matches.provisional`); the queue lists provisional matches after described ones and the notification title says "title only".
+**Provisional score.** A posting with no description (LinkedIn and SmartRecruiters cards, under 80 characters) or whose description names fewer than two known skills has no coverage worth computing: one incidental "Python" would be 67% coverage. It is scored on the title alone and flagged `provisional`: `50` with a search keyword in the title, `40` with a CV skill in the title, else `0`. The flag is stored on the match (`job_matches.provisional`); the queue lists provisional matches after described ones and the notification title says "title only".
 
 `ScoreResult` also carries `covered`, `partial` (same-family credit) and `missing` (sorted by criticality). `JobMatch.keyword_hits` stores `covered + partial`.
 
@@ -197,7 +197,7 @@ What the first run (before the review fixes) showed, and what was done about it:
 
 Still open:
 
-- **Provisional cards at a flat 70 score above every described posting but one.** The score is unchanged; the match records `provisional`, the queue lists provisional matches after described ones, and the notification says "title only". 7 of the 14 name a title skill the CV does not have ("Software Engineer C++").
+- **Provisional cards scored a flat 70 in this run, above every described posting but one.** Since lowered to 50 (40 for a title skill); the match records `provisional`, the queue lists provisional matches after described ones, and the notification says "title only". 7 of the 14 name a title skill the CV does not have ("Software Engineer C++").
 - **Management and intern titles are not down-weighted**, and "Data Analyst" or "Legal Tech Backend Engineer" are treated as non-technical. Only the non-technical title list changes `T`.
 - **A bare two-letter code is ambiguous.** US states and Canadian provinces are handled ("Denver, CO" is the United States or Colombia); Indian and Australian state codes are not.
 

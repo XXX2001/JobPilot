@@ -362,7 +362,7 @@ async def test_match_new_scores_description_less_card_provisionally():
         )
         (match,) = await match_new(db, [hit, miss], filters, 30)
         assert match.job_id == hit.id
-        assert match.score == 70
+        assert match.score == 50
         assert match.keyword_hits == {"python": True, "robotics": True, "software engineer": True}
 
 

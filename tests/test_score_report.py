@@ -60,6 +60,6 @@ def test_report_ranks_jobs_and_leaves_the_database_untouched(tmp_path):
     assert "at or above min score 30: 2 (50.0%)" in report
     top = report.split("top 2:")[1].split("random mid-ranked")[0]
     assert top.index("Python Backend Engineer") < top.index("Python Engineer")
-    assert "70.00 provisional | Python Engineer" in top
+    assert "50.00 provisional | Python Engineer" in top
     assert "covered: postgresql, python" in top
     assert "Java Developer" not in top and "Berlin" not in report

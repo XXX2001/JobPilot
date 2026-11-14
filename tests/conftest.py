@@ -49,6 +49,7 @@ os.environ["JOBPILOT_DATA_DIR"] = _TEST_DATA_DIR
 # The developer's .env may switch the monitor on: tests never poll or push for real.
 os.environ["MONITOR_ENABLED"] = "false"
 os.environ["NTFY_URL"] = ""
+os.environ["DECISION_MODEL_URL"] = ""
 os.environ["APPLY_MIN_GAP_SECONDS"] = "0"  # no real pauses between test applications
 
 # Seed dummy credentials so backend.config.Settings() doesn't refuse to load

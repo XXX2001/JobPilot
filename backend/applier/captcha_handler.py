@@ -13,6 +13,7 @@ import asyncio
 import logging
 from pathlib import Path
 from urllib.parse import urlparse
+
 from backend.config import settings as _settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,12 @@ def get_session_path(url: str) -> Path:
 
 async def save_session(page) -> None:
     """Persist the browser context's storage state for the page's domain."""
+    from backend.browser.chrome import running_endpoint
+
+    if running_endpoint() is not None:
+        # Attached to the owner's Chrome: it keeps its own logins, and a dump would
+        # copy every site's cookies into a plain file.
+        return
     try:
         path = get_session_path(page.url)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -205,6 +212,13 @@ async def wait_for_captcha_resolution(
             message=f"CAPTCHA / block detected on {site} — please solve it in the browser window",
         )
     )
+
+    try:  # the owner may be away from the page: push to the phone too
+        from backend.monitor.notify import notify_text
+
+        await notify_text("Captcha: your turn", f"Solve the check on {site} in the JobPilot window")
+    except Exception:  # noqa: BLE001 - a push that fails must not stop the wait
+        logger.warning("Captcha push failed", exc_info=True)
 
     elapsed = 0.0
     while elapsed < timeout:

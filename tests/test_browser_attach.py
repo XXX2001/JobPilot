@@ -82,3 +82,13 @@ async def test_open_own_tab_only_when_attached(monkeypatch):
     monkeypatch.setattr(common, "running_endpoint", lambda: {"port": 1})
     await common.open_own_tab(browser, "https://x/")
     browser.navigate_to.assert_awaited_once_with("https://x/", new_tab=True)
+
+
+async def test_save_session_never_dumps_the_owners_cookies(monkeypatch):
+    from backend.applier import captcha_handler
+
+    monkeypatch.setattr("backend.browser.chrome.running_endpoint", lambda: {"port": 1})
+    page = MagicMock()
+    page.context.storage_state = AsyncMock()
+    await captcha_handler.save_session(page)
+    page.context.storage_state.assert_not_awaited()

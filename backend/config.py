@@ -84,6 +84,9 @@ class Settings(BaseSettings):
     # closed: nothing is recorded as applied.
     APPLY_TIER2_MAX_STEPS: int = 25
     APPLY_TIER2_TIMEOUT_SECONDS: float = 300.0
+    # Minimum pause between two automatic applications on the same site; the actual
+    # pause is 1x to 2.5x this, at random. 0 disables it.
+    APPLY_MIN_GAP_SECONDS: float = 90.0
 
     # Timeouts (seconds) — fail loudly instead of hanging forever.
     # (Field name already maps to the env var; no need for a deprecated env=.)

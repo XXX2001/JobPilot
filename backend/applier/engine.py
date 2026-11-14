@@ -10,12 +10,14 @@ unchanged.
 from __future__ import annotations
 
 import asyncio
+import random
 from collections import OrderedDict
 import uuid
 import logging
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional, cast
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -29,6 +31,7 @@ from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.utils.time import utc_now
 from backend.applier.recorder import ApplicationRecorder
 from backend.applier.state import ApplyContext, State, Statechart, Transition
+from backend.config import settings
 from backend.defaults import MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
 
 logger = logging.getLogger(__name__)
@@ -95,6 +98,9 @@ class ApplicationEngine:
         # Jobs with a live attempt. Keyed on the job, not the match: one job
         # reachable through two match ids must not be applied to twice.
         self._in_flight_jobs: set[tuple[str, int]] = set()
+        # host -> loop time before which the next automatic application must not start.
+        # ponytail: in memory, so a restart forgets the pause; persist if that matters.
+        self._next_auto_start: dict[str, float] = {}
         # T4a: guard the re-entrancy check (read-then-write of the events
         # dicts) so two concurrent apply() calls for the same job_match_id
         # cannot both pass the membership check before either one inserts.
@@ -231,6 +237,20 @@ class ApplicationEngine:
     #  Main entry point                                                    #
     # ------------------------------------------------------------------ #
 
+    async def _pace(self, apply_url: str) -> None:
+        """Space automatic applications on one site the way a person would."""
+        gap = settings.APPLY_MIN_GAP_SECONDS
+        host = (urlparse(apply_url).hostname or "").lower()
+        if gap <= 0 or not host:
+            return
+        loop = asyncio.get_running_loop()
+        start = max(loop.time(), self._next_auto_start.get(host, 0.0))
+        # Claimed before sleeping: two applications queued together wait in turn.
+        self._next_auto_start[host] = start + gap * random.uniform(1.0, 2.5)
+        if start > loop.time():
+            logger.info("Pacing: next application on %s in %.0f s", host, start - loop.time())
+            await asyncio.sleep(start - loop.time())
+
     async def apply(
         self,
         job_match_id: int,
@@ -299,6 +319,9 @@ class ApplicationEngine:
 
         if reserved_app_id is not None:
             self._reservations[job_match_id] = reserved_app_id
+
+        if mode == ApplyMode.AUTO:
+            await self._pace(apply_url)
 
         # ── Build FSM context ───────────────────────────────────────────
         ctx = ApplyContext(

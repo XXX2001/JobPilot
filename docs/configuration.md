@@ -131,6 +131,9 @@ Model names are configured per role via `LLM_MODEL` / `BROWSER_LLM_MODEL` (see t
 | `MONITOR_ENABLED` | `MONITOR_ENABLED` | `false` | Schedules the monitor tick. Off: nothing polls |
 | `MONITOR_TICK_SECONDS` | `MONITOR_TICK_SECONDS` | `30` | Seconds between ticks; each tick polls the sources that are due |
 | `MONITOR_MAX_CONCURRENCY` | `MONITOR_MAX_CONCURRENCY` | `8` | Sources polled at the same time within a tick |
+| `APPLY_MIN_GAP_SECONDS` | `90` | Minimum pause between two automatic applications on the same site; the real pause is 1 to 2.5 times this. `0` disables it |
+| `APPLY_TIER2_MAX_STEPS` | `25` | Step cap for one run of the browser agent; past it the run stops without submitting |
+| `APPLY_TIER2_TIMEOUT_SECONDS` | `300` | Time cap for one run of the browser agent |
 | `NTFY_URL` | `NTFY_URL` | empty | ntfy topic URL (`https://ntfy.sh/<topic>` or a self-hosted server) for new-match and source-disabled notifications. Empty: no outbound notification; new matches still reach the web app over the WebSocket. The topic name is the only protection: anyone who knows it can read the pushes |
 
 Applied on restart. Per-source intervals are on the `job_sources` rows, not in `.env` (set with `interval_s` when a source is added). See [Getting started with the monitor](getting-started-monitor.md) for the owner's walkthrough and [Job scraping & sources](scraping.md#the-discovery-monitor) for the internals.

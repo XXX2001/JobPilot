@@ -473,3 +473,22 @@ async def test_tier1_prompt_falls_back_to_markdown_without_an_inventory(probe):
         content=AsyncMock(return_value="<form><label>Email</label><input name='email'/></form>"),
     )
     assert "Email" in await PlaywrightFormFiller(llm_client=MagicMock())._form_content(page)
+
+
+async def test_automatic_applications_on_one_site_are_spaced(monkeypatch):
+    from backend.applier.engine import ApplicationEngine
+    from backend.config import settings
+
+    slept: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(settings, "APPLY_MIN_GAP_SECONDS", 90.0)
+    monkeypatch.setattr("backend.applier.engine.asyncio.sleep", sleep)
+    engine = ApplicationEngine()
+    await engine._pace("https://jobs.example.com/a")  # first one starts at once
+    await engine._pace("https://other.example.org/b")  # another site is independent
+    assert slept == []
+    await engine._pace("https://jobs.example.com/c")
+    assert len(slept) == 1 and 85 <= slept[0] <= 225

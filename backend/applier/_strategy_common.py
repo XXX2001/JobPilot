@@ -13,6 +13,7 @@ prompt scaffolding; only the truly-shared fragments live here.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -22,6 +23,7 @@ from urllib.parse import urlparse
 # (the old per-strategy ``_site_key`` copies were removed in T4a).
 from backend.applier.captcha_handler import site_profile_key
 from backend.browser.chrome import running_endpoint
+from backend.config import settings
 
 if TYPE_CHECKING:
     # Concrete type the Tier-2 strategies instantiate. Imported under
@@ -52,8 +54,8 @@ def build_browser(
 
     Mutates *browser_kwargs* in place to add ``storage_state`` /
     ``user_data_dir`` when *saved_session_path* exists, then returns
-    ``Browser(**browser_kwargs)``. Callers remain responsible for assigning the
-    result to ``self._active_browser`` and for their own session-load logging.
+    ``Browser(**browser_kwargs)``. Callers remain responsible for handing the
+    result to their ``on_browser`` callback and for their own session-load logging.
     """
     if _Browser is None:  # pragma: no cover - guarded at the call sites
         raise RuntimeError("browser_use is not available")
@@ -124,6 +126,18 @@ async def open_own_tab(browser: "Browser", apply_url: str) -> None:
         return
     await browser.start()
     await browser.navigate_to(apply_url, new_tab=True)
+
+
+async def run_capped(agent):
+    """Run a browser agent under the step cap and the wall-clock cap.
+
+    Raises ``TimeoutError`` past the time cap; a run that hits the step cap
+    returns a history that is not done. Callers treat both as "not applied".
+    """
+    return await asyncio.wait_for(
+        agent.run(max_steps=settings.APPLY_TIER2_MAX_STEPS),
+        timeout=settings.APPLY_TIER2_TIMEOUT_SECONDS,
+    )
 
 
 def restricted_tools(*, allow_upload: bool):

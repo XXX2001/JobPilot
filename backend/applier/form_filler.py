@@ -46,6 +46,27 @@ _NOISE_TAGS = {"script", "style", "nav", "footer", "header", "noscript", "svg", 
 # Attributes to keep on form elements
 _KEEP_ATTRS = {"id", "name", "type", "placeholder", "required", "for", "class", "action", "method"}
 
+#: DOM field inventory as JSON: selector, name, label, type, required. The
+#: page markdown it replaces drops ``<input>`` elements, so the LLM had to
+#: guess selectors (and often returned an empty mapping).
+# ponytail: only fields with an id or a name get a selector (submit buttons
+# also by type); anonymous fields are skipped. Upgrade path: emit an
+# nth-of-type path for them.
+_FIELDS_JS = """() => JSON.stringify(
+  [...document.querySelectorAll('input, select, textarea, button')]
+  .filter(e => e.type !== 'hidden' && (e.tagName !== 'BUTTON' || e.type === 'submit'))
+  .map(e => {
+    const tag = e.tagName.toLowerCase();
+    const label = (e.labels && e.labels[0] ? e.labels[0].innerText
+      : e.getAttribute('aria-label') || e.placeholder || e.innerText || '').trim().slice(0, 120);
+    const selector = e.id ? '#' + CSS.escape(e.id)
+      : e.name ? tag + '[name="' + CSS.escape(e.name) + '"]'
+      : e.type === 'submit' ? tag + '[type=submit]' : null;
+    const required = !!e.required || e.getAttribute('aria-required') === 'true';
+    return {selector, name: e.name || '', label, type: e.type || tag, required};
+  })
+  .filter(f => f.selector))"""
+
 
 class PlaywrightFormFiller:
     """Tier 1 apply: direct Playwright DOM manipulation + single LLM call.
@@ -155,8 +176,7 @@ class PlaywrightFormFiller:
                     raise RuntimeError(f"CAPTCHA on {apply_url} could not be resolved")
 
             # Phase 2: extract form structure + single LLM call
-            html = await page.content()
-            form_content = self._clean_form_html(html)
+            form_content = await self._form_content(page)
             prompt = self._build_fill_prompt(
                 form_content=form_content,
                 full_name=full_name,
@@ -183,6 +203,11 @@ class PlaywrightFormFiller:
                     filled_fields[sel] = val
                 except Exception as exc:
                     logger.warning("Form fill failed: selector=%r: %s", sel, exc)
+
+            # An empty mapping (unparsable LLM answer, or no selector matched)
+            # must never reach review/submit: raise so the caller falls back.
+            if not filled_fields:
+                raise RuntimeError("no form field could be filled — nothing to submit")
 
             # Phase 4: file uploads
             if cv_pdf and cv_pdf.exists():
@@ -230,9 +255,10 @@ class PlaywrightFormFiller:
     async def _submit_and_verify(self, page, mapping: dict, job_id: int) -> dict:
         """Click submit once, then classify the destination page (W06 / F02).
 
-        Returns ``confirmed`` / ``rejected`` / ``needs_verification`` with
-        evidence. Never raises after the click: the caller must not mistake
-        a possible submission for a failure it can retry on another tier.
+        Returns ``confirmed`` or ``needs_verification`` with evidence — never
+        ``rejected``/failed: once the click was dispatched the attempt keeps
+        its slot, so the job cannot be submitted a second time. Never raises
+        after the click either (no retry on another tier).
         """
         from backend.applier.verification import page_text, verify_page
 
@@ -250,7 +276,7 @@ class PlaywrightFormFiller:
         except Exception:  # noqa: BLE001 — a slow page is still inspected below
             pass
         check = await verify_page(page, before_url=before_url, before_text=before_text)
-        status = {"confirmed": "confirmed", "rejected": "rejected"}.get(check.outcome, "needs_verification")
+        status = "confirmed" if check.outcome == "confirmed" else "needs_verification"
         logger.info("[Tier 1] job_id=%d submission %s: %s", job_id, status, check.evidence)
         return {"status": status, "evidence": check.evidence}
 
@@ -442,8 +468,7 @@ class PlaywrightFormFiller:
 
             await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
 
-            html = await page.content()
-            form_content = self._clean_form_html(html)
+            form_content = await self._form_content(page)
             prompt = self._build_fill_prompt(
                 form_content=form_content,
                 full_name=full_name,
@@ -506,6 +531,16 @@ class PlaywrightFormFiller:
     # ------------------------------------------------------------------
     # Pure helpers (testable without browser/LLM)
     # ------------------------------------------------------------------
+
+    async def _form_content(self, page) -> str:
+        """The form's fields as a JSON inventory; page markdown only as a fallback."""
+        try:
+            raw = await page.evaluate(_FIELDS_JS)
+            if isinstance(raw, str) and json.loads(raw):
+                return "Form fields (JSON, use each `selector` verbatim):\n" + raw[:_MAX_FORM_CHARS]
+        except Exception as exc:  # noqa: BLE001 — fall back to the page markdown
+            logger.warning("[Tier 1] field inventory failed: %s", exc)
+        return self._clean_form_html(await page.content())
 
     def _clean_form_html(self, html: str) -> str:
         """Strip page HTML to form skeleton only (~15 KB max).

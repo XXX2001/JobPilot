@@ -86,7 +86,8 @@ class _FakePage:
     ("probe", "expected"),
     [
         ({"url": "u", "invalid": 0, "text": "Thanks for applying"}, "confirmed"),
-        ({"url": "u", "invalid": 1, "text": "Apply"}, "rejected"),
+        # Post-click: a validation failure is still a possible submission (slot kept).
+        ({"url": "u", "invalid": 1, "text": "Apply"}, "needs_verification"),
         ({"url": "u", "invalid": 0, "text": "Review your answers"}, "needs_verification"),
     ],
 )
@@ -138,7 +139,7 @@ def test_tier2_agent_success_without_destination_evidence_needs_verification():
             return_value=_FakePage({"url": "u", "invalid": 0, "text": "Done"})
         )
     )
-    result = asyncio.run(outcome_after_agent(browser, _history(True)))
+    result = asyncio.run(outcome_after_agent(browser, _history(True), before_text="Apply"))
     assert result.status == "needs_verification"
 
 
@@ -149,7 +150,7 @@ def test_tier2_destination_confirmation_confirms():
         {"url": "u", "invalid": 0, "text": "Your application was submitted successfully"}
     )
     browser = SimpleNamespace(get_current_page=AsyncMock(return_value=page))
-    result = asyncio.run(outcome_after_agent(browser, _history(None)))
+    result = asyncio.run(outcome_after_agent(browser, _history(None), before_text="Apply"))
     assert result.status == "confirmed" and result.evidence
 
 

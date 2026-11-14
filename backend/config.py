@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     SCRAPLING_ENABLED: bool = True
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
     APPLY_TIER1_ENABLED: bool = True
+    # Tier 2 (browser agent) caps per agent run. Past either one the run fails
+    # closed: nothing is recorded as applied.
+    APPLY_TIER2_MAX_STEPS: int = 25
+    APPLY_TIER2_TIMEOUT_SECONDS: float = 300.0
 
     # Timeouts (seconds) — fail loudly instead of hanging forever.
     # (Field name already maps to the env var; no need for a deprecated env=.)

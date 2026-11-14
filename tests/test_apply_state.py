@@ -520,19 +520,19 @@ class _DummyApplicant:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_copies_strategy_browser_onto_ctx(monkeypatch):
-    from unittest.mock import AsyncMock
-
+async def test_dispatch_hands_the_runs_browser_to_its_ctx(monkeypatch):
     from backend.applier.engine import ApplicationEngine, ApplyMode
     from backend.applier.manual_apply import ApplicationResult
     from backend.applier.state import ApplyContext
 
     engine = ApplicationEngine(daily_limit=10)
     fake = _FakeBrowser()
-    engine._auto._active_browser = fake
-    engine._auto.apply = AsyncMock(
-        return_value=ApplicationResult(status="confirmed", method="auto")
-    )
+
+    async def fake_apply(*, on_browser, **_kwargs):
+        on_browser(fake)
+        return ApplicationResult(status="confirmed", method="auto")
+
+    engine._auto.apply = fake_apply  # type: ignore[method-assign]
 
     ctx = ApplyContext(
         job_match_id=1, mode="auto", apply_url="https://x", db=None,
@@ -650,10 +650,10 @@ async def test_cancelled_midflight_closes_browser():
     engine = ApplicationEngine(daily_limit=10)
     fake_browser = _FakeBrowser()
 
-    async def fake_apply(**_kwargs):
+    async def fake_apply(*, on_browser, **_kwargs):
         # Strategy created its live browser, then got cancelled before
         # returning — exactly the mid-flight leak we are guarding against.
-        engine._auto._active_browser = fake_browser
+        on_browser(fake_browser)
         raise asyncio.CancelledError()
 
     engine._auto.apply = fake_apply  # type: ignore[method-assign]

@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from backend.applier import RESULT_AWAITING_USER, RESULT_FAILED
-from backend.applier._strategy_common import open_own_tab, restricted_tools
+from backend.applier._strategy_common import open_own_tab, restricted_tools, run_capped
 from backend.applier._strategy_common import (
     PHONE_NUMBER_NOTE,
     build_browser,
@@ -73,10 +73,6 @@ class AssistedApplyStrategy:
             logger.warning("Could not initialise PlaywrightFormFiller: %s — Tier 1 disabled", exc)
             self._form_filler = None  # type: ignore[assignment]
 
-        # Live Tier-2 browser for the current apply() call, surfaced to the
-        # engine so the FSM owns failure-path cleanup. Reset per apply().
-        self._active_browser = None
-
     async def apply(
         self,
         apply_url: str,
@@ -87,9 +83,10 @@ class AssistedApplyStrategy:
         additional_answers: str = "",
         cv_pdf: Path | None = None,
         letter_pdf: Path | None = None,
+        on_browser: Callable[[Any], None] | None = None,
     ) -> ApplicationResult:
-        self._active_browser = None
-
+        """*on_browser* receives this run's live Tier-2 browser (per run, never
+        strategy state: concurrent applies must not see each other's handle)."""
         apply_url = sanitize_url(apply_url)
         if not apply_url:
             return ApplicationResult(
@@ -179,7 +176,8 @@ class AssistedApplyStrategy:
             logger.warning("[Tier 2 assisted] No saved session — browser will not be logged in")
 
         browser = build_browser(browser_kwargs, state_path, apply_url=apply_url)
-        self._active_browser = browser
+        if on_browser is not None:
+            on_browser(browser)
         try:
             await open_own_tab(browser, apply_url)
             from backend.llm.factory import make_browser_llm
@@ -199,7 +197,7 @@ class AssistedApplyStrategy:
                 # models) on a fresh client instead of aborting the run.
                 fallback_llm=make_browser_llm(),
             )
-            await agent.run()
+            await run_capped(agent)
             logger.info("[Tier 2 assisted] Agent completed for %s", apply_url)
             from backend.applier.auto_apply import submitted_during_preparation
 

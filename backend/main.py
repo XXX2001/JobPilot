@@ -105,6 +105,14 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Rescoring stored matches failed (non-fatal)")
 
+    # Reservations left ``pending`` by a crash/restart: nothing is running them
+    # any more. Fatal on failure — serving with them unresolved would let a
+    # possibly-submitted job be applied to again.
+    from backend.applier.recorder import sweep_stale_pending
+
+    async with database.AsyncSessionLocal() as session:
+        await sweep_stale_pending(session)
+
     # ── Validate provider configuration (fail-fast, provider-aware) ───────
     # Only the credentials the *chosen* providers need are required, so a
     # local-model setup never demands a Google key. See Settings.validate_runtime_config.

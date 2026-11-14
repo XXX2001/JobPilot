@@ -210,7 +210,7 @@ def test_tier2_consumes_corrections_and_re_reviews_before_submitting(monkeypatch
             tasks.append(task)
             assert tools is not None and "evaluate" not in tools.registry.registry.actions
 
-        async def run(self):
+        async def run(self, max_steps=None):
             return type("H", (), {"is_successful": lambda self: True, "final_result": lambda self: "ok"})()
 
     page = FakePage({})

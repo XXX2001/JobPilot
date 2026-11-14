@@ -59,6 +59,23 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 		}
 	}
 
+	let browser = $state<{ running: boolean; logged_in: Record<string, boolean> } | null>(null);
+	let browserBusy = $state(false);
+
+	async function browserCall(method: 'GET' | 'POST') {
+		browserBusy = true;
+		error = '';
+		try {
+			browser = await apiFetch(method === 'POST' ? '/api/browser/open' : '/api/browser/status', {
+				method
+			});
+		} catch (e: any) {
+			error = e.message ?? 'Could not reach the JobPilot browser';
+		} finally {
+			browserBusy = false;
+		}
+	}
+
 	async function saveKeywords() {
 		if (keywords.length > 0) {
 			try {
@@ -84,7 +101,8 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 	const steps = [
 		{ n: 1, label: 'API Keys' },
 		{ n: 2, label: 'CV Template' },
-		{ n: 3, label: 'Keywords' }
+		{ n: 3, label: 'Keywords' },
+		{ n: 4, label: 'Accounts' }
 	];
 </script>
 
@@ -244,6 +262,41 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						<p class="text-xs text-muted-foreground">Press Enter to add each keyword.</p>
 					</div>
 				</div>
+			{:else if step === 4}
+				<!-- Step 4: log into the job sites in the JobPilot browser -->
+				<div class="space-y-4">
+					<p class="text-sm text-muted-foreground">
+						JobPilot uses its own Chrome window, separate from your everyday browser. Open it and log
+						into the sites you want to apply on (LinkedIn, Indeed…). You do this once; the logins are
+						kept. Do not sign that window into your Google account.
+					</p>
+					<div class="flex items-center gap-2">
+						<button
+							onclick={() => browserCall('POST')}
+							disabled={browserBusy}
+							class="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+						>
+							Open the JobPilot browser
+						</button>
+						<button
+							onclick={() => browserCall('GET')}
+							disabled={browserBusy}
+							class="text-xs px-3 py-1.5 rounded-md border border-border hover:bg-accent transition-colors disabled:opacity-50"
+						>
+							Check logins
+						</button>
+					</div>
+					{#if browser}
+						<div class="p-3 bg-muted/40 border border-border rounded-lg text-xs space-y-1">
+							<p>Browser: {browser.running ? 'running' : 'not running'}</p>
+							{#each Object.entries(browser.logged_in) as [site, ok]}
+								<p class={ok ? 'text-green-400' : 'text-muted-foreground'}>
+									{site}: {ok ? 'logged in' : 'not logged in yet'}
+								</p>
+							{/each}
+						</div>
+					{/if}
+				</div>
 			{/if}
 		</div>
 
@@ -264,7 +317,7 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						Back
 					</button>
 				{/if}
-				{#if step < 3}
+				{#if step < 4}
 					<button
 						onclick={() => (step += 1)}
 						class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"

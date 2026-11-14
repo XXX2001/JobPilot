@@ -338,6 +338,7 @@ async def establish_session() -> Response:
 try:
     import backend.api.analytics as analytics  # type: ignore
     import backend.api.applications as applications  # type: ignore
+    import backend.api.browser as browser  # type: ignore
     import backend.api.applications_export as applications_export  # type: ignore
     import backend.api.documents as documents  # type: ignore
     import backend.api.correspondence as correspondence  # type: ignore
@@ -363,6 +364,7 @@ try:
     app.include_router(gmail.router)
     app.include_router(correspondence.router)
     app.include_router(monitor.router)
+    app.include_router(browser.router)
     # ws.py is present but may not register routes yet
     app.include_router(ws.router)
 except Exception as e:

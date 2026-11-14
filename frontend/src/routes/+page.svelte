@@ -2,7 +2,10 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { apiFetch } from '$lib/api';
-	import { RefreshCw, AlertCircle } from 'lucide-svelte';
+	import { messages } from '$lib/stores/websocket';
+	import { prependNewMatch } from '$lib/utils/newMatch';
+	import type { NewMatchMsg } from '$lib/types/ws';
+	import { RefreshCw, AlertCircle, Bell } from 'lucide-svelte';
 	import NewMatchesFeed from '$lib/components/NewMatchesFeed.svelte';
 	import BlockedActionsStrip from '$lib/components/BlockedActionsStrip.svelte';
 	import WeekStats from '$lib/components/WeekStats.svelte';
@@ -74,8 +77,41 @@
 		}
 	}
 
+	// Web Notifications need a one-time grant from a user gesture (the button below).
+	let notifyPermission = $state<NotificationPermission | 'unsupported'>('unsupported');
+
+	async function enableNotifications() {
+		notifyPermission = await Notification.requestPermission();
+	}
+
+	/** A match the monitor just found: show it at the top and raise a desktop notification. */
+	function onNewMatch(msg: NewMatchMsg) {
+		if (data) data.new_matches = prependNewMatch(data.new_matches, msg);
+		if (notifyPermission !== 'granted') return;
+		try {
+			const where = msg.location ? ` (${msg.location})` : '';
+			const n = new Notification(`New match ${Math.round(msg.score)}`, {
+				body: `${msg.title} — ${msg.company}${where}`,
+				tag: `match-${msg.match_id}`
+			});
+			n.onclick = () => window.open(msg.url, '_blank', 'noopener');
+		} catch {
+			// Some browsers only allow notifications from a service worker; the list still updates.
+		}
+	}
+
 	onMount(() => {
 		load();
+		if ('Notification' in window) notifyPermission = Notification.permission;
+		// The store keeps a backlog and replays it on subscribe: only frames that
+		// arrive while this page is open count, so skip that first synchronous call.
+		let live = false;
+		const unsubscribe = messages.subscribe((msgs) => {
+			const last = msgs[msgs.length - 1];
+			if (live && last?.type === 'new_match') onNewMatch(last);
+		});
+		live = true;
+		return unsubscribe;
 	});
 </script>
 
@@ -92,6 +128,15 @@
 		>
 			Classic queue →
 		</a>
+		{#if notifyPermission === 'default'}
+			<button
+				onclick={enableNotifications}
+				class="hover:bg-accent/60 flex items-center gap-2 rounded-lg border border-border/70 px-3 py-1.5 text-xs transition-colors"
+			>
+				<Bell size={13} />
+				Notify me
+			</button>
+		{/if}
 		<button
 			onclick={refresh}
 			disabled={refreshing || loading}

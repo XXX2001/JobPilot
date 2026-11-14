@@ -22,6 +22,7 @@ from backend.database import AsyncSessionLocal
 from backend.matching.filters import JobFilters
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.user import SearchSettings
+from backend.monitor.notify import notify_new_match, notify_text
 from backend.monitor.store import match_new, upsert_discovered
 from backend.scheduler.batch_runner import _extract_json_list
 from backend.scraping.sources import ADAPTERS, SourceError
@@ -159,14 +160,6 @@ async def _safely(call: Awaitable[None], what: str, source_name: str) -> None:
         logger.exception("monitor: %s failed for source %s", what, source_name)
 
 
-async def _no_notify(match: JobMatch, job: Job, source_name: str) -> None:
-    return None
-
-
-async def _no_alert(title: str, body: str) -> None:
-    return None
-
-
 async def monitor_tick() -> None:
     """Poll every enabled adapter source that is due, a few at a time."""
     now = naive_utc_now()
@@ -192,7 +185,7 @@ async def monitor_tick() -> None:
                 async with AsyncSessionLocal() as db:
                     source = await db.get(JobSource, source_id)
                     if source is not None:
-                        await poll_source(db, source, client, _no_notify, _no_alert)
+                        await poll_source(db, source, client, notify_new_match, notify_text)
             except Exception:  # noqa: BLE001 - e.g. the failure itself could not be stored
                 logger.exception("monitor: tick failed for source %d", source_id)
 

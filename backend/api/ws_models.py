@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Annotated, Literal, Union
 
 try:
@@ -144,6 +145,21 @@ class GmailMessageReceived(BaseModel):
     link_confidence: float | None = None
 
 
+class NewMatch(BaseModel):
+    """A job the monitor just discovered and matched (spec D16)."""
+
+    type: Literal["new_match"] = "new_match"
+    match_id: int
+    job_id: int
+    title: str
+    company: str
+    location: str
+    score: float
+    source: str
+    posted_at: datetime | None
+    url: str
+
+
 class Pong(BaseModel):
     """Server reply to a client `ping`."""
 
@@ -171,6 +187,7 @@ WSMessage = Annotated[
         CaptchaResolved,
         GmailSyncStatus,
         GmailMessageReceived,
+        NewMatch,
         Pong,
         ErrorMessage,
     ],
@@ -216,6 +233,7 @@ __all__ = [
     "CaptchaResolved",
     "GmailSyncStatus",
     "GmailMessageReceived",
+    "NewMatch",
     "Pong",
     "ErrorMessage",
     "ClientMessage",

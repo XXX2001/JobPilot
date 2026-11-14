@@ -8,6 +8,7 @@ JobPilot drives one long-lived genuine Chrome on a profile of its own, `$DATA/jo
 | `backend/api/browser.py` | `/api/browser/status`, `/api/browser/open` |
 | `backend/monitor/linkedin_detail.py` | Reads matched LinkedIn job pages in that Chrome |
 | `backend/applier/form_filler.py` | Tier 1 apply. Attaches when the Chrome runs (`open_context`, commit `ad687bd`) |
+| `backend/applier/harness/runner.py` | Optional System One harness, first for ASSISTED and AUTO, using the same `open_context` |
 | `frontend/src/lib/components/SetupWizard.svelte` | Step 4 "Accounts" |
 
 ## Why a dedicated data dir
@@ -89,6 +90,39 @@ What the poller does with it:
 | Seeding poll | Nothing read | nothing is notified on a seed |
 
 This is the only automated use of a logged-in account in discovery. It is bounded by the caps above, and it never searches or paginates while logged in.
+
+## Application harness
+
+Set `DECISION_MODEL_URL` to enable the OpenJev/System One harness before Tier 1 and
+Tier 2 on every site, including multi-step applications. It opens its own tab through
+`open_context`, using the dedicated JobPilot Chrome when running, or the existing
+per-site profile otherwise. Stealth patches apply only to the latter. It never closes
+an attached context. ASSISTED leaves the filled tab open for the owner, with lists of
+filled fields, generated answers and fields left empty. With a launched per-site
+browser, the harness keeps Playwright, the context and the page referenced in memory
+and leaves the connection running so the tab stays open for manual submission.
+These handles remain until the application process exits. With the attached JobPilot
+Chrome, it disconnects Playwright as before; the independently running Chrome and
+the owner's tab stay open.
+
+The harness fills stored profile values, including LinkedIn and additional answers,
+and attaches the selected PDFs. An optional writer answers free-text questions from
+the base CV and profile; unavailable facts or an unavailable writer leave the field
+for the owner. Login walls and captchas prompt an in-app hand-off and an ntfy notice
+when configured. Password fields are never filled.
+
+AUTO remains disabled by default (`JOBPILOT_AUTO_SUBMIT_ENABLED=false`). When enabled,
+it requires owner approval; corrections trigger another review. Review keys identify
+the harness's frame and node, with labels in the review note. Cross-origin frame
+fields are read-only in this review. The approved submit control is clicked once;
+the destination must confirm submission, including confirmation inside an iframe.
+Another form step or an uncertain result becomes `needs_verification`, without retry.
+If no submit control is identified, the tab remains open for manual submission.
+
+Fallback to the existing tiers is allowed only when no `submits=True` control was
+clicked after typing. A failure without a usable click history also stops for
+verification. See [configuration](configuration.md#browser-decision-harness) for
+local and hosted endpoints and which data they receive.
 
 ## Not built
 

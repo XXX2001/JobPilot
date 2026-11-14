@@ -84,6 +84,9 @@ class AssistedApplyStrategy:
         cv_pdf: Path | None = None,
         letter_pdf: Path | None = None,
         on_browser: Callable[[Any], None] | None = None,
+        linkedin_url: str = "",
+        job_id: int | None = None,
+        cancel_event=None,
     ) -> ApplicationResult:
         """*on_browser* receives this run's live Tier-2 browser (per run, never
         strategy state: concurrent applies must not see each other's handle)."""
@@ -92,6 +95,24 @@ class AssistedApplyStrategy:
             return ApplicationResult(
                 status="cancelled", method="assisted", message="Invalid apply URL"
             )
+
+        if settings.DECISION_MODEL_URL:
+            from backend.applier.engine import ApplicantInfo
+            from backend.applier.harness.runner import harness_apply
+
+            result = await harness_apply(
+                mode="assisted", apply_url=apply_url, job_id=job_id,
+                applicant=ApplicantInfo(
+                    full_name=full_name, email=email, phone=phone, location=location,
+                    linkedin_url=linkedin_url, additional_answers_json=additional_answers,
+                ),
+                cv_pdf=cv_pdf, letter_pdf=letter_pdf,
+                cancel_event=cancel_event,
+                on_review=self._on_review, on_get_patches=self._on_get_patches,
+                on_browser=on_browser,
+            )
+            if result is not None:
+                return result
 
         # ── Tier 1: Playwright direct (skip for multi-step sites) ─────────
         form_filler = self._form_filler

@@ -48,6 +48,7 @@ class ApplicantInfo(BaseModel):
     email: str = Field(default="", max_length=MAX_LEN_EMAIL)
     phone: str = Field(default="", max_length=MAX_LEN_PHONE)
     location: str = Field(default="", max_length=MAX_LEN_LOCATION)
+    linkedin_url: str = Field(default="", max_length=MAX_LEN_LOCATION)
     additional_answers_json: str = Field(default="", max_length=MAX_LEN_ADDITIONAL_ANSWERS)
 
 
@@ -637,6 +638,7 @@ class ApplicationEngine:
                 email=applicant.email,
                 phone=applicant.phone,
                 location=applicant.location,
+                linkedin_url=getattr(applicant, "linkedin_url", ""),
                 additional_answers=applicant.additional_answers_json,
                 cv_pdf=cv_pdf,
                 letter_pdf=letter_pdf,
@@ -646,11 +648,14 @@ class ApplicationEngine:
             )
         if mode == ApplyMode.ASSISTED:
             return await self._assisted.apply(
+                job_id=ctx.job_match_id,
+                cancel_event=ctx.cancel_event,
                 apply_url=ctx.apply_url,
                 full_name=applicant.full_name,
                 email=applicant.email,
                 phone=applicant.phone,
                 location=applicant.location,
+                linkedin_url=getattr(applicant, "linkedin_url", ""),
                 additional_answers=applicant.additional_answers_json,
                 cv_pdf=cv_pdf,
                 letter_pdf=letter_pdf,

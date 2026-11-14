@@ -99,6 +99,7 @@ class AutoApplyStrategy:
         confirm_event: asyncio.Event | None = None,
         cancel_event: asyncio.Event | None = None,
         on_browser: Callable[[Any], None] | None = None,
+        linkedin_url: str = "",
     ) -> ApplicationResult:
         """Run fill + review + submit. Tier 1 → Tier 2 fallback.
 
@@ -111,6 +112,25 @@ class AutoApplyStrategy:
             return ApplicationResult(
                 status="cancelled", method="auto", message="Invalid apply URL"
             )
+
+        if settings.DECISION_MODEL_URL:
+            from backend.applier.engine import ApplicantInfo
+            from backend.applier.harness.runner import harness_apply
+
+            result = await harness_apply(
+                mode="auto", apply_url=apply_url, job_id=job_id,
+                applicant=ApplicantInfo(
+                    full_name=full_name, email=email, phone=phone, location=location,
+                    linkedin_url=linkedin_url, additional_answers_json=additional_answers,
+                ),
+                cv_pdf=cv_pdf, letter_pdf=letter_pdf,
+                cancel_event=cancel_event,
+                on_review=self._on_review, on_get_patches=self._on_get_patches,
+                on_browser=on_browser,
+                confirm_event=confirm_event,
+            )
+            if result is not None:
+                return result
 
         # ── Tier 1: Playwright direct + single LLM call ─────────────────
         # Skip Tier 1 for multi-step sites (LinkedIn, etc.) — they need

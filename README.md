@@ -11,6 +11,14 @@ JobPilot is a single-user web app that discovers job listings from the sources y
 
 ## What it does
 
+An optional [OpenJev browser harness](docs/browser.md#application-harness) fills applications
+in the JobPilot Chrome before the existing apply tiers, including multi-step sites. Set
+`DECISION_MODEL_URL` to your local System One server or hosted Jev; [configuration](docs/configuration.md#browser-decision-harness)
+explains the endpoints and data sent. Stored profile values drive filling, while your
+configured writer (including logged-in Claude Code or Codex, without an API key) handles
+free-text answers from your CV. ASSISTED leaves the tab open and lists generated or
+unanswered fields. AUTO stays off by default and requires owner review before submission.
+
 - **First-run onboarding wizard** (`/onboarding`) — guides you through API keys, CV upload, keywords, and your first batch.
 - **Discovery monitor** (optional, always on) — polls company boards (Greenhouse, Ashby, SmartRecruiters) and saved Indeed and LinkedIn searches on a short timer, logged out and with no AI model, and pushes each new match to your phone through ntfy. See [Getting started with the monitor](docs/getting-started-monitor.md).
 - **Batch job discovery** from API sources (Adzuna) and browser-scraped boards (LinkedIn, Indeed, Glassdoor, Welcome to the Jungle, Google Jobs) plus custom "lab" URLs, via a cheap-first tiered scraper.

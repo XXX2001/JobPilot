@@ -52,6 +52,40 @@ or session persistence; schema responses come from `structured_output`. Codex ru
 in a fresh temporary directory with the read-only sandbox and ephemeral sessions,
 and returns its last-message file. `LLM_CLI_MODEL` is separate from API model names.
 
+### Browser decision harness
+
+| Env var | Default | Effect |
+|---|---|---|
+| `DECISION_MODEL_URL` | empty | System One endpoint; non-empty runs the harness first for ASSISTED and AUTO |
+| `DECISION_MODEL_API_KEY` | empty | Optional bearer key for that endpoint |
+| `DECISION_MODEL_NAME` | `jev-latest` | Model name sent with each decision request |
+| `HARNESS_MAX_ACTIONS` | `60` | Maximum actions per harness run |
+
+For OpenJev on mouad-ba over Tailscale:
+
+```env
+DECISION_MODEL_URL=http://100.100.9.110:8009/v1/systemone
+DECISION_MODEL_NAME=jev-latest
+LLM_PROVIDER=auto
+```
+
+For hosted Jev, use `DECISION_MODEL_URL=https://api.typesafe.ai/v1/systemone` and set
+`DECISION_MODEL_API_KEY` to its bearer key. Decision requests include the owner's
+profile values, job title/company, page text and recent actions. The local endpoint
+receives them on mouad-ba; the hosted endpoint sends them to TypeSafe. The separate
+writing provider (`LLM_PROVIDER`, including Claude/Codex CLI) receives the base CV
+source, profile, question, nearby page text and job context for free-text answers.
+It is instructed to use only stored facts, answer in the question's language and
+return at most 1,200 characters; absent facts leave the field empty. No available
+writer is required for profile filling.
+
+ASSISTED leaves the tab open for manual submission. AUTO still requires the existing
+feature flag and owner review, with another review after corrections. An uncertain
+post-click result stops for verification. Fallback to Tier 1/2 requires evidence that
+no submitting control was clicked after typing. Empty `DECISION_MODEL_URL` preserves
+the existing paths. Login/CAPTCHA hand-offs use the existing WebSocket frame and send
+an ntfy push when `NTFY_URL` is set. See [browser behavior](browser.md#application-harness).
+
 ### Browser agent (`BROWSER_LLM_*`)
 
 | Env var | Field | Default | Required? |
@@ -116,7 +150,7 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 | `JOBPILOT_LOG_LEVEL` | `jobpilot_log_level` | `info` | Log level |
 | `JOBPILOT_SCRAPER_HEADLESS` | `jobpilot_scraper_headless` | `true` | Run the browser scraper headless |
 | `JOBPILOT_APPLY_HEADLESS` | `jobpilot_apply_headless` | `false` | Tier-2 apply uses a *visible* browser by default so you can watch and intervene on logins and captchas. Set true for headless/server/Docker runs with no display. The apply browser always launches with container-safe Chromium flags (`--no-sandbox` / `--disable-dev-shm-usage`), so headless works in Docker |
-| `JOBPILOT_AUTO_SUBMIT_ENABLED` | `jobpilot_auto_submit_enabled` | `false` | Allows the `auto` apply method (JobPilot clicks the final submit). Off by default because a successful submission is not yet verified against the destination site and failed corrections do not yet block submission; with it off, `POST /api/applications/{id}/apply` rejects `auto` with 409 and the UI hides Auto. Assisted and manual apply are unaffected. |
+| `JOBPILOT_AUTO_SUBMIT_ENABLED` | `jobpilot_auto_submit_enabled` | `false` | Allows the `auto` apply method (JobPilot clicks the final submit). Off by default; enabling it still requires owner review and destination verification. With it off, `POST /api/applications/{id}/apply` rejects `auto` with 409 and the UI hides Auto. Assisted and manual apply are unaffected. |
 | `JOBPILOT_ALLOWED_HOSTS` | `jobpilot_allowed_hosts` | `""` | Extra `Host` header names (comma-separated) accepted besides loopback and the hosts of `JOBPILOT_ALLOWED_ORIGINS`. Only needed behind a local reverse proxy; any other Host gets 403 (DNS-rebinding defence). |
 | `JOBPILOT_DATA_DIR` | `jobpilot_data_dir` | `./data` | Resolved to absolute path under project root if relative (`config.py:222`) |
 | `JOBPILOT_ALLOWED_ORIGINS` | `jobpilot_allowed_origins` | `http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000` | Comma-separated CORS origins |

@@ -747,6 +747,7 @@ async def apply_to_job(
         email=email,
         phone=phone,
         location=location,
+        linkedin_url=(profile.linkedin_url if profile else "") or "",
         additional_answers_json=additional_answers,
     )
 

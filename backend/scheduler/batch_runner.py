@@ -30,6 +30,7 @@ from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails
 from backend.models.user import SearchSettings, UserProfile
+from backend.monitor.store import raw_to_details
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +210,7 @@ class BatchRunner:
         await self._broadcast_and_track(f"Found {len(raw_jobs)} raw jobs — ranking…", progress=0.35)
 
         # ── Step 2: Match & rank ─────────────────────────────────────────
-        job_details = [self._raw_to_details(j) for j in raw_jobs]
+        job_details = [raw_to_details(j) for j in raw_jobs]
         ranked: list[tuple[JobDetails, float]] = [
             (jd, self._matcher.score(jd, filters)) for jd in job_details
         ]
@@ -542,13 +543,15 @@ class BatchRunner:
                 )
                 continue
 
-            # Skip creating a duplicate match for the same job on the same day
+            # One match per job, ever (spec D3): a later batch reuses the match
+            # instead of queueing the job again. Newest first, because rows
+            # written before D3 may hold one match per day.
             existing_match = (
                 await db.execute(
-                    select(JobMatch).where(
-                        JobMatch.job_id == job_row.id,
-                        JobMatch.batch_date == today,
-                    )
+                    select(JobMatch)
+                    .where(JobMatch.job_id == job_row.id)
+                    .order_by(JobMatch.id.desc())
+                    .limit(1)
                 )
             ).scalar_one_or_none()
 
@@ -601,23 +604,6 @@ class BatchRunner:
         )
         db.add(doc)
         await db.commit()
-
-    @staticmethod
-    def _raw_to_details(raw: Any) -> JobDetails:
-        """Convert a RawJob to a JobDetails for matching."""
-        return JobDetails(
-            title=raw.title,
-            company=raw.company,
-            location=getattr(raw, "location", ""),
-            country=getattr(raw, "country", ""),
-            description=getattr(raw, "description", ""),
-            salary_min=getattr(raw, "salary_min", None),
-            salary_max=getattr(raw, "salary_max", None),
-            url=getattr(raw, "url", ""),
-            apply_url=getattr(raw, "apply_url", ""),
-            apply_method=getattr(raw, "apply_method", ""),
-            posted_at=getattr(raw, "posted_at", None),
-        )
 
 
 __all__ = ["BatchRunner"]

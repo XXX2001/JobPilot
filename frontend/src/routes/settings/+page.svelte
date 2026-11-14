@@ -14,7 +14,6 @@
 		['profile', 'Profile', User],
 		['search', 'Search', Search],
 		['sites', 'Sites', Globe],
-		['credentials', 'Credentials', Key],
 		['sources', 'Sources', Code],
 		['monitor', 'Monitor', Activity],
 		['integrations', 'Integrations', Plug],

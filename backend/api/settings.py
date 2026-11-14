@@ -884,7 +884,14 @@ async def get_credentials(db: DBSession):
 async def save_credential(
     site_name: str, body: CredentialUpdate, db: DBSession
 ) -> CredentialSaveResponse:
-    """Encrypt and store email/password for a site that requires login."""
+    """Gone: site passwords are no longer stored. Log in by hand in the JobPilot browser."""
+    raise HTTPException(
+        status_code=410,
+        detail="Site passwords are no longer stored. Open the JobPilot browser "
+        "(Settings → Monitor) and log in there once.",
+    )
+    # ponytail: the storage code below and the encrypted_* columns are dead; drop them
+    # with a migration when the credentials tab is removed for good.
     if site_name not in SITE_CONFIGS:
         raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
     if not SITE_CONFIGS[site_name].get("requires_login", False):

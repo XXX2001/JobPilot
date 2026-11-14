@@ -10,7 +10,6 @@ not a card list counts as blocked so the poller backs off.
 from __future__ import annotations
 
 import re
-
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 

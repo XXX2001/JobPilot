@@ -130,7 +130,6 @@ async def lifespan(app: FastAPI):
         from backend.llm.job_analyzer import JobAnalyzer
         from backend.matching.embedder import Embedder
         from backend.matching.fit_engine import FitEngine
-        from backend.matching.matcher import JobMatcher
         from backend.scheduler.batch_runner import BatchRunner
         from backend.scraping.adaptive_scraper import AdaptiveScraper
         from backend.scraping.adzuna_client import AdzunaClient
@@ -160,7 +159,6 @@ async def lifespan(app: FastAPI):
             deduplicator=dedup,
             scrapling_fetcher=scrapling,
         )
-        matcher = JobMatcher()
 
         apply_engine = ApplicationEngine()  # W11: limit read from settings per reservation
 
@@ -169,7 +167,7 @@ async def lifespan(app: FastAPI):
 
         batch_runner = BatchRunner(
             scraper=orchestrator,
-            matcher=matcher,
+            matcher=None,  # loaded per batch from the owner's CV and keywords
             cv_pipeline=cv_pipeline,
             db_factory=AsyncSessionLocal,
             fit_engine=FitEngine(),
@@ -184,7 +182,6 @@ async def lifespan(app: FastAPI):
         app.state.adaptive_scraper = adaptive
         app.state.session_manager = session_mgr
         app.state.scraping_orchestrator = orchestrator
-        app.state.matcher = matcher
         app.state.apply_engine = apply_engine
         app.state.batch_runner = batch_runner
 

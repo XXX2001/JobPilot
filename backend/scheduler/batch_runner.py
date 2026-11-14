@@ -26,6 +26,7 @@ from backend.matching.embedder import Embedder
 from backend.matching.filters import JobFilters
 from backend.matching.fit_engine import FitAssessment, FitEngine
 from backend.matching.job_skill_extractor import JobSkillExtractor
+from backend.matching.matcher import load_matcher
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails
@@ -93,7 +94,7 @@ class BatchRunner:
     def __init__(
         self,
         scraper: Any,  # ScrapingOrchestrator
-        matcher: Any,  # JobMatcher
+        matcher: Any,  # JobMatcher; None: the owner's, loaded per batch (load_matcher)
         cv_pipeline: Any,  # CVPipeline
         db_factory: Callable[[], AsyncSession],
         fit_engine: FitEngine | None = None,
@@ -210,9 +211,10 @@ class BatchRunner:
         await self._broadcast_and_track(f"Found {len(raw_jobs)} raw jobs — ranking…", progress=0.35)
 
         # ── Step 2: Match & rank ─────────────────────────────────────────
+        matcher = self._matcher or await load_matcher(db)
         job_details = [raw_to_details(j) for j in raw_jobs]
         ranked: list[tuple[JobDetails, float]] = [
-            (jd, self._matcher.score(jd, filters)) for jd in job_details
+            (jd, matcher.score(jd, filters)) for jd in job_details
         ]
         ranked = [(jd, s) for jd, s in ranked if s >= filters.min_score]
         ranked.sort(key=lambda x: x[1], reverse=True)
@@ -239,7 +241,7 @@ class BatchRunner:
 
         # ── Step 3: Store new matches ────────────────────────────────────
         await self._broadcast_and_track("Storing new matches…", progress=0.55)
-        stored = await self._store_matches(db, ranked, filters)
+        stored = await self._store_matches(db, ranked, filters, matcher)
         logger.info("Stored %d new job matches", len(stored))
 
         # ── Step 3.5: Fit Assessment ─────────────────────────────────────
@@ -473,6 +475,7 @@ class BatchRunner:
         db: AsyncSession,
         ranked: list[tuple[JobDetails, float]],
         filters: JobFilters,
+        matcher: Any = None,  # the one that ranked; default: the injected matcher
     ) -> list[StoredMatch]:
         """Persist new job matches; return each match with its own job.
 
@@ -486,6 +489,7 @@ class BatchRunner:
         """
         from backend.scraping.deduplicator import dedup_key
 
+        matcher = matcher or self._matcher
         today = date.today()
         stored: list[StoredMatch] = []
         seen: set[int] = set()
@@ -566,11 +570,12 @@ class BatchRunner:
                 # panel can render the keyword breakdown. Stored as a dict of
                 # keyword -> True: the column is ``Mapped[Optional[dict]]`` and
                 # the frontend treats a dict of truthy values as the hit set.
-                matched = self._matcher.matched_keywords(jd, filters)
+                matched = matcher.matched_keywords(jd, filters)
                 match_row = JobMatch(
                     job_id=job_row.id,
                     score=score,
                     keyword_hits={kw: True for kw in matched},
+                    score_basis=getattr(matcher, "score_basis", None),
                     batch_date=today,
                     status="new",
                 )

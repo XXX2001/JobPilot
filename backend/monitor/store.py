@@ -13,15 +13,14 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.matching.filters import JobFilters
-from backend.matching.matcher import JobMatcher
+from backend.matching.matcher import JobMatcher, load_matcher
+from backend.matching.scorer import ScoreResult
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails, RawJob
 from backend.scraping.deduplicator import dedup_key
 from backend.utils.time import naive_utc_now
 
 logger = logging.getLogger(__name__)
-
-_matcher = JobMatcher()
 
 
 def raw_to_details(raw: Any) -> JobDetails:
@@ -138,15 +137,20 @@ async def upsert_discovered(db: AsyncSession, source: JobSource, jobs: list[RawJ
 
 
 async def match_new(
-    db: AsyncSession, jobs: list[Job], filters: JobFilters, min_score: float
+    db: AsyncSession,
+    jobs: list[Job],
+    filters: JobFilters,
+    min_score: float,
+    matcher: JobMatcher | None = None,
 ) -> list[JobMatch]:
     """Create one ``new`` match per job scoring ``>= min_score`` that has no match at all.
 
-    The title counts as description text: LinkedIn and SmartRecruiters cards
-    carry no description, so their keywords can only be found there.
+    A job a hard filter rejects is never matched, whatever the threshold. ``matcher``
+    defaults to the owner's (:func:`load_matcher`).
     """
     if not jobs:
         return []
+    matcher = matcher or await load_matcher(db)
     matched_ids = set(
         (
             await db.execute(
@@ -159,24 +163,15 @@ async def match_new(
     for job in jobs:
         if job.id in matched_ids:
             continue
-        details = raw_to_details(job)
-        details = details.model_copy(
-            update={"description": f"{details.title}\n{details.description}"}
-        )
-        hits = _matcher.matched_keywords(details, filters)
-        # ponytail: the matcher gives 31/100 to any job with no keyword hit, above
-        # the default threshold of 30, so the hit is required here. Drop this gate
-        # when the Phase 2 scorer replaces JobMatcher.
-        if filters.keywords and not hits:
-            continue
-        score = _matcher.score(details, filters)
-        if score < min_score:
+        result = matcher.explain(raw_to_details(job), filters)
+        if not result.passed_filters or result.score < min_score:
             continue
         matched_ids.add(job.id)
         match = JobMatch(
             job_id=job.id,
-            score=score,
-            keyword_hits={kw: True for kw in hits},
+            score=result.score,
+            keyword_hits=_hits(result),
+            score_basis=matcher.score_basis,
             batch_date=today,
             status="new",
         )
@@ -184,3 +179,32 @@ async def match_new(
         created.append(match)
     await db.flush()
     return created
+
+
+def _hits(result: ScoreResult) -> dict[str, bool]:
+    """``JobMatch.keyword_hits``: the posting's skills the CV covers, fully or by family."""
+    return dict.fromkeys(result.covered + result.partial, True)
+
+
+async def rescore_all(db: AsyncSession, matcher: JobMatcher, filters: JobFilters) -> int:
+    """Recompute the ``new`` matches scored on another CV, keywords or gazetteer.
+
+    Returns how many were rescored. A match the filters now reject stays, at 0.
+    """
+    rows = (
+        await db.execute(
+            select(JobMatch, Job)
+            .join(Job, Job.id == JobMatch.job_id)
+            .where(
+                JobMatch.status == "new",
+                JobMatch.score_basis.is_distinct_from(matcher.score_basis),
+            )
+        )
+    ).all()
+    for match, job in rows:
+        result = matcher.explain(raw_to_details(job), filters)
+        match.score = result.score
+        match.keyword_hits = _hits(result)
+        match.score_basis = matcher.score_basis
+    await db.flush()
+    return len(rows)

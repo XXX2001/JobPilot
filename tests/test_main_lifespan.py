@@ -46,7 +46,6 @@ def test_happy_path_lifespan_populates_app_state(test_app: TestClient) -> None:
         "adaptive_scraper",
         "session_manager",
         "scraping_orchestrator",
-        "matcher",
         "apply_engine",
         "batch_runner",
     ):

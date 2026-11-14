@@ -116,7 +116,10 @@ async def test_store_matches_populates_keyword_hits(sqlite_factory):
         title="Backend Engineer",
         company="ACME",
         location="Paris",
-        description="python and django backend role",
+        description=(
+            "python and django backend role, in a small team shipping to industrial "
+            "customers every week, from our office"
+        ),
         url="https://example.com/1",
     )
 
@@ -133,6 +136,58 @@ async def test_store_matches_populates_keyword_hits(sqlite_factory):
     hits = row.keyword_hits
     matched = hits if isinstance(hits, list) else [k for k, v in hits.items() if v]
     assert set(matched) == {"python", "django"}
+
+
+@pytest.mark.asyncio
+async def test_batch_without_injected_matcher_scores_against_the_owners_cv(
+    sqlite_factory, tmp_path
+):
+    """``matcher=None``: the batch ranks with ``load_matcher``, like the monitor."""
+    from backend.models.user import SearchSettings, UserProfile
+    from backend.monitor.store import raw_to_details
+
+    cv = tmp_path / "cv.tex"
+    cv.write_text("Python, Django, PostgreSQL", encoding="utf-8")
+    body = (
+        "\nRequirements\n- Python\n- Django\n\n"
+        "We ship to industrial customers every week, from our office in town."
+    )
+    jobs = [
+        RawJob(title="Backend Engineer", company="ACME", url="u1", description=body),
+        RawJob(title="Account Executive", company="ACME", url="u2", description=body),
+        RawJob(title="Rust Engineer", company="ACME", url="u3", description=body, location="Lyon"),
+    ]
+    runner = BatchRunner(
+        scraper=MockScraper(jobs=jobs),
+        matcher=None,
+        cv_pipeline=MockCVPipeline(),
+        db_factory=sqlite_factory,
+    )
+    async with sqlite_factory() as db:
+        db.add(UserProfile(full_name="A", email="a@example.com", base_cv_path=str(cv)))
+        db.add(
+            SearchSettings(
+                keywords={"include": ["backend"]}, locations={"items": ["Paris"]}, min_match_score=1
+            )
+        )
+        await db.commit()
+    with patch("backend.scheduler.batch_runner.broadcast_status", new_callable=AsyncMock):
+        async with sqlite_factory() as db:
+            preview = await runner._run_batch_inner(db, dry_run=True)
+            filters = JobFilters(keywords=["backend"], locations=["Paris"])
+            ranked = [(raw_to_details(jobs[0]), 50.0)]
+            (stored,) = await runner._store_matches(
+                db, ranked, filters, JobMatcher(cv.read_text(), ["backend"])
+            )
+            row = (
+                await db.execute(select(JobMatch).where(JobMatch.id == stored.match_id))
+            ).scalar_one()
+
+    # Lyon is filtered out (score 0); the sales title ranks below the engineering one.
+    assert [p["title"] for p in preview] == ["Backend Engineer", "Account Executive"]
+    assert preview[0]["score"] > preview[1]["score"]
+    assert row.keyword_hits == {"django": True, "python": True}
+    assert row.score_basis == JobMatcher(cv.read_text(), ["backend"]).score_basis
 
 
 # ── run_batch ─────────────────────────────────────────────────────────────────

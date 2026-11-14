@@ -1,57 +1,51 @@
 from __future__ import annotations
 
+import hashlib
 import logging
-import re
-from datetime import datetime, timezone
+from collections.abc import Iterable
+from functools import lru_cache
+from pathlib import Path
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.config import settings
 from backend.defaults import MIN_MATCH_SCORE
+from backend.latex.artifacts import resolve_base_source
 from backend.matching.filters import JobFilters
+from backend.matching.gazetteer import GAZETTEER_VERSION, Gazetteer
+from backend.matching.scorer import ScoreResult, cv_skills, score_job
 from backend.models.schemas import JobDetails
+from backend.models.user import SearchSettings, UserProfile
 
 logger = logging.getLogger(__name__)
 
 
 class JobMatcher:
-    """Scores and ranks jobs against user profile and filters."""
+    """Scores and ranks jobs against the owner's CV and filters (see ``scorer``).
+
+    ``extra_terms`` are the owner's search keywords: they extend the gazetteer, so a
+    profession the curated list does not cover still counts. Without a CV the skills
+    named in ``filters.keywords`` stand in for it.
+    """
+
+    def __init__(self, cv_text: str = "", extra_terms: Iterable[str] = ()) -> None:
+        terms = sorted({" ".join(t.lower().split()) for t in extra_terms} - {""})
+        self._gaz = Gazetteer.load(terms)
+        self._cv = cv_skills(cv_text, self._gaz) if cv_text.strip() else None
+        # What a stored score was computed from: a match with another basis is stale.
+        digest = hashlib.sha256("\0".join([cv_text, *terms]).encode()).hexdigest()
+        self.score_basis = f"{digest[:12]}:{GAZETTEER_VERSION}"
+
+    def explain(self, job: JobDetails, filters: JobFilters) -> ScoreResult:
+        cv = self._cv
+        if cv is None:
+            cv = frozenset(s for kw in filters.keywords for s in self._gaz.skills(kw))
+        return score_job(job, cv, filters, self._gaz)
 
     def score(self, job: JobDetails, filters: JobFilters) -> float:
-        """Return 0-100 relevance score.
-
-        Scoring weights:
-        - Keyword match (simple overlap on description): 40%
-        - Location match: 20%
-        - Experience level match: 15%
-        - Salary match: 10%
-        - Recency (newer = better): 10%
-        - Exclusion penalty (blacklisted terms or company): 0 (auto-skip)
-        """
-        # Exclusion check — instant disqualify
-        if self._has_excluded_terms(job, filters):
-            return 0.0
-
-        # Company blacklist
-        if job.company.lower() in [c.lower() for c in filters.excluded_companies]:
-            return 0.0
-
-        score = 0.0
-
-        # Keyword matching (simple overlap): 40%
-        score += self._keyword_match(job.description, filters.keywords) * 40
-
-        # Location match: 20%
-        score += self._location_match(job.location, filters) * 20
-
-        # Experience level match: 15%
-        score += self._experience_match(job, filters) * 15
-
-        # Salary match: 10%
-        score += self._salary_match(job, filters) * 10
-
-        # Recency: 10%
-        posted = job.posted_date or job.posted_at
-        score += self._recency_score(posted) * 10
-
-        return min(100.0, score)
+        """Return 0-100 relevance score; 0 when a hard filter rejects the job."""
+        return self.explain(job, filters).score
 
     def rank_and_filter(
         self,
@@ -65,82 +59,31 @@ class JobMatcher:
         return sorted(filtered, key=lambda x: x[1], reverse=True)
 
     def matched_keywords(self, job: JobDetails, filters: JobFilters) -> list[str]:
-        """Return the include-keywords found in the job description.
+        """The posting's skills the CV covers, then those it covers by family."""
+        result = self.explain(job, filters)
+        return result.covered + result.partial
 
-        Read-only mirror of the overlap logic in :meth:`_keyword_match`: a
-        case-insensitive substring check against the description. The original
-        casing of each configured keyword is preserved in the result, and an
-        empty list is returned when no keywords are configured.
-        """
-        if not filters.keywords:
-            return []
-        text = job.description.lower()
-        return [kw for kw in filters.keywords if kw.lower() in text]
 
-    # --- Private helpers ---
+@lru_cache(maxsize=4)
+def _matcher(cv_text: str, keywords: tuple[str, ...]) -> JobMatcher:
+    return JobMatcher(cv_text, keywords)
 
-    def _keyword_match(self, description: str, keywords: list[str]) -> float:
-        """Simple keyword overlap ratio: matched / total keywords."""
-        if not keywords:
-            return 1.0
-        text = description.lower()
-        matched = sum(1 for kw in keywords if kw.lower() in text)
-        return matched / len(keywords)
 
-    def _has_excluded_terms(self, job: JobDetails, filters: JobFilters) -> bool:
-        """Return True if any excluded keyword appears in title or description."""
-        text = f"{job.title} {job.description}".lower()
-        return any(term.lower() in text for term in filters.excluded_keywords)
+async def load_matcher(db: AsyncSession) -> JobMatcher:
+    """The matcher for the owner's base CV and search keywords, for the monitor and the batch."""
+    # Imported here: batch_runner imports the monitor store, which imports this module.
+    from backend.scheduler.batch_runner import _extract_json_list  # noqa: PLC0415
 
-    def _location_match(self, location: str, filters: JobFilters) -> float:
-        """1.0 if remote_only + remote in location, or location in filter list."""
-        if not location:
-            return 0.5  # unknown location — partial credit
-        loc_lower = location.lower()
-        if filters.remote_only:
-            return 1.0 if "remote" in loc_lower else 0.0
-        if not filters.locations:
-            return 1.0  # no location filter — always match
-        return 1.0 if any(fl.lower() in loc_lower for fl in filters.locations) else 0.3
-
-    def _experience_match(self, job: JobDetails, filters: JobFilters) -> float:
-        """Crude heuristic: look for year ranges in description."""
-        if not filters.experience_range:
-            return 1.0
-        min_exp, max_exp = filters.experience_range
-        text = job.description.lower()
-        # Look for patterns like "5+ years", "3 years", "2-4 years"
-        mentions = re.findall(r"(\d+)\+?\s*year", text)
-        if not mentions:
-            return 0.8  # no info — mostly match
-        avg_required = sum(int(m) for m in mentions) / len(mentions)
-        if min_exp <= avg_required <= max_exp + 2:
-            return 1.0
-        if avg_required > max_exp + 2:
-            return 0.2  # overqualified / senior role
-        return 0.6
-
-    def _salary_match(self, job: JobDetails, filters: JobFilters) -> float:
-        """1.0 if salary_min not set or job salary exceeds it."""
-        if not filters.salary_min:
-            return 1.0
-        if job.salary_max and job.salary_max >= filters.salary_min:
-            return 1.0
-        if job.salary_min and job.salary_min >= filters.salary_min:
-            return 1.0
-        if not job.salary_min and not job.salary_max:
-            return 0.7  # unknown — partial credit
-        return 0.2
-
-    def _recency_score(self, posted: datetime | None) -> float:
-        """1.0 for today, linear decay to 0 at 30 days."""
-        if posted is None:
-            return 0.5
-        now = datetime.now(timezone.utc)
-        # Normalize posted to UTC if naive
-        if posted.tzinfo is None:
-            posted = posted.replace(tzinfo=timezone.utc)
-        age_days = (now - posted).total_seconds() / 86400
-        if age_days <= 0:
-            return 1.0
-        return max(0.0, 1.0 - age_days / 30.0)
+    profile = (await db.execute(select(UserProfile).limit(1))).scalar_one_or_none()
+    row = (await db.execute(select(SearchSettings).limit(1))).scalar_one_or_none()
+    cv_path = resolve_base_source(
+        getattr(profile, "base_cv_path", None), Path(settings.jobpilot_data_dir), "*.tex"
+    )
+    cv_text = ""
+    if cv_path is not None:
+        try:
+            cv_text = cv_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            logger.warning("Base CV %s unreadable, matching on keywords only: %s", cv_path, exc)
+    keywords = _extract_json_list(row.keywords, "include") if row is not None else []
+    return _matcher(cv_text, tuple(keywords))

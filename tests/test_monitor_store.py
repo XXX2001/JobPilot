@@ -4,18 +4,31 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import func, select
 
 from backend.database import AsyncSessionLocal
+from backend.matching import matcher as matcher_module
 from backend.matching.filters import JobFilters
 from backend.matching.matcher import JobMatcher
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails, RawJob
+from backend.models.user import SearchSettings
 from backend.monitor import store
 from backend.monitor.store import match_new, raw_to_details, upsert_discovered
 from backend.scheduler import batch_runner
 from backend.scheduler.batch_runner import BatchRunner
+
+
+@pytest.fixture(autouse=True)
+def _no_stray_cv(monkeypatch, tmp_path):
+    """Other tests leave ``templates/*.tex`` in the shared data dir: ``load_matcher``
+    would read one as the owner's CV."""
+    monkeypatch.setattr(
+        matcher_module, "settings", SimpleNamespace(jobpilot_data_dir=str(tmp_path))
+    )
 
 
 def raw(**kw) -> RawJob:
@@ -37,6 +50,15 @@ async def source(db, name: str = "gh-acme", type_: str = "greenhouse") -> JobSou
 
 async def count(db, model) -> int:
     return (await db.execute(select(func.count()).select_from(model))).scalar_one()
+
+
+POSTING = """About the role
+You will build the motion stack of our mobile manipulators.
+
+Requirements
+- Python
+- ROS
+"""
 
 
 def freeze(monkeypatch, now: datetime) -> None:
@@ -299,15 +321,15 @@ async def test_match_new_row_shape(monkeypatch):
     filters = JobFilters(keywords=["python", "ros", "rust"])
     async with AsyncSessionLocal() as db:
         src = await source(db)
-        (job,) = await upsert_discovered(
-            db, src, [raw(external_id="a", description="Python and ROS on robots")]
-        )
+        (job,) = await upsert_discovered(db, src, [raw(external_id="a", description=POSTING)])
         (match,) = await match_new(db, [job], filters, 0)
         await db.commit()
     assert match.id is not None and match.job_id == job.id
     assert (match.status, match.batch_date) == ("new", date(2026, 11, 14))
-    assert match.keyword_hits == {"python": True, "ros": True}
-    assert match.score == JobMatcher().score(raw_to_details(job), filters)
+    # covered, then by family: the title's "robotics" through the ROS keyword
+    assert match.keyword_hits == {"python": True, "ros": True, "robotics": True}
+    assert match.score == JobMatcher().score(raw_to_details(job), filters) > 0
+    assert match.score_basis == JobMatcher().score_basis
 
 
 async def test_match_new_skips_low_scores_and_any_existing_status():
@@ -323,10 +345,12 @@ async def test_match_new_skips_low_scores_and_any_existing_status():
         assert await count(db, JobMatch) == 1
 
 
-async def test_match_new_reads_keywords_from_the_title():
-    """LinkedIn and SmartRecruiters cards have no description: the title must count."""
+async def test_match_new_scores_description_less_card_provisionally():
+    """LinkedIn and SmartRecruiters cards have no description: the title is scored."""
     filters = JobFilters(keywords=["robotics", "software engineer", "python"])
     async with AsyncSessionLocal() as db:
+        # the owner's keywords are skills, also those the curated list does not know
+        db.add(SearchSettings(keywords={"include": filters.keywords}))
         src = await source(db)
         hit, miss = await upsert_discovered(
             db,
@@ -338,16 +362,27 @@ async def test_match_new_reads_keywords_from_the_title():
         )
         (match,) = await match_new(db, [hit, miss], filters, 30)
         assert match.job_id == hit.id
-        assert match.keyword_hits == {"robotics": True, "software engineer": True, "python": True}
-        # all keywords found: the full 40 points over a job with none
-        no_keywords = JobMatcher().score(raw_to_details(miss), filters)
-        assert match.score == no_keywords + 40
+        assert match.score == 70
+        assert match.keyword_hits == {"python": True, "robotics": True, "software engineer": True}
 
 
-async def test_match_new_needs_a_keyword_hit_when_keywords_are_set():
-    """Without a hit the matcher still gives 31, above the default threshold of 30."""
+async def test_match_new_skips_filtered_job():
+    """A job failing a hard filter is not stored, even with a threshold of 0."""
+    filters = JobFilters(keywords=["robotics", "python"], locations=["Paris"])
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        (job,) = await upsert_discovered(
+            db, src, [raw(external_id="a", location="Lyon", description=POSTING)]
+        )
+        assert await match_new(db, [job], filters, 0) == []
+        assert await count(db, JobMatch) == 0
+        # the same job passes once the city is not filtered on
+        assert len(await match_new(db, [job], JobFilters(keywords=["python"]), 0)) == 1
+
+
+async def test_match_new_does_not_match_a_job_without_any_of_the_keywords():
+    """What the removed keyword-hit gate was for: the score alone now keeps it out."""
     filters = JobFilters(keywords=["robotics", "python"], locations=["France", "Paris"])
-    old = datetime.now() - timedelta(days=29)
     async with AsyncSessionLocal() as db:
         src = await source(db)
         (job,) = await upsert_discovered(
@@ -358,15 +393,23 @@ async def test_match_new_needs_a_keyword_hit_when_keywords_are_set():
                     external_id="a",
                     title="Account Executive",
                     location="New York",
-                    description="Sell things.",
-                    posted_at=old,
+                    description="Sell things. " * 10,
+                    posted_at=datetime.now() - timedelta(days=29),
                 )
             ],
         )
-        assert JobMatcher().score(raw_to_details(job), filters) > 30
         assert await match_new(db, [job], filters, 30) == []
-        # no keywords configured: nothing to hit, the score alone decides
-        assert len(await match_new(db, [job], JobFilters(), 30)) == 1
+
+
+async def test_match_new_scores_with_the_matcher_it_is_given():
+    filters = JobFilters(keywords=["rust"])
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        (job,) = await upsert_discovered(db, src, [raw(external_id="a", description=POSTING)])
+        matcher = JobMatcher(cv_text="Python, ROS 2")
+        (match,) = await match_new(db, [job], filters, 0, matcher)
+    assert match.keyword_hits == {"python": True, "ros": True, "robotics": True}
+    assert match.score_basis == matcher.score_basis != JobMatcher().score_basis
 
 
 def test_raw_to_details_accepts_a_job_row_with_nulls():

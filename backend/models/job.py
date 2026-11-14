@@ -137,6 +137,9 @@ class JobMatch(Base):
     )
     score: Mapped[float] = mapped_column(Float, nullable=False)
     keyword_hits: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # What ``score`` was computed from: "{cv_hash12}:{GAZETTEER_VERSION}". NULL on rows
+    # scored before the gazetteer scorer; ``rescore_all`` recomputes a stale match.
+    score_basis: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="new", nullable=False, index=True)
     batch_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     matched_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

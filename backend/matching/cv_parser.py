@@ -46,8 +46,7 @@ def latex_to_text(cv_tex: str) -> str:
 
     Escaped characters become themselves, ``~`` and ``\\,`` a space, accent macros their
     bare letter (the gazetteer folds accents anyway) and a table's column spec nothing.
-    Commands and environments stay: the parser reads sections from them. Plain text
-    comes back unchanged.
+    Commands and environments stay: the parser reads sections from them.
 
     ponytail: the escapes a CV uses, not a LaTeX reader — ``\\textbackslash``, ``\\oe`` or
     a user macro pass through as they are. Convert with a real detex if that bites.

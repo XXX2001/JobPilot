@@ -1,0 +1,50 @@
+{
+  "data": {
+    "jobSearch": {
+      "pageInfo": {"nextCursor": null},
+      "results": [
+        {
+          "job": {
+            "key": "3f1c9a7be2d04a61",
+            "title": "Ingénieur Robotique H/F",
+            "sourceEmployerName": "Exotec",
+            "dateOnIndeed": 1794655505123,
+            "description": {
+              "html": "<p>Vous rejoignez l'équipe <b>Robotique</b>.</p><ul><li>ROS 2</li><li>C++ / Python</li></ul>"
+            },
+            "location": {"countryCode": "FR", "admin1Code": "IDF", "city": "Paris"},
+            "employer": {"name": "Exotec"},
+            "indeedApply": {"scopes": []},
+            "recruit": {"viewJobUrl": "https://jobs.lever.co/exotec/9c1d2e3f-0000-4000-8000-abcdef123456"}
+          }
+        },
+        {
+          "job": {
+            "key": "a84e02d5c7716b90",
+            "title": "Ingénieur Automatisme",
+            "sourceEmployerName": "Actemium Paris",
+            "dateOnIndeed": 1794652200000,
+            "description": {"html": "<p>Programmation d'automates Schneider et Siemens.</p>"},
+            "location": {"countryCode": "FR", "admin1Code": "IDF", "city": "Nanterre"},
+            "employer": null,
+            "indeedApply": {"scopes": ["DESKTOP", "MOBILE"]},
+            "recruit": null
+          }
+        },
+        {
+          "job": {
+            "key": "5d20b6f3e9a1c478",
+            "title": "Ingénieur Systèmes Embarqués",
+            "sourceEmployerName": "Safran",
+            "dateOnIndeed": 1794648600999,
+            "description": {"html": "<p>Développement logiciel embarqué temps réel.</p>"},
+            "location": {"countryCode": "FR", "admin1Code": "IDF", "city": "Massy"},
+            "employer": {"name": "Safran Electronics & Defense"},
+            "indeedApply": {"scopes": ["DESKTOP", "MOBILE"]},
+            "recruit": {"viewJobUrl": "https://fr.indeed.com/viewjob?jk=5d20b6f3e9a1c478"}
+          }
+        }
+      ]
+    }
+  }
+}

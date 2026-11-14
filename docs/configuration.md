@@ -131,9 +131,24 @@ Model names are configured per role via `LLM_MODEL` / `BROWSER_LLM_MODEL` (see t
 | `MONITOR_ENABLED` | `MONITOR_ENABLED` | `false` | Schedules the monitor tick. Off: nothing polls |
 | `MONITOR_TICK_SECONDS` | `MONITOR_TICK_SECONDS` | `30` | Seconds between ticks; each tick polls the sources that are due |
 | `MONITOR_MAX_CONCURRENCY` | `MONITOR_MAX_CONCURRENCY` | `8` | Sources polled at the same time within a tick |
-| `NTFY_URL` | `NTFY_URL` | empty | ntfy topic URL for new-match and source-disabled notifications. Empty: no outbound notification |
+| `NTFY_URL` | `NTFY_URL` | empty | ntfy topic URL (`https://ntfy.sh/<topic>` or a self-hosted server) for new-match and source-disabled notifications. Empty: no outbound notification; new matches still reach the web app over the WebSocket. The topic name is the only protection: anyone who knows it can read the pushes |
 
-Applied on restart. Per-source intervals are on the `job_sources` rows, not in `.env`. See [Job scraping & sources](scraping.md#the-discovery-monitor).
+Applied on restart. Per-source intervals are on the `job_sources` rows, not in `.env` (set with `interval_s` when a source is added). See [Getting started with the monitor](getting-started-monitor.md) for the owner's walkthrough and [Job scraping & sources](scraping.md#the-discovery-monitor) for the internals.
+
+These monitor limits are fixed in code, not settings: LinkedIn job pages opened in the JobPilot Chrome are capped at 5 per poll and 80 per day, with 6–18 s between pages (`backend/monitor/linkedin_detail.py`); a failing source waits at most 6 h before its next try (`backend/monitor/poller.py`).
+
+---
+
+## Files in the data directory
+
+Some behaviour is set by files in the data directory (`JOBPILOT_DATA_DIR`, default `./data`) rather than by `.env`:
+
+| File | Effect |
+|---|---|
+| `my_skills.txt` | Your skills, one per line (`name \| alias \| alias`). When it lists at least one skill, jobs are scored against it instead of the skills read from the CV. Read and replace it with `GET` / `PUT /api/settings/skills`. Example: `scripts/defaults/my_skills.example.txt`. See [Matching](matching.md#your-own-skill-files-data-directory) |
+| `skills.txt` | Optional. Replaces the bundled skill vocabulary (`backend/matching/data/skills.txt`) |
+| `jobpilot-chrome/` | The JobPilot Chrome's own profile, where your manual job-site logins are kept. Created by `POST /api/browser/open`. Never your everyday Chrome profile. Requires Google Chrome (`google-chrome` on the PATH) |
+| `.session_secret` | Per-installation key. Every POST/PUT/PATCH/DELETE under `/api` must send it, as the `jobpilot_session` cookie (the web app does this) or the `X-JobPilot-Session` header (for `curl` and scripts). Created on first start |
 
 ---
 

@@ -12,9 +12,10 @@ JobPilot is a single-user web app that discovers job listings from the sources y
 ## What it does
 
 - **First-run onboarding wizard** (`/onboarding`) — guides you through API keys, CV upload, keywords, and your first batch.
-- **Job discovery** from API sources (Adzuna) and browser-scraped boards (LinkedIn, Indeed, Glassdoor, Welcome to the Jungle, Google Jobs) plus custom "lab" URLs, via a cheap-first tiered scraper.
-- **Relevance scoring** with a weighted keyword + recency model, and a **"Why this score"** breakdown on each job's detail page.
-- **Semantic fit scoring** — parses your CV and each job into embedded skill profiles, compares them with criticality-weighted cosine similarity, and decides whether a CV even needs tailoring (skipping unnecessary LLM calls).
+- **Discovery monitor** (optional, always on) — polls company boards (Greenhouse, Ashby, SmartRecruiters) and saved Indeed and LinkedIn searches on a short timer, logged out and with no AI model, and pushes each new match to your phone through ntfy. See [Getting started with the monitor](docs/getting-started-monitor.md).
+- **Batch job discovery** from API sources (Adzuna) and browser-scraped boards (LinkedIn, Indeed, Glassdoor, Welcome to the Jungle, Google Jobs) plus custom "lab" URLs, via a cheap-first tiered scraper.
+- **Match scoring** with a curated skill list and no AI model: hard filters (location, excluded keywords and companies), then how many of the posting's skills you have (required skills count more) and whether the title fits. A **"Why this score"** breakdown is on each job's detail page.
+- **Fit check** — compares the posting's skills with your CV's using the same skill list, and decides whether a CV even needs tailoring (skipping unnecessary LLM calls).
 - **AI CV tailoring** — surgical, safety-gated LaTeX replacements compiled to PDF via Tectonic.
 - **AI cover letters** — marker-delimited paragraph editing, viewable and regenerable.
 - **On-demand batch runs** with a **dry-run preview** (scrape + match only, nothing written to the database).
@@ -24,7 +25,7 @@ JobPilot is a single-user web app that discovers job listings from the sources y
 - **Gmail integration** (optional) — connect a mailbox read-only to surface and classify application-related correspondence.
 - **Provider-agnostic AI** — generation and the browser agent each select a provider independently in `.env`; switch any role without touching code.
 
-Everything stays on your machine. The only data leaving your computer goes to the AI and job-search APIs you configure.
+Everything stays on your machine. The only data leaving your computer goes to the AI and job-search APIs you configure, and to your ntfy server if you set one for notifications.
 
 ---
 
@@ -71,7 +72,7 @@ JobPilot is one FastAPI process. The browser talks to it over REST and a single 
 ```
 
 - **Frontend → API/WS.** The SvelteKit SPA is built to static assets and served by FastAPI itself; it calls REST endpoints through one `apiFetch` helper and subscribes to a typed, discriminated-union WebSocket protocol for live updates (apply progress, sync status, new matches).
-- **Subsystems.** `scraping` discovers and dedupes jobs; `matching` ranks them and computes semantic fit; `scheduler`'s `BatchRunner` orchestrates an end-to-end run; `latex` turns a base template plus a posting into a tailored PDF; `applier` drives a Reserved→…→Recording state machine across auto/assisted/manual strategies; `gmail` ingests and classifies correspondence read-only.
+- **Subsystems.** `scraping` discovers and dedupes jobs; `monitor` polls the always-on sources and sends notifications; `matching` ranks jobs and computes skill fit; `scheduler`'s `BatchRunner` orchestrates an end-to-end run; `latex` turns a base template plus a posting into a tailored PDF; `applier` drives a Reserved→…→Recording state machine across auto/assisted/manual strategies; `gmail` ingests and classifies correspondence read-only.
 - **Provider factory.** `make_llm_client` and `make_browser_llm` each read a matching `*_PROVIDER` env var and return a provider-neutral client. Every consumer (CV editor/modifier, job analyzer, form filler, both appliers, scrapling fetcher, adaptive scraper) injects a Protocol, so the two AI roles — generation, browser agent — can use different providers at once. Job scoring uses no model.
 - **Persistence.** A single async SQLite database (WAL + enforced foreign keys), migrated by a linear Alembic chain on startup.
 
@@ -146,6 +147,7 @@ The **Adzuna** job-search source is optional but recommended (`ADZUNA_APP_ID` / 
 Start here for whole-system context, then dive into the subsystem you care about.
 
 - **[User guide](docs/user-guide.md)** — an end-to-end walkthrough of every feature, from onboarding to Gmail.
+- **[Getting started with the monitor](docs/getting-started-monitor.md)** — from a fresh clone to your first job notification: settings, ntfy, the JobPilot Chrome, your skill file, adding sources, troubleshooting, risks.
 - **[Architecture](docs/architecture.md)** — system overview, component diagram, request lifecycles, database schema, and the [credentials & encryption](docs/architecture.md#credentials--encryption) reference.
 - **[Custom CV templates](docs/custom-templates.md)** — how to bring your own LaTeX CV template.
 - **[Contributing](CONTRIBUTING.md)** — dev setup and quality gates.
@@ -173,13 +175,15 @@ Start here for whole-system context, then dive into the subsystem you care about
 backend/
   api/         FastAPI routers, dependency injection, WebSocket (ConnectionManager + ws_models)
   applier/     Application engine: auto / assisted / manual strategies, Statechart FSM, daily-limit guard, recorder
+  browser/     The JobPilot Chrome: one dedicated Chrome profile, attached to over CDP
   gmail/       Read-only Gmail OAuth, sync worker, heuristic classifier
   latex/       CV & cover-letter pipelines → Tectonic-compiled PDFs
   llm/         Provider-agnostic LLM layer: base Protocols, factory, OpenAI-compat/Anthropic adapters
   matching/    Gazetteer scoring + fit assessment (skills.txt, scorer, CVParser, FitEngine)
   models/      SQLAlchemy 2.0 entities
+  monitor/     Discovery monitor: poller, job store, ntfy/WebSocket notifications, LinkedIn page reader
   scheduler/   BatchRunner — on-demand end-to-end batch pipeline
-  scraping/    Job sources: orchestrator, tiered scraper, session manager, dedup, source health
+  scraping/    Job sources: monitor adapters (sources/), batch orchestrator, tiered scraper, session manager, dedup
   config.py    Settings + provider-aware startup validation
   database.py  Async aiosqlite engine, WAL/FK PRAGMAs, init_db → alembic upgrade head
   main.py      App factory, lifespan singletons, static SPA mount, health, exception handlers
@@ -201,7 +205,8 @@ start.py       App launcher
 - **Frontend:** SvelteKit 2 + Svelte 5, `adapter-static`, TypeScript, Vite.
 - **AI:** provider-agnostic via `backend/llm/` — any OpenAI-compatible endpoint (incl. DeepSeek, Ollama, LM Studio, vLLM) and Anthropic; browser automation via `browser-use` + Playwright/Chromium.
 - **Documents:** LaTeX compiled to PDF by Tectonic.
-- **Scraping:** Scrapling (Tier 1 HTTP fetch) + browser-use agent (Tier 2), Adzuna API, optional SerpAPI.
+- **Scraping:** monitor adapters over plain HTTP (httpx, no model); batch mode uses Scrapling (Tier 1 HTTP fetch) + browser-use agent (Tier 2), Adzuna API, optional SerpAPI.
+- **Notifications:** ntfy (optional) and the app's WebSocket.
 - **Runtime:** single process, SQLite (WAL), Docker (four-stage image) + docker-compose.
 
 ---
@@ -242,6 +247,21 @@ If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope Process Bypass`
 4. Click **Refresh queue** to run your first job-discovery batch
 
 For a full walkthrough of every feature, see the [user guide](docs/user-guide.md).
+
+---
+
+## Discovery monitor (always-on mode)
+
+JobPilot can find jobs in two ways:
+
+- **Batch mode** (the original way): you click **Refresh queue**, JobPilot scrapes the enabled boards once, partly with an AI model, and fills the queue.
+- **Monitor mode** (new, off by default): JobPilot polls its sources by itself, every minute for company boards and every few minutes for Indeed and LinkedIn searches. It uses plain web requests, logged out, with no AI model. Each new job is scored, and a good match is pushed to your phone through [ntfy](https://ntfy.sh) and shown live on the Today page.
+
+To turn the monitor on, set `MONITOR_ENABLED=true` (and `NTFY_URL` for phone pushes) in `.env` and restart. Then add sources: import a list of company boards with `scripts/import_watchlist.py`, or add a LinkedIn or Indeed search through the API. You can see and pause each source in **Settings → Monitor**.
+
+For LinkedIn, the search is polled logged out. Each matched job is then opened once in a separate **JobPilot Chrome** (its own profile in `data/jobpilot-chrome`, never your everyday Chrome) to read the full description. You log into LinkedIn there by hand, once. This needs Google Chrome on Linux and a local install; the Docker image has no Chrome.
+
+The step-by-step guide, including the risks of automated access to LinkedIn, is **[Getting started with the monitor](docs/getting-started-monitor.md)**.
 
 ---
 
@@ -312,7 +332,7 @@ Then restart JobPilot.
 
 ## Advanced configuration
 
-The settings below are the most common; the [Configuration reference](docs/configuration.md) documents every key (env-var name, default, required-vs-optional) including all three LLM roles.
+The settings below are the most common; the [Configuration reference](docs/configuration.md) documents every key (env-var name, default, required-vs-optional) including both LLM roles and the monitor settings.
 
 <details>
 <summary><strong>Common .env settings</strong></summary>
@@ -346,6 +366,10 @@ LLM_TIMEOUT_SECONDS=60
 # Feature flags
 SCRAPLING_ENABLED=true
 APPLY_TIER1_ENABLED=true
+
+# Discovery monitor (off by default; see docs/getting-started-monitor.md)
+MONITOR_ENABLED=false
+NTFY_URL=
 ```
 
 </details>

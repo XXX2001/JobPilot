@@ -18,7 +18,15 @@ import httpx
 from markdownify import markdownify
 
 from backend.models.schemas import RawJob
-from backend.scraping.sources.base import ADAPTERS, PollResult, SourceError, classify_response
+from backend.scraping.sources.base import (
+    ADAPTERS,
+    ITEM_ERRORS,
+    PollResult,
+    SourceError,
+    classify_response,
+    send_logged_out,
+    skip_item,
+)
 from backend.security.sanitizer import sanitize_for_prompt, sanitize_url
 from backend.utils.time import naive_utc_now
 
@@ -97,6 +105,16 @@ def _is_external(url: str) -> bool:
     return bool(host) and host != "indeed.com" and not host.endswith(".indeed.com")
 
 
+def _from_epoch_ms(ms: object) -> datetime | None:
+    """Epoch ms -> naive UTC; integer timedelta keeps the milliseconds exact."""
+    if not isinstance(ms, int):
+        return None
+    try:
+        return datetime(1970, 1, 1) + timedelta(milliseconds=ms)
+    except OverflowError:  # a timestamp outside years 1..9999
+        return None
+
+
 async def poll(
     client: httpx.AsyncClient,
     cfg: dict,
@@ -116,10 +134,7 @@ async def poll(
         limit=LIMIT,
         hours=_window_hours(cfg, last_scraped_at),
     )
-    try:
-        r = await client.post(URL, headers=headers, json={"query": query})
-    except httpx.HTTPError as exc:
-        raise SourceError("transient", f"{type(exc).__name__}: {exc}") from exc
+    r = await send_logged_out(client, "POST", URL, headers=headers, json={"query": query})
 
     classify_response(r)  # 401 (app key revoked) -> auth
     try:
@@ -138,52 +153,49 @@ async def poll(
         item = result.get("job") if isinstance(result, dict) else None
         if not isinstance(item, dict) or not item.get("key") or not item.get("title"):
             continue
-        url = f"{base}/viewjob?jk={item['key']}"
-        external = sanitize_url(str((item.get("recruit") or {}).get("viewJobUrl") or ""))
-        if not _is_external(external):
-            external = ""
-        scopes = (item.get("indeedApply") or {}).get("scopes")
-        ms = item.get("dateOnIndeed")
-        loc = item.get("location") or {}
-        description = markdownify(
-            str((item.get("description") or {}).get("html") or ""),
-            heading_style="ATX",
-            strip=["img"],
-        ).strip()
-        jobs.append(
-            RawJob(
-                external_id=f"in-{item['key']}",
-                title=sanitize_for_prompt(str(item["title"]).strip(), 300, "title"),
-                company=sanitize_for_prompt(
-                    str(
-                        (item.get("employer") or {}).get("name")
-                        or item.get("sourceEmployerName")
-                        or ""
+        try:
+            url = f"{base}/viewjob?jk={item['key']}"
+            external = sanitize_url(str((item.get("recruit") or {}).get("viewJobUrl") or ""))
+            if not _is_external(external):
+                external = ""
+            scopes = (item.get("indeedApply") or {}).get("scopes")
+            loc = item.get("location") or {}
+            description = markdownify(
+                str((item.get("description") or {}).get("html") or ""),
+                heading_style="ATX",
+                strip=["img"],
+            ).strip()
+            jobs.append(
+                RawJob(
+                    external_id=f"in-{item['key']}",
+                    title=sanitize_for_prompt(str(item["title"]).strip(), 300, "title"),
+                    company=sanitize_for_prompt(
+                        str(
+                            (item.get("employer") or {}).get("name")
+                            or item.get("sourceEmployerName")
+                            or ""
+                        ),
+                        200,
+                        "company",
                     ),
-                    200,
-                    "company",
-                ),
-                location=sanitize_for_prompt(
-                    ", ".join(
-                        str(loc[k]) for k in ("city", "admin1Code", "countryCode") if loc.get(k)
+                    location=sanitize_for_prompt(
+                        ", ".join(
+                            str(loc[k]) for k in ("city", "admin1Code", "countryCode") if loc.get(k)
+                        ),
+                        200,
+                        "location",
                     ),
-                    200,
-                    "location",
-                ),
-                description=sanitize_for_prompt(description, MAX_DESCRIPTION, "description"),
-                url=url,
-                apply_url=external or url,
-                apply_method="indeed_apply" if scopes and not external else "external",
-                # epoch ms -> naive UTC; integer timedelta keeps the milliseconds exact
-                posted_at=(
-                    datetime(1970, 1, 1) + timedelta(milliseconds=ms)
-                    if isinstance(ms, int)
-                    else None
-                ),
-                source_name="indeed",
-                country=country,
+                    description=sanitize_for_prompt(description, MAX_DESCRIPTION, "description"),
+                    url=url,
+                    apply_url=external or url,
+                    apply_method="indeed_apply" if scopes and not external else "external",
+                    posted_at=_from_epoch_ms(item.get("dateOnIndeed")),
+                    source_name="indeed",
+                    country=country,
+                )
             )
-        )
+        except ITEM_ERRORS as exc:
+            skip_item("indeed", exc)
     return PollResult(jobs=jobs, truncated=len(results) >= LIMIT)
 
 

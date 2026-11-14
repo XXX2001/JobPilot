@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -11,7 +12,13 @@ import httpx
 
 from backend.models.schemas import RawJob
 
+logger = logging.getLogger(__name__)
+
 ErrorKind = Literal["blocked", "auth", "transient"]
+
+# What one malformed item can raise while it is turned into a RawJob (pydantic's
+# ValidationError is a ValueError). Adapters skip that item, never the whole poll.
+ITEM_ERRORS = (AttributeError, TypeError, ValueError, OverflowError)
 
 
 @dataclass
@@ -36,6 +43,27 @@ PollFn = Callable[[httpx.AsyncClient, dict, str | None, datetime | None], Awaita
 
 # Keyed by JobSource.config["adapter"]; each adapter module registers itself.
 ADAPTERS: dict[str, PollFn] = {}
+
+
+async def send_logged_out(
+    client: httpx.AsyncClient, method: str, url: str, **kwargs
+) -> httpx.Response:
+    """Send one request with no cookie and no credentials, whatever the client holds.
+
+    Every adapter goes through here (spec D7: logged out always). Redirects are
+    not followed: httpx would add the cookie jar back on the next hop.
+    """
+    request = client.build_request(method, url, **kwargs)
+    request.headers.pop("cookie", None)  # the shared client's cookie jar
+    request.headers.pop("authorization", None)  # a default header on the client
+    try:
+        return await client.send(request, auth=None, follow_redirects=False)
+    except httpx.HTTPError as exc:
+        raise SourceError("transient", f"{type(exc).__name__}: {exc}") from exc
+
+
+def skip_item(adapter: str, exc: Exception) -> None:
+    logger.debug("%s: skipping malformed item: %s: %s", adapter, type(exc).__name__, exc)
 
 
 def classify_response(r: httpx.Response) -> None:

@@ -112,3 +112,16 @@ async def test_orchestrator_age_filter_accepts_naive_posted_at():
         max_age_days=7,
     )
     assert sorted(j.title for j in kept) == ["Job 1", "Job 3", "Job 4"]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0001-01-01T00:00:00+05:00",  # before year 1 once in UTC
+        "9999-12-31T23:59:59-05:00",  # after year 9999 once in UTC
+        "99999999999 days ago",  # more than a timedelta holds
+        "999999 days ago",  # lands before year 1
+    ],
+)
+def test_out_of_range_dates_return_none(value):
+    assert _parse_posted_date(value) is None

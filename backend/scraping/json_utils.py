@@ -49,7 +49,10 @@ def _parse_posted_date(value: Any) -> datetime | None:
         pass
     else:
         if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            try:
+                parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+            except OverflowError:  # year 1 or 9999 pushed out of range by the offset
+                return None
         return parsed
 
     for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%d %B %Y"):
@@ -67,7 +70,10 @@ def _parse_posted_date(value: Any) -> datetime | None:
     for pattern, step in _RELATIVE_RES:
         m = pattern.search(s)
         if m:
-            return now - int(m.group(1)) * step
+            try:
+                return now - int(m.group(1)) * step
+            except OverflowError:  # an absurd count
+                return None
 
     return None
 

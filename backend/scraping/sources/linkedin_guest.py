@@ -16,7 +16,14 @@ from lxml import html
 
 from backend.models.schemas import RawJob
 from backend.scraping.json_utils import _parse_posted_date
-from backend.scraping.sources.base import ADAPTERS, PollResult, SourceError
+from backend.scraping.sources.base import (
+    ADAPTERS,
+    ITEM_ERRORS,
+    PollResult,
+    SourceError,
+    send_logged_out,
+    skip_item,
+)
 from backend.security.sanitizer import sanitize_for_prompt, sanitize_url
 from backend.utils.time import naive_utc_now
 
@@ -54,7 +61,9 @@ async def poll(
     etag: str | None,
     last_scraped_at: datetime | None,
 ) -> PollResult:
-    request = client.build_request(
+    # Redirects are not followed: the only one this endpoint sends is the authwall.
+    r = await send_logged_out(
+        client,
         "GET",
         URL,
         params={
@@ -66,13 +75,6 @@ async def poll(
         },
         headers={"User-Agent": USER_AGENT},
     )
-    # Always logged out: drop whatever the shared client's cookie jar added.
-    request.headers.pop("cookie", None)
-    try:
-        # Redirects are not followed: the only one this endpoint sends is the authwall.
-        r = await client.send(request, follow_redirects=False)
-    except httpx.HTTPError as exc:
-        raise SourceError("transient", f"{type(exc).__name__}: {exc}") from exc
 
     status = r.status_code
     if status in (403, 429, 999):
@@ -101,25 +103,31 @@ async def poll(
         if not job_id.isdigit() or not title:
             continue
         href = next(iter(card.xpath(".//a[contains(@class, 'base-card__full-link')]/@href")), "")
-        # The query string is only tracking (position, refId, trackingId).
-        url = sanitize_url(urlsplit(href)._replace(query="", fragment="").geturl())
+        try:
+            # The query string is only tracking (position, refId, trackingId).
+            url = sanitize_url(urlsplit(href)._replace(query="", fragment="").geturl())
+        except ValueError:  # e.g. an unclosed IPv6 bracket: the ID still gives the URL
+            url = ""
         url = url or f"https://www.linkedin.com/jobs/view/{job_id}"
-        jobs.append(
-            RawJob(
-                external_id=f"li-{job_id}",
-                title=sanitize_for_prompt(title, 300, "title"),
-                company=sanitize_for_prompt(_text(card, ".//h4"), 200, "company"),
-                location=sanitize_for_prompt(
-                    _text(card, ".//*[contains(@class, 'job-search-card__location')]"),
-                    200,
-                    "location",
-                ),
-                url=url,
-                apply_url=url,
-                posted_at=_posted_at(card),
-                source_name="linkedin_guest",
+        try:
+            jobs.append(
+                RawJob(
+                    external_id=f"li-{job_id}",
+                    title=sanitize_for_prompt(title, 300, "title"),
+                    company=sanitize_for_prompt(_text(card, ".//h4"), 200, "company"),
+                    location=sanitize_for_prompt(
+                        _text(card, ".//*[contains(@class, 'job-search-card__location')]"),
+                        200,
+                        "location",
+                    ),
+                    url=url,
+                    apply_url=url,
+                    posted_at=_posted_at(card),
+                    source_name="linkedin_guest",
+                )
             )
-        )
+        except ITEM_ERRORS as exc:
+            skip_item("linkedin_guest", exc)
     return PollResult(jobs=jobs)
 
 

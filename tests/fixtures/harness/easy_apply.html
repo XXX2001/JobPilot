@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Easy Apply</title>
+<dialog open aria-label="Job application">
+  <form id="contact">
+    <h1>Contact information</h1>
+    <p><label>Full Name <input id="full_name" name="full_name" required></label></p>
+    <p><label>Email <input id="email" name="email" type="email" required></label></p>
+    <p><label>Phone <input id="phone" name="phone" type="tel"></label></p>
+    <button type="submit">Next</button>
+  </form>
+  <section id="questions" hidden>
+    <h1>Additional questions</h1>
+    <p><label>Work preference <select id="preference">
+      <option value="">Choose</option><option value="remote">Remote</option>
+      <option value="office">Office</option>
+    </select></label></p>
+    <p><label>Why are you interested in this role? <textarea id="motivation"></textarea></label></p>
+    <div role="button" tabindex="0" id="submit" onclick="window.submitClicks++">Submit application</div>
+  </section>
+</dialog>
+<script>
+  window.submitClicks = 0;
+  document.getElementById('contact').addEventListener('submit', event => {
+    event.preventDefault();
+    event.target.hidden = true;
+    document.getElementById('questions').hidden = false;
+  });
+</script>
+</html>

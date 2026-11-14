@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Sign in to apply</title>
+<h1>Sign in to continue your application</h1>
+<form onsubmit="event.preventDefault()">
+  <p><label>Email <input id="email" type="email" autocomplete="username"></label></p>
+  <p><label>Password <input id="password" type="password" autocomplete="current-password"></label></p>
+  <input type="hidden" name="csrf" value="fixture-token">
+  <button type="submit">Sign in</button>
+</form>
+</html>

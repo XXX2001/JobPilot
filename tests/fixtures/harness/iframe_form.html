@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Application form</title>
+<h2>Embedded application form</h2>
+<form action="received.html">
+  <p><label>First Name <input id="first_name" name="first_name" required></label></p>
+  <p><label>Email <input id="email" name="email" type="email" required></label></p>
+  <p><label>Resume <input id="resume" name="resume" type="file" accept=".pdf" hidden></label></p>
+  <button type="button" id="check" onclick="document.getElementById('status').textContent = 'Checked'">Check details</button>
+  <button type="submit">Submit Application</button>
+  <p id="status"></p>
+</form>
+</html>

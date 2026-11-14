@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Greenhouse application</title>
+<h1>Apply for Software Engineer</h1>
+<form action="received.html">
+  <p><label>First Name <input id="first_name" name="first_name" required></label></p>
+  <p><label>Last Name <input id="last_name" name="last_name" required></label></p>
+  <p><label>Email <input id="email" name="email" type="email" required></label></p>
+  <p><label>Phone <input id="phone" name="phone" type="tel"></label></p>
+  <p><label>Location <input id="location" name="location"></label></p>
+  <p><label for="resume">Resume / CV</label>
+    <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" style="display:none">
+    <button id="attach" type="button" onclick="document.getElementById('resume').click()">Attach</button>
+  </p>
+  <p><label>Work location <select id="work_location" name="work_location">
+    <option value="">Choose a location</option>
+    <option value="remote">Remote</option>
+    <option value="paris">Paris</option>
+  </select></label></p>
+  <button id="submit" type="submit" onclick="window.submitClicks++">Submit Application</button>
+</form>
+<script>
+  window.submitClicks = 0;
+  window.replaceFirstName = () => {
+    const field = document.getElementById('first_name');
+    field.replaceWith(field.cloneNode(true));
+  };
+</script>
+</html>

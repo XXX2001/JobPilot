@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Application location</title>
+<label for="city">City</label>
+<input id="city" role="combobox" aria-controls="cities" aria-expanded="false" autocomplete="off">
+<div id="cities" role="listbox" hidden>
+  <div role="option" tabindex="0" data-value="Paris">Paris</div>
+  <div role="option" tabindex="0" data-value="Lyon">Lyon</div>
+</div>
+<script>
+  const city = document.getElementById('city');
+  const cities = document.getElementById('cities');
+  city.addEventListener('input', () => setTimeout(() => {
+    cities.hidden = false;
+    city.setAttribute('aria-expanded', 'true');
+  }, 80));
+  cities.addEventListener('click', event => {
+    if (!event.target.dataset.value) return;
+    city.value = event.target.dataset.value;
+    cities.hidden = true;
+    city.setAttribute('aria-expanded', 'false');
+  });
+</script>
+</html>

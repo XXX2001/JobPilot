@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Shadow application</title>
+<div id="application"></div>
+<script>
+  document.getElementById('application').attachShadow({mode: 'open'}).innerHTML = `
+    <h1>Shadow application form</h1>
+    <p><label id="name_label" for="first_name">First Name</label>
+      <input id="first_name" aria-labelledby="name_label"></p>
+    <p><label>Email <input id="email" type="email"></label></p>
+    <p><label>Resume <input id="resume" name="resume" type="file" accept=".pdf" hidden></label></p>
+    <button type="button" onclick="this.textContent = 'Checked'">Check details</button>
+    <button type="submit">Submit Application</button>`;
+</script>
+</html>

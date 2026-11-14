@@ -884,49 +884,15 @@ async def get_credentials(db: DBSession):
 async def save_credential(
     site_name: str, body: CredentialUpdate, db: DBSession
 ) -> CredentialSaveResponse:
-    """Gone: site passwords are no longer stored. Log in by hand in the JobPilot browser."""
+    """Gone: site passwords are no longer stored. Log in by hand in the JobPilot browser.
+
+    ponytail: the encrypted_* columns stay until a migration drops them.
+    """
     raise HTTPException(
         status_code=410,
         detail="Site passwords are no longer stored. Open the JobPilot browser "
         "(Settings → Monitor) and log in there once.",
     )
-    # ponytail: the storage code below and the encrypted_* columns are dead; drop them
-    # with a migration when the credentials tab is removed for good.
-    if site_name not in SITE_CONFIGS:
-        raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
-    if not SITE_CONFIGS[site_name].get("requires_login", False):
-        raise HTTPException(status_code=400, detail=f"Site {site_name} does not require login.")
-    cred_key = settings.CREDENTIAL_KEY.get_secret_value()
-    if not cred_key:
-        raise HTTPException(
-            status_code=400,
-            detail="CREDENTIAL_KEY is not set. Add a Fernet key to your .env file.",
-        )
-
-    from cryptography.fernet import Fernet
-
-    f = Fernet(cred_key.encode())
-    enc_email = f.encrypt(body.email.encode()).decode()
-    enc_pass = f.encrypt(body.password.encode()).decode()
-
-    stmt = select(SiteCredential).where(SiteCredential.site_name == site_name)
-    result = await db.execute(stmt)
-    row = result.scalar_one_or_none()
-
-    if row is None:
-        row = SiteCredential(
-            site_name=site_name,
-            encrypted_email=enc_email,
-            encrypted_password=enc_pass,
-        )
-        db.add(row)
-    else:
-        row.encrypted_email = enc_email
-        row.encrypted_password = enc_pass
-        row.updated_at = utc_now()
-
-    await db.commit()
-    return CredentialSaveResponse(site_name=site_name, saved=True)
 
 
 @router.delete("/credentials/{site_name}/session", response_model=SessionClearResponse)

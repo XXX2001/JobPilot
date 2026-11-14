@@ -1,10 +1,10 @@
 """Tier 1 apply: Playwright direct form filler + single LLM call.
 
 Architecture mirrors ScraplingFetcher (scraping Tier 1):
-  1. preflight_check_url()  — CAPTCHA detection (reuses captcha_handler)
-  2. launch_persistent_context() — load saved browser profile (cookies/auth)
-  3. page.goto(apply_url)
-  4. _clean_form_html()     — strip page to form skeleton
+  1. open_context()         — attach to the JobPilot Chrome, or launch a site profile
+  2. page.goto(apply_url)
+  3. check_and_handle_captcha() — pause for the owner if a challenge shows
+  4. _form_content()        — DOM field inventory (markdown skeleton as fallback)
   5. _build_fill_prompt()   — build single LLM prompt
   6. LLM call               — returns JSON field mapping
   7. page.fill() / page.set_input_files()

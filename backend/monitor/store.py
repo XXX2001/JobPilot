@@ -186,21 +186,22 @@ def _hits(result: ScoreResult) -> dict[str, bool]:
     return dict.fromkeys(result.covered + result.partial, True)
 
 
-async def rescore_all(db: AsyncSession, matcher: JobMatcher, filters: JobFilters) -> int:
+async def rescore_all(
+    db: AsyncSession, matcher: JobMatcher, filters: JobFilters, *, force: bool = False
+) -> int:
     """Recompute the ``new`` matches scored on another CV, keywords or gazetteer.
+
+    ``score_basis`` does not cover the hard filters (locations, exclusions, remote
+    only): ``force`` rescores every ``new`` match, for the caller that just changed them.
 
     Returns how many were rescored. A match the filters now reject stays, at 0.
     """
-    rows = (
-        await db.execute(
-            select(JobMatch, Job)
-            .join(Job, Job.id == JobMatch.job_id)
-            .where(
-                JobMatch.status == "new",
-                JobMatch.score_basis.is_distinct_from(matcher.score_basis),
-            )
-        )
-    ).all()
+    query = select(JobMatch, Job).join(Job, Job.id == JobMatch.job_id).where(
+        JobMatch.status == "new"
+    )
+    if not force:
+        query = query.where(JobMatch.score_basis.is_distinct_from(matcher.score_basis))
+    rows = (await db.execute(query)).all()
     for match, job in rows:
         result = matcher.explain(raw_to_details(job), filters)
         match.score = result.score

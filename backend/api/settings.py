@@ -21,6 +21,7 @@ from backend.config import DATA_DIR, PROJECT_ROOT, settings
 from backend.models.base import Base
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
+from backend.monitor.poller import rescore_stale
 from backend.scraping.site_prompts import SITE_CONFIGS
 from backend.security.sanitizer import sanitize_url
 from backend.utils.time import utc_now
@@ -29,6 +30,19 @@ _T = TypeVar("_T", bound=Base)
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _rescore(db: AsyncSession, *, force: bool = False) -> None:
+    """Stored scores follow the CV and the search settings just saved.
+
+    The save is already committed: a rescoring failure is logged, not returned, and
+    the next startup catches up.
+    """
+    try:
+        await rescore_stale(db, force=force)
+    except Exception:
+        logger.exception("Rescoring stored matches failed after a settings save")
+        await db.rollback()
 
 
 async def _upsert_singleton(
@@ -264,7 +278,10 @@ async def update_profile(body: ProfileUpdate, db: DBSession):
         defaults={"full_name": body.full_name or "", "email": body.email or ""},
     )
     logger.info("Profile updated for user id=1")
-    return ProfileOut.model_validate(profile)
+    out = ProfileOut.model_validate(profile)
+    if "base_cv_path" in body.model_fields_set:
+        await _rescore(db)
+    return out
 
 
 @router.get("/search", response_model=SearchSettingsOut)
@@ -302,7 +319,10 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
         },
     )
     logger.info("Search settings updated")
-    return SearchSettingsOut.model_validate(ss)
+    out = SearchSettingsOut.model_validate(ss)
+    # The hard filters are not in ``score_basis``: rescore whatever the basis.
+    await _rescore(db, force=True)
+    return out
 
 
 @router.get("/sources", response_model=SourcesOut)
@@ -642,6 +662,7 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
     else:
         dest_tmp.rename(dest)
 
+    await _rescore(db)
     logger.info("CV uploaded: path=%s size=%d", dest, len(data))
 
     return CvUploadResponse(

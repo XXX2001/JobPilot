@@ -21,10 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.database import AsyncSessionLocal
 from backend.matching.filters import JobFilters
+from backend.matching.matcher import load_matcher
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.user import SearchSettings
 from backend.monitor.notify import notify_new_match, notify_text
-from backend.monitor.store import match_new, upsert_discovered
+from backend.monitor.store import match_new, rescore_all, upsert_discovered
 from backend.scheduler.batch_runner import _extract_json_list
 from backend.scraping.sources import ADAPTERS, SourceError
 from backend.utils.time import naive_utc_now
@@ -101,6 +102,21 @@ async def _load_filters(db: AsyncSession) -> JobFilters:
         excluded_companies=_extract_json_list(row.excluded_companies, "items"),
         min_score=float(row.min_match_score),
     )
+
+
+async def rescore_stale(db: AsyncSession, *, force: bool = False) -> int:
+    """Bring the stored ``new`` matches up to the owner's current CV and search settings.
+
+    Called at startup and after a CV or settings save. ``force`` for a save that may
+    have changed the hard filters (see :func:`rescore_all`). Commits on ``db``.
+    """
+    async with _write_lock():
+        matcher = await load_matcher(db)
+        count = await rescore_all(db, matcher, await _load_filters(db), force=force)
+        await db.commit()
+    if count:
+        logger.info("Rescored %d stored match(es)", count)
+    return count
 
 
 async def poll_source(

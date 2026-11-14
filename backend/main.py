@@ -95,6 +95,16 @@ async def lifespan(app: FastAPI):
         raise
     logger.info("Database initialized")
 
+    # Matches scored on another CV, keywords or skill list — or by the scorer before
+    # the gazetteer (NULL basis) — are stale. Non-fatal: the old scores still rank.
+    try:
+        from backend.monitor.poller import rescore_stale
+
+        async with database.AsyncSessionLocal() as session:
+            await rescore_stale(session)
+    except Exception:
+        logger.exception("Rescoring stored matches failed (non-fatal)")
+
     # ── Validate provider configuration (fail-fast, provider-aware) ───────
     # Only the credentials the *chosen* providers need are required, so a
     # local-model setup never demands a Google key. See Settings.validate_runtime_config.

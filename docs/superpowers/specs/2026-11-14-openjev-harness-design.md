@@ -271,3 +271,33 @@ how the shared review helper is factored out of `form_filler.py` (behaviour must
 - Thresholds 0.6 / 0.8 / 0.3 / 0.5 and the slot list.
 - Claude default model `sonnet` for generation (speed and quota); Codex uses its configured default.
 - Tier 2 disabled when no browser LLM key exists, rather than writing a CLI adapter for browser-use.
+
+## Decisions after the first live run (2026-11-15, assistant's calls)
+
+Live run of the loop with OpenJev-4B on the fixtures (scratchpad `live/live_fixtures.py`): fields were
+filled correctly (slot p 0.73–0.95), but after the fields were done the model wandered (re-toggling a
+checkbox, "Open <field>" clicks on filled fields) instead of choosing DONE, and on a two-step form it
+named "Next" as `submit_target` with p 0.97. The Task 4 critic also clicked unrecognised JS-only final
+buttons ("Je postule", "Bewerbung einreichen", "Confirm", icon-only) through the old guard.
+
+15. **Default-deny clicks in a form context.** Form context = `page_kind` application_form (p ≥ 0.5),
+    or anything typed or attached in this run, or the page offers a `fill` action. In a form context
+    a CLICK executes only when the target is one of:
+    - an advance control: its **full** accessible name (not the 100-character clip) matches
+      `ADVANCE_PATTERN` and no strict submit word;
+    - a non-submitting control: role checkbox, radio, option, combobox, switch, tab, menuitem(radio),
+      gridcell (date pickers), and only if not clicked before in this run for checkbox/switch;
+    - an "Open <field>" click on a field not yet filled or excluded;
+    - an upload control (attach/upload/resume/CV/cover letter), answered through the file-chooser handler;
+    - a consent/dismiss control (accept|agree|ok|got it|close|dismiss|accepter|j'accepte|fermer|
+      tout accepter|alle akzeptieren|schließen).
+    A strict submit word in the full name → stop at `submit_point` with that action. Any other click
+    → stop with `stop="ready"` and `submit_action = submit_for_done(...)`. `submit_target` alone never
+    stops an advance control (the model cannot tell "Next" from the final submit).
+16. **Form complete.** On a form page, when no `fill` target is left and every matching upload is done,
+    a DONE, a WAIT, or three unchanged steps end the run with `stop="ready"` instead of `HarnessStuck`.
+17. **Outside a form context** (job description, cookie wall, landing page) clicks are allowed
+    except strict submit words.
+18. **Clicks are recorded.** `HarnessResult.clicked` counts executed clicks; every `HarnessBlocked` /
+    `HarnessStuck` carries `.result`. The runner falls through to other tiers only when no click on a
+    submits=True control happened after anything was typed.

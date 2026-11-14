@@ -37,6 +37,73 @@ def test_short_names_ignore_lowercase_elisions_and_longer_words(g):
     assert g.skills("Cœur de métier : CDI, Rome, Gold") == set()
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Go-to-Market Manager",
+        "Head of Go to Market",
+        "Go Live support and Go-Live planning",
+        "Go/No-Go decision, a No Go",
+        "Go deep on customer problems",
+        "C-level stakeholders and the C-suite",
+        "Series C startup, Série C",
+        "G&C engineer, C&I segment",
+        "Objective-C",
+        "Catégorie C",
+        "Niveau C1; C. Martin",
+        "R. Dupont",
+        "note R",
+        "R-squared",
+    ],
+)
+def test_business_jargon_is_not_a_language(g, text):  # real strings from scraped postings
+    assert g.skills(text) == set()
+
+
+def test_short_names_still_match_next_to_punctuation(g):
+    assert g.skills("Backend Engineer (Go)") == {"go"}
+    assert g.skills("Go, Rust; embedded C. R and Python.") == {"go", "rust", "c", "r", "python"}
+    assert g.skills("Langages : C, Go") == {"c", "go"}
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Construire et maintenir une vue unifiée", set()),
+        ("une vue d'ensemble, en vue de, point de vue", set()),
+        ("Develop a ROS node in C++", {"ros", "c++"}),
+        ("multi-node training clusters, multi-GPU/multi-node", set()),
+        ("You excel at communication", set()),
+        ("Tableau de bord, tableaux de bord", set()),
+        ("Spring 2026 internship", set()),
+        ("Shell is an energy company", set()),
+        ("50 mL", set()),
+        ("at the helm of a team", set()),
+        ("Elk kwartaal", set()),
+        ("Vue.js, vuejs, Node.js, NodeJS", {"vue.js", "node.js"}),
+        (
+            "Excel, Tableau, Spring, Helm, ELK, ML",
+            set("excel tableau helm elk".split()) | {"spring boot", "machine learning"},
+        ),
+        ("shell scripting, scripts shell", {"bash"}),
+    ],
+)
+def test_ordinary_words_are_not_skills(g, text, expected):
+    assert g.skills(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "skill"),
+    [
+        ("INGENIEUR ROBOTICIEN", "robotics"),
+        ("Ingénieur automaticien", "plc"),
+        ("Technicien automatisme", "plc"),
+    ],
+)
+def test_french_profession_names(g, text, skill):
+    assert g.skills(text) == {skill}
+
+
 def test_c_family_tokens_are_distinct(g):
     assert g.skills("C/C++ et C# sur cible embarquée") == {"c", "c++", "c#"}
     assert g.skills("Développement .NET") == {"c#"}
@@ -145,7 +212,22 @@ def test_owner_keyword_that_is_already_an_alias_keeps_its_canonical():
     assert g.skills("ROS2 on k8s") == {"ros 2", "kubernetes"}
     # "go" is the case-sensitive alias of Go: the keyword must not loosen it.
     assert g.skills("let's go") == set()
-    assert g.skills("poste d'ingenieur robotique") == {"ingénieur robotique"}
+    # A job-title keyword that contains a curated skill is not a skill of its own.
+    assert g.skills("poste d'ingenieur robotique") == {"robotics"}
+
+
+def test_owner_keyword_does_not_shadow_the_curated_skill_inside_it():
+    plain = Gazetteer.load()
+    g = Gazetteer.load(extra_terms=["Ingénieur Robotique", "Python Developer", "Soudure TIG"])
+    for text in ("Ingénieur robotique. Python, C++", "Python Developer", "Senior Python developer"):
+        assert g.skills(text) == plain.skills(text), text
+    assert g.skills("Python developer, soudure TIG") == {"python", "soudure tig"}
+
+
+def test_owner_keywords_do_not_shadow_each_other():
+    g = Gazetteer.load(extra_terms=["soudure", "soudure TIG"])
+    assert g.skills("soudure TIG") == {"soudure tig"}
+    assert g.skills("soudure MIG") == {"soudure"}
 
 
 def test_owner_keyword_longer_than_any_curated_alias():

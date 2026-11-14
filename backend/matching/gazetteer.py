@@ -59,10 +59,26 @@ def _strip_accents(text: str) -> tuple[str, list[int] | None]:
     return "".join(out), index
 
 
-# French elisions ("C'est", "d'Airflow") and "R&D" would otherwise leave a lone C, D or R.
+# Blanked before tokenising, on accent-stripped text. French elisions ("C'est",
+# "d'Airflow") and "R&D" would otherwise leave a lone C, D or R; the rest is business
+# jargon and ordinary phrases that spell a case-sensitive skill name.
+# ponytail: a phrase list, not grammar. "Go" as a capitalised verb in any other phrase
+# still matches; require a second @lang skill in the clause if that shows up at scale.
 _NOISE = re.compile(
-    r"\b(?:c|d|l|j|n|m|s|t|qu|jusqu|lorsqu|puisqu)['’]|\bR\s?&\s?D\b", re.IGNORECASE
+    r"\b(?:c|d|l|j|n|m|s|t|qu|jusqu|lorsqu|puisqu)['’]|\bR\s?&\s?D\b"
+    r"|\bgo[- ]to[- ]market\b|\bgo[- /]?live\b|\b(?:go[- /])?no[- /]go\b"
+    r"|\bgo (?:deep(?:er)?|above|beyond|further|ahead)\b"
+    # "Series C", "Catégorie C", "note R"
+    r"|\b(?:series?|categor(?:ie|y)|classe|grade|note) [a-z]\b(?![+#])"
+    r"|\btableaux? de bord\b|\bspring (?:19|20)\d\d\b"
+    # A person's initial ("R. Dupont", "; C. Martin"), only where a sentence cannot
+    # end: at the start of a line or after a semicolon.
+    r"|(?-i:(?:^|(?<=;)|(?<=; ))[A-Z]\.(?=\s+[A-Z][a-z]))",
+    re.IGNORECASE | re.MULTILINE,
 )
+# A case-sensitive one-token name glued to its neighbour is part of a compound:
+# "C-level", "Go-getter", "G&C", "Objective-C", "R-squared".
+_GLUE = re.compile(r"[-&]")
 # A token is a run of letters/digits, with inner dots (node.js), a leading dot (.net)
 # and trailing + or # (c++, c#). Everything else separates ("ci/cd" -> ci, cd).
 _TOKEN = re.compile(r"(?<![^\W_])\.?[^\W_]+(?:\.[^\W_]+)*[+#]*")
@@ -103,8 +119,10 @@ class Gazetteer:
     def load(cls, extra_terms: Iterable[str] = (), *, path: Path = SKILLS_PATH) -> Gazetteer:
         """The curated list, plus ``extra_terms`` (the owner's search keywords).
 
-        An extra term that is not already an alias becomes a skill of its own, so a
-        profession the curated list does not cover still counts.
+        An extra term becomes a skill of its own when the curated list finds nothing in
+        it, so a profession the list does not cover still counts. A keyword that contains
+        a curated skill ("Python Developer", "Ingénieur Robotique") is a job title, not a
+        skill: as an alias it would win the longest match and hide the skill inside it.
         """
         entries: list[tuple[str, str, bool]] = []
         families: dict[str, str] = {}
@@ -123,12 +141,15 @@ class Gazetteer:
             entries += [(canon, p.lstrip("!"), p.startswith("!")) for p in parts if p]
         gazetteer = cls(entries, families)
         case_sensitive_lowered = {tuple(t.lower() for t in k) for k in gazetteer._cs}
+        extra: dict[tuple[str, ...], str] = {}
         for term in extra_terms:
             key = tuple(t.lower() for t in _key(term))
             # A keyword spelled like a case-sensitive alias ("go") must not loosen it.
-            if key and key not in case_sensitive_lowered:
-                gazetteer._ci.setdefault(key, " ".join(term.lower().split()))
-                gazetteer._max_len = max(gazetteer._max_len, len(key))
+            if key and key not in case_sensitive_lowered and not gazetteer.extract(term):
+                extra.setdefault(key, " ".join(term.lower().split()))
+        for key, canon in extra.items():  # after the loop: keywords do not hide each other
+            gazetteer._ci.setdefault(key, canon)
+            gazetteer._max_len = max(gazetteer._max_len, len(key))
         return gazetteer
 
     def extract(self, text: str) -> list[Mention]:
@@ -141,9 +162,15 @@ class Gazetteer:
         i = 0
         while i < len(toks):
             for n in range(min(self._max_len, len(toks) - i), 0, -1):
-                canon = self._cs.get(tuple(exact[i : i + n])) or self._ci.get(
-                    tuple(lowered[i : i + n])
-                )
+                canon = self._cs.get(tuple(exact[i : i + n]))
+                # Tokens hold neither character, so a hit is on a neighbour.
+                if (
+                    canon
+                    and n == 1
+                    and _GLUE.search(stripped, max(toks[i][1] - 1, 0), toks[i][2] + 1)
+                ):
+                    canon = None
+                canon = canon or self._ci.get(tuple(lowered[i : i + n]))
                 if canon:
                     start, last = toks[i][1], toks[i + n - 1][2] - 1
                     if index is not None:

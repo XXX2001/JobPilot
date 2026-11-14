@@ -27,6 +27,7 @@ from backend.matching.fit_engine import FitAssessment, FitEngine
 from backend.matching.gazetteer import Gazetteer
 from backend.matching.job_skills import extract_job_skills
 from backend.matching.matcher import load_matcher
+from backend.matching.scorer import PROVISIONAL_MIN_CHARS
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails
@@ -286,7 +287,18 @@ class BatchRunner:
         cv_tailoring_enabled = getattr(settings_row, "cv_tailoring_enabled", True)
         guard = await DailyLimitGuard.from_settings(db)
         remaining = await guard.remaining_today()
-        selected = stored[:remaining]
+        # A card with no description was scored on its title alone and can outrank real
+        # postings: it takes no CV slot, and there is no text to tailor a CV to.
+        described = [
+            sm for sm in stored
+            if len((sm.job.description or "").strip()) >= PROVISIONAL_MIN_CHARS
+        ]
+        if len(described) < len(stored):
+            logger.info(
+                "%d match(es) without a description: no CV pre-generated",
+                len(stored) - len(described),
+            )
+        selected = described[:remaining]
         top_ids = [sm.match_id for sm in selected]
 
         if cv_tailoring_enabled:

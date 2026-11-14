@@ -586,6 +586,10 @@ class _RecordingPipeline:
         return await self._gen(job, output_dir)
 
 
+# Long enough to be a posting, not a card (cards get no pre-generated CV); names no skill.
+_BODY = "We are a small team shipping to industrial customers every week, from our office."
+
+
 class _TitleScoreMatcher(JobMatcher):
     def __init__(self, scores):
         super().__init__()
@@ -620,10 +624,11 @@ async def test_batch_preserves_job_identity_when_first_ranked_job_is_skipped(
         await db.commit()
 
     jobs = [
-        RawJob(title="Python Engineer", company="ACME", url="https://e.x/py"),
-        RawJob(title="Rust Engineer", company="ACME", url="https://e.x/rs"),
-        RawJob(title="Rust Engineer", company="ACME", url="https://e.x/rs-dup"),  # same dedup hash
-        RawJob(title="Go Engineer", company="ACME", url="https://e.x/go"),
+        RawJob(title="Python Engineer", company="ACME", url="https://e.x/py", description=_BODY),
+        RawJob(title="Rust Engineer", company="ACME", url="https://e.x/rs", description=_BODY),
+        # same dedup hash
+        RawJob(title="Rust Engineer", company="ACME", url="https://e.x/rs-dup", description=_BODY),
+        RawJob(title="Go Engineer", company="ACME", url="https://e.x/go", description=_BODY),
     ]
     scores = {"Python Engineer": 95.0, "Rust Engineer": 90.0, "Go Engineer": 85.0}
     pipeline = _RecordingPipeline(fail_titles={"Go Engineer"})
@@ -678,7 +683,9 @@ async def test_same_day_rerun_does_not_overwrite_the_previous_version(sqlite_fac
 
     pipeline = _RecordingPipeline()
     runner = BatchRunner(
-        scraper=MockScraper(jobs=[RawJob(title="Solo", company="ACME", url="https://e.x/solo")]),
+        scraper=MockScraper(
+            jobs=[RawJob(title="Solo", company="ACME", url="https://e.x/solo", description=_BODY)]
+        ),
         matcher=_TitleScoreMatcher({"Solo": 90.0}),
         cv_pipeline=pipeline,
         db_factory=sqlite_factory,
@@ -697,3 +704,49 @@ async def test_same_day_rerun_does_not_overwrite_the_previous_version(sqlite_fac
     async with sqlite_factory() as db:
         paths = [d.pdf_path for d in (await db.execute(select(TailoredDocument))).scalars()]
     assert len(paths) == 2 and len(set(paths)) == 2
+
+
+@pytest.mark.asyncio
+async def test_description_less_card_gets_no_pre_generated_cv(sqlite_factory, tmp_path):
+    """A card scored on its title alone (provisional, fixed 70) outranks described
+    postings: it must not take a CV slot, nor reach the LLM tailoring with no text."""
+    from backend.models.user import SearchSettings
+
+    described = "Requirements\n- Python\n- Docker\n\n" + "We ship robots to factories. " * 4
+    jobs = [
+        RawJob(title="Card One", company="ACME", url="https://e.x/1"),
+        RawJob(title="Card Two", company="ACME", url="https://e.x/2", description="Apply now!"),
+        RawJob(title="Described", company="ACME", url="https://e.x/3", description=described),
+    ]
+    pipeline = _RecordingPipeline()
+    runner = BatchRunner(
+        scraper=MockScraper(jobs=jobs),
+        matcher=_TitleScoreMatcher({"Card One": 70.0, "Card Two": 70.0, "Described": 55.0}),
+        cv_pipeline=pipeline,
+        db_factory=sqlite_factory,
+    )
+    async with sqlite_factory() as db:
+        db.add(SearchSettings(keywords={"include": []}, daily_limit=1, min_match_score=1))
+        await db.commit()
+    cv = tmp_path / "base.tex"
+    cv.write_text("Python, Docker")
+    messages: list[str] = []
+
+    async def _status(msg, progress=0.0):  # noqa: ARG001
+        messages.append(msg)
+
+    with (
+        patch("backend.scheduler.batch_runner.broadcast_status", side_effect=_status),
+        patch("backend.scheduler.batch_runner.broadcast_job_assessment", new_callable=AsyncMock),
+        patch("backend.scheduler.batch_runner._resolve_cv_path", return_value=cv),
+        patch("backend.scheduler.batch_runner.settings") as cfg,
+    ):
+        cfg.jobpilot_data_dir = str(tmp_path)
+        await runner.run_batch()
+
+    # The single slot of the day goes to the posting that has a text to tailor to.
+    assert [title for _, _, title in pipeline.calls] == ["Described"]
+    assert any("1 ready" in m for m in messages), messages
+    # The cards are still stored as matches: only the CV is not pre-generated.
+    async with sqlite_factory() as db:
+        assert len((await db.execute(select(JobMatch))).scalars().all()) == 3

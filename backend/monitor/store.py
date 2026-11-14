@@ -172,6 +172,8 @@ async def match_new(
             score=result.score,
             keyword_hits=_hits(result),
             score_basis=matcher.score_basis,
+            provisional=result.provisional,
+            location_unverified=result.location_unverified,
             batch_date=today,
             status="new",
         )
@@ -207,5 +209,7 @@ async def rescore_all(
         match.score = result.score
         match.keyword_hits = _hits(result)
         match.score_basis = matcher.score_basis
+        match.provisional = result.provisional
+        match.location_unverified = result.location_unverified
     await db.flush()
     return len(rows)

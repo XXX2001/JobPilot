@@ -158,6 +158,8 @@ class NewMatch(BaseModel):
     source: str
     posted_at: datetime | None
     url: str
+    provisional: bool = False  # scored on the title alone
+    location_unverified: bool = False  # passed a country filter without proof
 
 
 class Pong(BaseModel):

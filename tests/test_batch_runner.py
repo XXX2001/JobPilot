@@ -184,7 +184,8 @@ async def test_batch_without_injected_matcher_scores_against_the_owners_cv(
     # Lyon is filtered out (score 0); the sales title ranks below the engineering one.
     assert [p["title"] for p in preview] == ["Backend Engineer", "Account Executive"]
     assert preview[0]["score"] > preview[1]["score"]
-    assert row.keyword_hits == {"django": True, "python": True}
+    # "backend" is the owner's keyword: named in the title, it counts without being on the CV
+    assert row.keyword_hits == {"backend": True, "django": True, "python": True}
     assert row.score_basis == JobMatcher(cv.read_text(), ["backend"]).score_basis
 
 

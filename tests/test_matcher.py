@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.database import AsyncSessionLocal
+from backend.defaults import MIN_MATCH_SCORE
 from backend.matching import matcher as matcher_module
 from backend.matching.filters import JobFilters
 from backend.matching.gazetteer import GAZETTEER_VERSION
@@ -174,7 +175,8 @@ def test_explain_returns_the_score_result():
     assert result.passed_filters and result.score == matcher.score(
         _make_job(description="Requirements\n- Python\n- Rust\n"), filters
     )
-    assert "python" in result.covered and "rust" in result.missing
+    # no CV: Rust is a skill nobody claimed, not a missing one
+    assert result.covered == ["python"] and result.missing == []
     rejected = matcher.explain(_make_job(location="Lyon"), filters)
     assert (rejected.score, rejected.passed_filters, rejected.reject_reason) == (
         0.0,
@@ -208,6 +210,30 @@ def test_extra_terms_make_an_uncovered_profession_count():
     assert matcher.matched_keywords(job, filters) == ["underwater welding"]
 
 
+def test_keyword_that_becomes_a_skill_is_never_a_missing_skill():
+    """Review Focus 4: a CV without the phrase is not penalised for the owner's keyword."""
+    filters = JobFilters(keywords=["software engineer", "robotics"])
+    matcher = JobMatcher("Python, Docker, Linux.", filters.keywords)
+    job = _make_job(
+        title="Software Engineer, Backend",
+        description="Requirements\n- Software engineer, 3 years\n- Python\n- Robotics\n",
+    )
+    result = matcher.explain(job, filters)
+    assert "software engineer" in result.covered
+    assert result.missing == ["robotics"]  # a curated skill is earned by the CV
+
+
+def test_without_a_cv_a_keyword_posting_clears_the_default_threshold():
+    filters = JobFilters(keywords=["python"])
+    job = _make_job(
+        title="Backend Engineer",
+        description="Requirements\n- Python\n- FastAPI\n- PostgreSQL\n- Docker\n",
+    )
+    result = JobMatcher("", filters.keywords).explain(job, filters)
+    assert result.score >= MIN_MATCH_SCORE and result.missing == []
+    assert [j for j, _ in JobMatcher("", filters.keywords).rank_and_filter([job], filters)] == [job]
+
+
 def test_score_basis_names_the_cv_and_the_gazetteer():
     basis = JobMatcher(cv_text="Python").score_basis
     assert re.fullmatch(r"[0-9a-f]{12}:" + re.escape(GAZETTEER_VERSION), basis)
@@ -229,10 +255,10 @@ async def test_load_matcher_reads_the_profile_cv_and_the_search_keywords(tmp_pat
     job = _make_job(
         title="Engineer", description="Requirements\n- Python\n- Underwater welding\n- Rust\n"
     )
-    # the CV is the skill set; the keyword is known to the gazetteer but not in the CV
+    # the CV is the skill set, and the owner's own keyword counts without being on it
     result = matcher.explain(job, JobFilters(keywords=["underwater welding"]))
-    assert result.covered == ["python"]
-    assert set(result.missing) == {"underwater welding", "rust"}
+    assert result.covered == ["python", "underwater welding"]
+    assert result.missing == ["rust"]
 
 
 async def test_load_matcher_without_profile_or_settings_falls_back_to_keywords():

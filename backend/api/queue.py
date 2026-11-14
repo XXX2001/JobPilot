@@ -41,6 +41,8 @@ class QueueMatchOut(BaseModel):
     id: int  # match ID — matches frontend's match.id
     job_id: int
     score: float
+    provisional: bool = False  # scored on the title alone
+    location_unverified: bool = False  # passed a country filter without proof
     status: str
     batch_date: Optional[date] = None
     matched_at: datetime
@@ -97,7 +99,8 @@ async def get_queue(db: DBSession):
         select(JobMatch, Job)
         .join(Job, Job.id == JobMatch.job_id)
         .where(JobMatch.status == "new")
-        .order_by(JobMatch.batch_date.desc(), JobMatch.score.desc())
+        # A title-only score (a flat 70 for a keyword) says less than a scored posting.
+        .order_by(JobMatch.batch_date.desc(), JobMatch.provisional, JobMatch.score.desc())
     )
     result = await db.execute(stmt)
     rows = result.all()
@@ -109,6 +112,8 @@ async def get_queue(db: DBSession):
                 id=match.id,
                 job_id=job.id,
                 score=match.score,
+                provisional=match.provisional,
+                location_unverified=match.location_unverified,
                 status=match.status,
                 batch_date=match.batch_date,
                 matched_at=match.matched_at,
@@ -216,6 +221,8 @@ async def get_match(match_id: int, db: DBSession):
         id=match.id,
         job_id=job.id,
         score=match.score,
+        provisional=match.provisional,
+        location_unverified=match.location_unverified,
         status=match.status,
         batch_date=match.batch_date,
         matched_at=match.matched_at,

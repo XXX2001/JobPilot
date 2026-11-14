@@ -89,6 +89,41 @@ def test_list_queue_empty(test_app: TestClient):
     assert isinstance(data["matches"], list)
 
 
+def test_queue_lists_title_only_matches_after_described_ones(test_app: TestClient):
+    """A provisional 70 does not outrank a described posting; both flags are exposed."""
+    import asyncio
+    from datetime import date
+
+    from backend.database import AsyncSessionLocal
+    from backend.models.job import Job, JobMatch
+
+    async def seed() -> None:
+        async with AsyncSessionLocal() as db:
+            for n, (score, provisional) in enumerate([(70.0, True), (40.0, False), (55.0, False)]):
+                job = Job(title=f"T{n}", company="C", url="", dedup_hash=f"q{n}")
+                db.add(job)
+                await db.flush()
+                db.add(
+                    JobMatch(
+                        job_id=job.id,
+                        score=score,
+                        status="new",
+                        batch_date=date(2026, 11, 14),
+                        provisional=provisional,
+                        location_unverified=provisional,
+                    )
+                )
+            await db.commit()
+
+    asyncio.run(seed())
+    matches = test_app.get("/api/queue").json()["matches"]
+    assert [(m["score"], m["provisional"], m["location_unverified"]) for m in matches] == [
+        (55.0, False, False),
+        (40.0, False, False),
+        (70.0, True, True),
+    ]
+
+
 def test_queue_refresh(test_app: TestClient):
     """POST /api/queue/refresh returns 200 with a status message."""
     resp = test_app.post("/api/queue/refresh")

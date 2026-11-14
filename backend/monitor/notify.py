@@ -60,12 +60,23 @@ async def notify_new_match(match: JobMatch, job: Job, source_name: str) -> None:
             source=source_name,
             posted_at=job.posted_at,
             url=job.url,
+            provisional=bool(match.provisional),
+            location_unverified=bool(match.location_unverified),
         )
     )
     where = f" ({job.location})" if job.location else ""
+    notes = [
+        note
+        for flag, note in (
+            (match.provisional, "title only"),
+            (match.location_unverified, "location unverified"),
+        )
+        if flag
+    ]
+    caveat = f" ({', '.join(notes)})" if notes else ""
     _post_ntfy(
         f"{job.title} — {job.company}{where}",
-        {"Title": f"New match {match.score:.0f}", "Click": job.url},
+        {"Title": f"New match {match.score:.0f}{caveat}", "Click": job.url},
     )
 
 

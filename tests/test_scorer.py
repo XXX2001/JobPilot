@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from backend.defaults import MIN_MATCH_SCORE
 from backend.matching.filters import JobFilters
 from backend.matching.gazetteer import Gazetteer
 from backend.matching.scorer import ScoreResult, cv_skills, score_job
@@ -86,10 +87,23 @@ def test_keyword_stuffed_sales_job_scores_below_real_match(g, cv):  # Review Foc
     assert real.passed_filters and sales.passed_filters
     assert sales.covered and not sales.missing  # every keyword is there
     assert sales.score < real.score
-    # Same posting under a neutral title: the non-technical title is what sinks it,
-    # by (0.4 + 0.6 * 0.1) / (0.4 + 0.6 * 0.6).
+    # Same posting under a neutral title: the non-technical title is what sinks it, with
+    # no floor (0.1 against 0.4 + 0.6 * 0.6), well under the default threshold.
     neutral = score_job(stuffed.model_copy(update={"title": "Team member"}), cv, f, g)
-    assert sales.score == pytest.approx(neutral.score * 0.46 / 0.76, abs=0.1)
+    assert neutral.score >= MIN_MATCH_SCORE
+    assert sales.score == pytest.approx(neutral.score * 0.1 / 0.76, abs=0.1)
+    assert sales.score < MIN_MATCH_SCORE / 2
+
+
+def test_ambiguous_non_technical_words_only_count_at_the_head_of_the_title(g, cv):
+    description = "We work with Python, Docker and Linux on a daily basis, in a team of ten people."
+    neutral = score_job(job(title="Platform Engineer", description=description), cv, filters(), g)
+    for title in ("Software Engineer, Talent Platform", "Ingénieur logiciel - Commercial Aircraft"):
+        r = score_job(job(title=title, description=description), cv, filters(), g)
+        assert r.score == neutral.score, title
+    for title in ("Ingénieur Commercial (H/F)", "Legal Counsel - Software", "Engineer, Sales"):
+        r = score_job(job(title=title, description=description), cv, filters(), g)
+        assert r.score < MIN_MATCH_SCORE / 2, title
 
 
 def test_keyword_in_title_overrides_the_non_technical_family(g, cv):
@@ -118,7 +132,9 @@ def test_title_factor_values(g, cv):
             expected = 0.65 * (1.0 / 1.5) + 0.35 * (1.2 / 1.7)
         else:
             expected = coverage
-        assert r.score == pytest.approx(100 * expected * (0.4 + 0.6 * factor), abs=0.1), title
+        # A non-technical title gets no floor: the bare factor.
+        multiplier = factor if title == "Marketing Manager" else 0.4 + 0.6 * factor
+        assert r.score == pytest.approx(100 * expected * multiplier, abs=0.1), title
 
 
 def test_keyword_must_be_a_whole_word_in_the_title(g, cv):
@@ -200,10 +216,75 @@ def test_location_filter_matrix(g, cv, wanted, location, country, passes):
 
 def test_unprovable_location_is_flagged_not_rejected(g, cv):
     f = filters(locations=["France", "Paris"])
-    assert score_job(job(location="Marseille"), cv, f, g).location_unverified
+    for town in ("Massy", "Saint-Maurice", "La Rochelle", "LA ROCHELLE", "Porto-Vecchio", "Remote"):
+        r = score_job(job(location=town), cv, f, g)
+        assert r.passed_filters and r.location_unverified, town
     assert not score_job(job(location="Lyon, ARA, FR"), cv, f, g).location_unverified
+    assert not score_job(job(location="Marseille"), cv, f, g).location_unverified  # city table
     assert not score_job(job(location="Paris"), cv, f, g).location_unverified
     assert not score_job(job(location=""), cv, f, g).location_unverified
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        # a country the short table did not have
+        "Dubai, United Arab Emirates",
+        "Thailand - Bangkok",
+        "Riyadh, Saudi Arabia",
+        "Slovakia - Bratislava",
+        "Abidjan, Côte d'Ivoire",
+        "Séoul, Corée du Sud",
+        # an ISO code as the first or last token
+        "US - New York",
+        "Remote US",
+        "Munich (DE)",
+        # a major city, no country named
+        "London",
+        "Hong Kong",
+        "Sydney",
+        "New York",
+        "Wrocław",
+        "Remote - Bangalore",
+        # a US state or Canadian province code is not France either
+        "Denver, CO",
+        "Toronto, ON",
+    ],
+)
+def test_country_filter_rejects_a_location_proven_abroad(g, cv, location):
+    r = score_job(job(location=location), cv, filters(locations=["France", "Paris"]), g)
+    assert not r.passed_filters and r.reject_reason == "location", location
+
+
+@pytest.mark.parametrize(
+    ("wanted", "location"),
+    [
+        (["United States"], "Denver, CO"),  # CO is Colorado before it is Colombia
+        (["United States"], "Boston, MA"),
+        (["Canada"], "Regina, SK"),
+        (["Canada"], "London, Ontario, Canada"),  # the named country wins over the city
+        (["United Kingdom"], "London"),
+        (["Germany"], "Remote DE"),
+        (["France"], "Saint-Denis, La Réunion"),  # an overseas department is France
+        (["Côte d'Ivoire"], "Abidjan"),
+        (["Japan"], "Tokyo"),
+    ],
+)
+def test_country_filter_accepts_a_location_proven_inside(g, cv, wanted, location):
+    r = score_job(job(location=location), cv, filters(locations=wanted), g)
+    assert r.passed_filters and not r.location_unverified, (wanted, location)
+
+
+def test_country_and_city_tables_are_consistent():
+    from backend.matching import scorer
+
+    assert len(scorer._COUNTRY_CODES) >= 240  # every ISO 3166-1 country
+    assert set(scorer._CITIES.values()) <= scorer._COUNTRY_CODES
+    assert set(scorer._SUBDIVISIONS.values()) <= scorer._COUNTRY_CODES
+    # A city name must not be a country name, or hide inside a town of another country.
+    assert not set(scorer._CITIES) & set(scorer._COUNTRY_NAMES)
+    for name in ("york", "orleans", "porto", "vienne", "maurice", "georgia", "jersey"):
+        assert name not in scorer._CITIES and name not in scorer._COUNTRY_NAMES, name
 
 
 @pytest.mark.parametrize(
@@ -291,16 +372,26 @@ def test_family_credit_is_half(g):
     assert nothing.score == 0 and nothing.missing == ["fastapi"]
 
 
-def test_one_skill_posting_cannot_reach_100(g):
+def test_one_skill_posting_is_scored_on_its_title(g):
+    """One recognised skill is an incidental mention, not a description of the job."""
     description = "We are looking for someone who knows Python. " + "Great team, great office. " * 4
-    r = score_job(
-        job(title="Python Developer", description=description),
-        frozenset({"python"}),
-        filters(keywords=["python"]),
+    cv = frozenset({"python"})
+    wanted = score_job(
+        job(title="Python Developer", description=description), cv, filters(keywords=["python"]), g
+    )
+    assert wanted.provisional and wanted.score == 70
+    assert wanted.covered == ["python"] and wanted.missing == []
+    unrelated = score_job(
+        job(title="Chief of Staff to the CMO", description=description), cv, filters(), g
+    )
+    assert unrelated.provisional and unrelated.score == 0
+    two = score_job(
+        job(title="Chief of Staff to the CMO", description=description + " And Docker."),
+        cv,
+        filters(),
         g,
     )
-    assert r.covered == ["python"] and r.missing == []
-    assert 0 < r.score < 70
+    assert not two.provisional and 0 < two.score < 100
 
 
 def test_posting_without_any_known_skill_falls_back_to_the_title(g, cv):
@@ -313,8 +404,10 @@ def test_posting_without_any_known_skill_falls_back_to_the_title(g, cv):
     assert wanted.provisional and wanted.score == 70
     by_skill = score_job(job(title="Python Developer", description=description), cv, f, g)
     assert by_skill.provisional and by_skill.score == 45 and by_skill.covered == ["python"]
-    # A body that only repeats the title's skill is a real, scored posting.
-    body = score_job(job(title="Python Developer", description=description + " Python."), cv, f, g)
+    # A body that names two skills is a real, scored posting.
+    body = score_job(
+        job(title="Python Developer", description=description + " Python, Docker."), cv, f, g
+    )
     assert not body.provisional
 
 
@@ -348,6 +441,35 @@ def test_owner_keyword_does_not_lower_the_job_it_targets(cv):
     assert titled.missing == []
 
 
+def test_keyword_that_became_a_skill_is_covered_not_missing(cv):
+    """The owner's own term always counts; a curated skill must still be on the CV."""
+    keyed = Gazetteer.load(extra_terms=["software engineer", "terraform"])
+    assert keyed.extra_skills == frozenset({"software engineer"})
+    description = "Requirements\n- Software Engineer with Python\n- Terraform\n" + "Team. " * 20
+    r = score_job(
+        job(title="Software Engineer, Backend", description=description),
+        cv_skills(CV_TEXT, keyed),
+        filters(keywords=["software engineer", "terraform"]),
+        keyed,
+    )
+    assert "software engineer" in r.covered and r.missing == ["terraform"]
+
+
+def test_claimed_only_scores_the_claimed_skills(g):
+    """Without a CV nobody claimed the other skills: they are not missing."""
+    description = "Requirements\n- Python\n- FastAPI\n- PostgreSQL\n- Docker\n" + "Team. " * 20
+    posting = job(title="Backend Engineer", description=description)
+    f = filters(keywords=["python"])
+    penalised = score_job(posting, frozenset({"python"}), f, g)
+    claimed = score_job(posting, frozenset({"python"}), f, g, claimed_only=True)
+    assert penalised.score < MIN_MATCH_SCORE <= claimed.score
+    assert claimed.covered == ["python"] and claimed.missing == []
+    assert claimed.score == pytest.approx(100 * (1 / 1.5) * 0.76, abs=0.1)
+    # A posting that never names the claimed skill scores nothing.
+    other = job(title="Backend Engineer", description=description.replace("Python", "Java"))
+    assert score_job(other, frozenset({"python"}), f, g, claimed_only=True).score == 0
+
+
 def test_jargon_only_posting_is_not_covered_by_c_and_go(g):
     cv = cv_skills("Python, C, Go, Docker", g)
     description = (
@@ -368,6 +490,16 @@ def test_description_less_card_gets_provisional_title_score(g, cv):  # Review Fo
         job(title="Robotics Engineer", description=""), cv, filters(keywords=["robotics"]), g
     )
     assert r.provisional and r.score == 70
+
+
+def test_keyword_named_in_the_title_by_an_alias_counts(g, cv):  # Review Focus 1
+    f = filters(keywords=["robotics"])
+    card = score_job(job(title="Ingénieur Robotique", description=""), cv, f, g)
+    assert card.provisional and card.score == 70
+    # The described posting gets the full title factor too.
+    described = score_job(job(title="Ingénieur Robotique"), cv, f, g)
+    literal = score_job(job(title="Robotics Engineer"), cv, f, g)
+    assert described.score == literal.score
 
 
 def test_provisional_score_tiers(g, cv):

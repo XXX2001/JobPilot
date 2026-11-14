@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -140,6 +141,14 @@ class JobMatch(Base):
     # What ``score`` was computed from: "{cv_hash12}:{GAZETTEER_VERSION}". NULL on rows
     # scored before the gazetteer scorer; ``rescore_all`` recomputes a stale match.
     score_basis: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # What ``score`` rests on (``ScoreResult``): a title-only score, and a location a
+    # country filter let through without proof. The queue lists provisional matches last.
+    provisional: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    location_unverified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     status: Mapped[str] = mapped_column(String, default="new", nullable=False, index=True)
     batch_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     matched_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

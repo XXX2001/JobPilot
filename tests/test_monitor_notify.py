@@ -115,8 +115,19 @@ async def test_new_match_is_broadcast_with_job_fields(ntfy, ws):
             "source": "greenhouse:mirakl",
             "posted_at": "2026-11-14T08:30:00",
             "url": "https://job-boards.greenhouse.io/mirakl/jobs/7",
+            "provisional": False,
+            "location_unverified": False,
         }
     ]
+
+
+async def test_notification_says_what_the_score_rests_on(ntfy, ws):
+    match, job = a_match()
+    match.provisional, match.location_unverified = True, True
+    await notify_new_match(match, job, "greenhouse:mirakl")
+    await drain()
+    assert ntfy[0].headers["Title"] == "New match 87 (title only, location unverified)"
+    assert (ws.sent[0]["provisional"], ws.sent[0]["location_unverified"]) == (True, True)
 
 
 async def test_job_without_location_or_date(ntfy, ws):

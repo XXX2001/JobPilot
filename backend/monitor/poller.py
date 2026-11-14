@@ -32,6 +32,10 @@ from backend.utils.time import naive_utc_now
 
 logger = logging.getLogger(__name__)
 
+# A stored job without a match is scored again after a CV or settings change if it
+# was stored within this many days; an older posting is most likely filled.
+RESCORE_UNMATCHED_DAYS = 30
+
 Notify = Callable[[JobMatch, Job, str], Awaitable[None]]  # (match, job, source_name)
 Alert = Callable[[str, str], Awaitable[None]]  # (title, body)
 
@@ -104,18 +108,41 @@ async def _load_filters(db: AsyncSession) -> JobFilters:
     )
 
 
-async def rescore_stale(db: AsyncSession, *, force: bool = False) -> int:
-    """Bring the stored ``new`` matches up to the owner's current CV and search settings.
+async def rescore_stale(
+    db: AsyncSession, *, force: bool = False, after_save: bool = True
+) -> int:
+    """Bring the stored matches up to the owner's current CV and search settings.
 
     Called at startup and after a CV or settings save. ``force`` for a save that may
     have changed the hard filters (see :func:`rescore_all`). Commits on ``db``.
+
+    Recently stored jobs that have no match are scored too: one the old CV, keywords or
+    filters left out may match now. Nobody is notified of those; they show in the queue.
+    At startup (``after_save=False``) only when a stored score was stale: otherwise
+    nothing changed while the server was down. Returns how many matches were rescored.
     """
     async with _write_lock():
         matcher = await load_matcher(db)
-        count = await rescore_all(db, matcher, await _load_filters(db), force=force)
+        filters = await _load_filters(db)
+        count = await rescore_all(db, matcher, filters, force=force)
+        created: list[JobMatch] = []
+        if after_save or count:
+            # ponytail: about 2 ms per job, on the event loop. Record the swept basis
+            # and skip jobs already scored on it if a save gets slow.
+            unmatched = (
+                await db.execute(
+                    select(Job)
+                    .outerjoin(JobMatch, JobMatch.job_id == Job.id)
+                    .where(
+                        JobMatch.id.is_(None),
+                        Job.scraped_at >= naive_utc_now() - timedelta(days=RESCORE_UNMATCHED_DAYS),
+                    )
+                )
+            ).scalars()
+            created = await match_new(db, list(unmatched), filters, filters.min_score, matcher)
         await db.commit()
-    if count:
-        logger.info("Rescored %d stored match(es)", count)
+    if count or created:
+        logger.info("Rescored %d stored match(es), matched %d stored job(s)", count, len(created))
     return count
 
 

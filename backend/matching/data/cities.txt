@@ -1,0 +1,116 @@
+# Major world cities (capitals and large metros) for the location filter:
+# code | city | other spellings. Consulted only when a location names no country, to
+# prove one ("London" is not in France). Matched accent-folded, hyphen = space, as whole
+# words. A town that is not here stays unverified and passes a country filter.
+#
+# Left out on purpose:
+#   - names shared by large cities of two countries (Cambridge, Birmingham, Santiago,
+#     San Jose, Cordoba, Newcastle, Waterloo, Saint Petersburg, Guadalajara, Tripoli);
+#   - names that are a whole word of another place (York in New York, Orléans in New
+#     Orleans, Porto in Porto-Vecchio, Bergen in Bergen op Zoom, and Vienne, Valence,
+#     Florence in Sainte-Florence, towns in France);
+#   - cities whose country carries the same name (Luxembourg, Singapore, Monaco, ...).
+
+fr | Paris | Lyon | Marseille | Toulouse | Nice | Nantes | Strasbourg | Montpellier | Bordeaux | Lille | Rennes | Grenoble | Reims | Toulon | Saint-Étienne | Le Havre | Dijon | Angers | Nîmes | Clermont-Ferrand | Aix-en-Provence | Brest | Tours | Amiens | Limoges | Metz | Besançon | Caen | Rouen | Nancy | Mulhouse | Sophia Antipolis | La Défense | Boulogne-Billancourt
+gb | London | Londres | Manchester | Edinburgh | Édimbourg | Glasgow | Bristol | Leeds | Liverpool | Sheffield | Nottingham | Belfast | Cardiff | Oxford | Southampton | Brighton | Coventry | Leicester | Aberdeen
+ie | Dublin | Cork | Galway | Limerick
+de | Berlin | Hamburg | Hambourg | Munich | München | Frankfurt | Francfort | Stuttgart | Düsseldorf | Cologne | Köln | Leipzig | Dresden | Dresde | Hannover | Hanover | Hanovre | Nuremberg | Nürnberg | Bremen | Karlsruhe | Aachen | Bonn | Dortmund | Mannheim | Heidelberg
+at | Vienna | Wien | Graz | Linz | Salzburg | Innsbruck
+ch | Zurich | Zürich | Geneva | Genève | Basel | Bern | Berne | Lausanne | Lugano | Zug
+be | Brussels | Bruxelles | Brussel | Antwerp | Anvers | Antwerpen | Ghent | Gent | Leuven | Louvain | Liège | Charleroi | Namur
+nl | Amsterdam | Rotterdam | The Hague | Den Haag | Utrecht | Eindhoven | Delft | Groningen
+es | Madrid | Barcelona | Barcelone | Valencia | Seville | Sevilla | Málaga | Bilbao | Zaragoza | Saragosse
+pt | Lisbon | Lisbonne | Lisboa | Braga | Coimbra
+it | Rome | Roma | Milan | Milano | Turin | Torino | Naples | Napoli | Bologna | Firenze | Venice | Venise | Venezia | Genoa | Genova | Padova | Pisa
+gr | Athens | Athènes | Thessaloniki | Thessalonique
+dk | Copenhagen | Copenhague | København | Kobenhavn | Aarhus | Odense
+se | Stockholm | Gothenburg | Göteborg | Malmö | Uppsala | Linköping
+no | Oslo | Trondheim | Stavanger
+fi | Helsinki | Espoo | Tampere | Oulu | Turku
+is | Reykjavik
+pl | Warsaw | Varsovie | Warszawa | Krakow | Kraków | Cracovie | Cracow | Wrocław | Wroclaw | Gdansk | Gdańsk | Poznan | Poznań | Łódź | Lodz | Katowice
+cz | Prague | Praha | Brno | Ostrava
+sk | Bratislava | Košice
+hu | Budapest | Debrecen
+ro | Bucharest | Bucarest | București | Cluj-Napoca | Cluj | Timișoara | Iași | Brașov
+bg | Sofia | Plovdiv | Varna
+rs | Belgrade | Novi Sad
+hr | Zagreb
+si | Ljubljana
+ba | Sarajevo
+mk | Skopje
+al | Tirana
+lt | Vilnius | Kaunas
+lv | Riga
+ee | Tallinn | Tartu
+ua | Kyiv | Kiev | Lviv | Kharkiv | Odesa | Odessa | Dnipro
+by | Minsk
+md | Chisinau | Chișinău
+ru | Moscow | Moscou | Novosibirsk | Yekaterinburg | Kazan
+tr | Istanbul | Ankara | Izmir | Bursa
+cy | Nicosia | Limassol
+mt | Valletta
+us | New York | New York City | NYC | Brooklyn | Manhattan | Los Angeles | San Francisco | Chicago | Seattle | Boston | Austin | Houston | Dallas | Denver | Atlanta | Miami | Philadelphia | Phoenix | San Diego | Detroit | Minneapolis | Pittsburgh | Washington | Palo Alto | Mountain View | Sunnyvale | Santa Clara | Redmond | Las Vegas | Salt Lake City | Nashville | Raleigh | Baltimore | Honolulu
+ca | Toronto | Montreal | Montréal | Vancouver | Ottawa | Calgary | Edmonton | Winnipeg | Québec | Mississauga
+mx | Monterrey | Tijuana | Puebla
+br | São Paulo | Rio de Janeiro | Brasília | Belo Horizonte | Curitiba | Porto Alegre | Recife | Fortaleza | Campinas
+ar | Buenos Aires | Rosario
+cl | Santiago de Chile | Valparaíso
+co | Bogotá | Medellín | Cali
+pe | Lima
+ve | Caracas
+ec | Quito | Guayaquil
+uy | Montevideo
+py | Asunción
+cu | Havana | La Havane
+jp | Tokyo | Osaka | Kyoto | Yokohama | Nagoya | Fukuoka | Sapporo
+kr | Seoul | Séoul | Busan | Incheon
+cn | Beijing | Pékin | Peking | Shanghai | Shenzhen | Guangzhou | Chengdu | Hangzhou | Wuhan | Nanjing | Tianjin | Suzhou | Chongqing | Xi'an
+tw | Taipei | Hsinchu | Kaohsiung
+th | Bangkok | Chiang Mai
+vn | Hanoi | Hanoï | Ho Chi Minh City | Ho Chi Minh | Saigon | Da Nang
+id | Jakarta | Surabaya | Bandung
+my | Kuala Lumpur | Penang | Johor Bahru
+ph | Manila | Manille | Cebu
+in | Mumbai | Bombay | Delhi | New Delhi | Bangalore | Bengaluru | Hyderabad | Chennai | Pune | Kolkata | Calcutta | Gurgaon | Gurugram | Noida | Ahmedabad | Jaipur
+pk | Karachi | Lahore | Islamabad
+bd | Dhaka
+lk | Colombo
+np | Kathmandu | Katmandou
+kz | Almaty | Astana
+uz | Tashkent
+ge | Tbilisi | Tbilissi
+am | Yerevan | Erevan
+az | Baku | Bakou
+ir | Tehran | Téhéran
+iq | Baghdad | Bagdad | Erbil
+sa | Riyadh | Riyad | Jeddah | Djeddah | Dammam
+ae | Dubai | Dubaï | Abu Dhabi | Abou Dabi | Sharjah
+qa | Doha
+bh | Manama
+om | Muscat | Mascate
+jo | Amman
+lb | Beirut | Beyrouth
+il | Tel Aviv | Jerusalem | Jérusalem | Haifa
+eg | Cairo | Alexandria | Alexandrie
+ma | Casablanca | Rabat | Marrakech | Tangier | Tanger | Fès | Agadir
+tn | Tunis | Sfax
+dz | Algiers | Alger | Oran | Constantine
+ng | Lagos | Abuja
+gh | Accra
+sn | Dakar
+ci | Abidjan | Yamoussoukro
+ke | Nairobi | Mombasa
+et | Addis Ababa | Addis-Abeba
+ug | Kampala
+tz | Dar es Salaam
+rw | Kigali
+cd | Kinshasa
+ao | Luanda
+cm | Douala | Yaoundé
+ml | Bamako
+bf | Ouagadougou
+mg | Antananarivo
+za | Johannesburg | Cape Town | Durban | Pretoria
+au | Sydney | Melbourne | Brisbane | Perth | Adelaide | Canberra
+nz | Auckland | Wellington | Christchurch

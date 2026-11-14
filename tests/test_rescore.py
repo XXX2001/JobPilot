@@ -125,6 +125,24 @@ async def test_force_rescores_matches_already_on_this_basis():
         assert actioned.score == 1.0
 
 
+async def test_rescore_updates_the_provisional_and_location_flags():
+    matcher = JobMatcher(cv_text="Python, ROS 2, Docker")
+    async with AsyncSessionLocal() as db:
+        match = await _match(db, 1)
+        await db.flush()
+        job = await db.get(Job, match.job_id)
+        job.description, job.location = "", "Massy"
+        await rescore_all(db, matcher, JobFilters(keywords=["robotics"], locations=["France"]))
+        await db.commit()
+        await db.refresh(match)
+        assert (match.score, match.provisional, match.location_unverified) == (70.0, True, True)
+        job.description, job.location = POSTING, "Paris"
+        await rescore_all(db, matcher, JobFilters(keywords=["robotics"]), force=True)
+        await db.commit()
+        await db.refresh(match)
+        assert (match.provisional, match.location_unverified) == (False, False)
+
+
 # --- the callers: startup, CV upload, settings save ---------------------------------
 
 
@@ -215,3 +233,77 @@ async def test_rescore_stale_uses_the_owners_cv_and_search_settings(tmp_path):
         assert match.score == 0.0  # Paris, and the owner wants Lyon
         assert await rescore_stale(db) == 0
         assert await rescore_stale(db, force=True) == 1
+
+
+async def _unmatched_job(db, n: int, **fields) -> Job:
+    base = dict(
+        title="Robotics Engineer",
+        company=f"ACME {n}",
+        location="Paris",
+        description=POSTING,
+        url="",
+        dedup_hash=f"u{n}",
+    )
+    job = Job(**{**base, **fields})
+    db.add(job)
+    await db.flush()
+    return job
+
+
+async def _matches_of(db, job: Job) -> list[JobMatch]:
+    return list((await db.execute(select(JobMatch).where(JobMatch.job_id == job.id))).scalars())
+
+
+async def test_rescore_stale_matches_a_stored_job_the_new_cv_fits(tmp_path):
+    """A job no match was made for under CV A is matched once CV B covers it."""
+    from datetime import timedelta
+
+    from backend.models.user import SearchSettings, UserProfile
+    from backend.monitor.poller import RESCORE_UNMATCHED_DAYS
+    from backend.utils.time import naive_utc_now
+
+    cv = tmp_path / "cv.tex"
+    cv.write_text("Comptabilité, paie", encoding="utf-8")
+    old = naive_utc_now() - timedelta(days=RESCORE_UNMATCHED_DAYS + 1)
+    async with AsyncSessionLocal() as db:
+        db.add(UserProfile(full_name="A", email="a@example.com", base_cv_path=str(cv)))
+        db.add(SearchSettings(keywords={"include": ["robotics"]}, locations={"items": ["Paris"]}))
+        job = await _unmatched_job(db, 1)
+        elsewhere = await _unmatched_job(db, 2, location="Lyon")
+        long_ago = await _unmatched_job(db, 3, scraped_at=old)
+        skipped = await _match(db, 4, status="skipped")
+        await db.commit()
+
+        assert await rescore_stale(db) == 0
+        assert await _matches_of(db, job) == []  # CV A covers nothing of the posting
+
+        cv.write_text("Python, C++, ROS 2", encoding="utf-8")
+        assert await rescore_stale(db) == 0  # no stored match was stale
+        (match,) = await _matches_of(db, job)
+        assert match.status == "new" and match.score >= 30
+        assert match.score_basis == JobMatcher("Python, C++, ROS 2", ["robotics"]).score_basis
+        assert await _matches_of(db, elsewhere) == []  # a hard filter still rejects it
+        assert await _matches_of(db, long_ago) == []  # outside the window
+        await db.refresh(skipped)
+        assert skipped.status == "skipped" and skipped.score == 1.0
+
+        await rescore_stale(db)
+        assert len(await _matches_of(db, job)) == 1  # one match per job, ever
+
+
+async def test_startup_rescore_only_sweeps_when_stored_scores_were_stale(tmp_path):
+    from backend.models.user import SearchSettings, UserProfile
+
+    cv = tmp_path / "cv.tex"
+    cv.write_text("Python, C++, ROS 2", encoding="utf-8")
+    async with AsyncSessionLocal() as db:
+        db.add(UserProfile(full_name="A", email="a@example.com", base_cv_path=str(cv)))
+        db.add(SearchSettings(keywords={"include": ["robotics"]}))
+        job = await _unmatched_job(db, 1)
+        await db.commit()
+        assert await rescore_stale(db, after_save=False) == 0
+        assert await _matches_of(db, job) == []  # nothing changed while the server was down
+        await _match(db, 2)  # a match on an older basis: the scorer or the skills changed
+        await db.commit()
+        assert await rescore_stale(db, after_save=False) == 1
+        assert len(await _matches_of(db, job)) == 1

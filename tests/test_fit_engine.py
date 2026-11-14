@@ -90,6 +90,16 @@ def test_sensitivity_conservative_modifies_more(g):
     assert aggressive.should_modify is False
 
 
+def test_owner_keyword_skill_is_not_a_gap():
+    """A search keyword that became a skill is not handed to CV tailoring as a gap."""
+    keyed = Gazetteer.load(["software engineer"])
+    job = extract_job_skills("Software Engineer", "Requirements\n- Python\n- Kubernetes", keyed)
+    assert "software engineer" in job
+    result = FitEngine().assess(job, _cv("python"), keyed)
+    assert [g.skill for g in result.critical_gaps] == ["kubernetes"]
+    assert "software engineer" in result.covered_skills
+
+
 def test_empty_posting_does_not_score_100(g):
     a = FitEngine().assess({}, _cv("python"), g)
     assert a.simulated_ats_score == 0.0

@@ -1,0 +1,252 @@
+# ISO 3166-1 countries for the location filter: code | English name | French name | other
+# spellings. Names are matched accent-folded, hyphen = space, as whole words.
+#
+# Left out on purpose, because the name is more often something else in a job location:
+#   Georgia (the US state), Jersey (New Jersey), Wales (New South Wales), Dominique,
+#   Grenade, Maurice and Saint-Martin (French towns: Saint-Maurice, Grenade-sur-Garonne,
+#   Saint-Martin-d'Hères). A name after "New" (New Mexico, New England) is never a country.
+# The French overseas departments count as France.
+
+fr | France | Guadeloupe | Martinique | Guyane | French Guiana | La Réunion | Mayotte
+ad | Andorra | Andorre
+ae | United Arab Emirates | Émirats arabes unis | UAE
+af | Afghanistan
+ag | Antigua and Barbuda | Antigua-et-Barbuda
+ai | Anguilla
+al | Albania | Albanie
+am | Armenia | Arménie
+ao | Angola
+aq | Antarctica | Antarctique
+ar | Argentina | Argentine
+as | American Samoa | Samoa américaines
+at | Austria | Autriche | Österreich
+au | Australia | Australie
+aw | Aruba
+ax | Åland Islands | Åland
+az | Azerbaijan | Azerbaïdjan
+ba | Bosnia and Herzegovina | Bosnie-Herzégovine | Bosnia | Bosnie
+bb | Barbados | Barbade
+bd | Bangladesh
+be | Belgium | Belgique | België
+bf | Burkina Faso
+bg | Bulgaria | Bulgarie
+bh | Bahrain | Bahreïn
+bi | Burundi
+bj | Benin | Bénin
+bl | Saint Barthélemy | Saint-Barthélemy
+bm | Bermuda | Bermudes
+bn | Brunei
+bo | Bolivia | Bolivie
+bq | Bonaire
+br | Brazil | Brésil | Brasil
+bs | Bahamas
+bt | Bhutan | Bhoutan
+bv | Bouvet Island
+bw | Botswana
+by | Belarus | Biélorussie
+bz | Belize
+ca | Canada
+cc | Cocos Islands
+cd | Democratic Republic of the Congo | République démocratique du Congo | DR Congo | RD Congo | Congo-Kinshasa
+cf | Central African Republic | République centrafricaine | Centrafrique
+cg | Republic of the Congo | République du Congo | Congo-Brazzaville | Congo
+ch | Switzerland | Suisse | Schweiz
+ci | Ivory Coast | Côte d'Ivoire | Côte d’Ivoire | Cote d Ivoire
+ck | Cook Islands | Îles Cook
+cl | Chile | Chili
+cm | Cameroon | Cameroun
+cn | China | Chine
+co | Colombia | Colombie
+cr | Costa Rica
+cu | Cuba
+cv | Cape Verde | Cap-Vert | Cabo Verde
+cw | Curaçao
+cx | Christmas Island
+cy | Cyprus | Chypre
+cz | Czech Republic | Czechia | République tchèque | Tchéquie
+de | Germany | Allemagne | Deutschland
+dj | Djibouti
+dk | Denmark | Danemark | Danmark
+dm | Dominica
+do | Dominican Republic | République dominicaine
+dz | Algeria | Algérie
+ec | Ecuador | Équateur
+ee | Estonia | Estonie
+eg | Egypt | Égypte
+eh | Western Sahara | Sahara occidental
+er | Eritrea | Érythrée
+es | Spain | Espagne | España
+et | Ethiopia | Éthiopie
+fi | Finland | Finlande | Suomi
+fj | Fiji | Fidji
+fk | Falkland Islands | Îles Malouines
+fm | Micronesia | Micronésie
+fo | Faroe Islands | Îles Féroé
+ga | Gabon
+gb | United Kingdom | Royaume-Uni | UK | Great Britain | Grande-Bretagne | England | Angleterre | Scotland | Écosse | Pays de Galles | Northern Ireland | Irlande du Nord
+gd | Grenada
+ge | Géorgie
+gg | Guernsey | Guernesey
+gh | Ghana
+gi | Gibraltar
+gl | Greenland | Groenland
+gm | Gambia | Gambie
+gn | Guinea | Guinée
+gq | Equatorial Guinea | Guinée équatoriale
+gr | Greece | Grèce
+gs | South Georgia and the South Sandwich Islands
+gt | Guatemala
+gu | Guam
+gw | Guinea-Bissau | Guinée-Bissau
+gy | Guyana
+hk | Hong Kong | Hongkong
+hm | Heard Island and McDonald Islands
+hn | Honduras
+hr | Croatia | Croatie
+ht | Haiti | Haïti
+hu | Hungary | Hongrie
+id | Indonesia | Indonésie
+ie | Ireland | Irlande
+il | Israel | Israël
+im | Isle of Man | Île de Man
+in | India | Inde
+io | British Indian Ocean Territory
+iq | Iraq | Irak
+ir | Iran
+is | Iceland | Islande
+it | Italy | Italie | Italia
+jm | Jamaica | Jamaïque
+jo | Jordan | Jordanie
+jp | Japan | Japon
+ke | Kenya
+kg | Kyrgyzstan | Kirghizistan
+kh | Cambodia | Cambodge
+ki | Kiribati
+km | Comoros | Comores
+kn | Saint Kitts and Nevis | Saint-Christophe-et-Niévès
+kp | North Korea | Corée du Nord
+kr | South Korea | Corée du Sud | Republic of Korea | Korea | Corée
+kw | Kuwait | Koweït
+ky | Cayman Islands | Îles Caïmans
+kz | Kazakhstan
+la | Laos
+lb | Lebanon | Liban
+lc | Saint Lucia
+li | Liechtenstein
+lk | Sri Lanka
+lr | Liberia | Libéria
+ls | Lesotho
+lt | Lithuania | Lituanie
+lu | Luxembourg
+lv | Latvia | Lettonie
+ly | Libya | Libye
+ma | Morocco | Maroc
+mc | Monaco
+md | Moldova | Moldavie
+me | Montenegro | Monténégro
+mg | Madagascar
+mh | Marshall Islands | Îles Marshall
+mk | North Macedonia | Macédoine du Nord | Macedonia | Macédoine
+ml | Mali
+mm | Myanmar | Burma | Birmanie
+mn | Mongolia | Mongolie
+mo | Macau | Macao
+mp | Northern Mariana Islands
+mr | Mauritania | Mauritanie
+ms | Montserrat
+mt | Malta | Malte
+mu | Mauritius | Île Maurice
+mv | Maldives
+mw | Malawi
+mx | Mexico | Mexique | México
+my | Malaysia | Malaisie
+mz | Mozambique
+na | Namibia | Namibie
+nc | New Caledonia | Nouvelle-Calédonie
+ne | Niger
+nf | Norfolk Island
+ng | Nigeria | Nigéria
+ni | Nicaragua
+nl | Netherlands | Pays-Bas | Holland | Nederland
+no | Norway | Norvège | Norge
+np | Nepal | Népal
+nr | Nauru
+nu | Niue
+nz | New Zealand | Nouvelle-Zélande
+om | Oman
+pa | Panama
+pe | Peru | Pérou
+pf | French Polynesia | Polynésie française
+pg | Papua New Guinea | Papouasie-Nouvelle-Guinée
+ph | Philippines
+pk | Pakistan
+pl | Poland | Pologne | Polska
+pm | Saint Pierre and Miquelon | Saint-Pierre-et-Miquelon
+pn | Pitcairn
+pr | Puerto Rico | Porto Rico
+ps | Palestine
+pt | Portugal
+pw | Palau | Palaos
+py | Paraguay
+qa | Qatar
+ro | Romania | Roumanie | România
+rs | Serbia | Serbie
+ru | Russia | Russie | Russian Federation
+rw | Rwanda
+sa | Saudi Arabia | Arabie saoudite | KSA
+sb | Solomon Islands | Îles Salomon
+sc | Seychelles
+sd | Sudan | Soudan
+se | Sweden | Suède | Sverige
+sg | Singapore | Singapour
+sh | Saint Helena | Sainte-Hélène
+si | Slovenia | Slovénie
+sj | Svalbard
+sk | Slovakia | Slovaquie
+sl | Sierra Leone
+sm | San Marino | Saint-Marin
+sn | Senegal | Sénégal
+so | Somalia | Somalie
+sr | Suriname
+ss | South Sudan | Soudan du Sud
+st | São Tomé and Príncipe | Sao Tomé-et-Principe
+sv | El Salvador
+sx | Sint Maarten
+sy | Syria | Syrie
+sz | Eswatini | Swaziland
+tc | Turks and Caicos Islands
+td | Chad | Tchad
+tf | French Southern Territories | Terres australes françaises
+tg | Togo
+th | Thailand | Thaïlande
+tj | Tajikistan | Tadjikistan
+tk | Tokelau
+tl | East Timor | Timor-Leste | Timor oriental
+tm | Turkmenistan | Turkménistan
+tn | Tunisia | Tunisie
+to | Tonga
+tr | Turkey | Turquie | Türkiye
+tt | Trinidad and Tobago | Trinité-et-Tobago
+tv | Tuvalu
+tw | Taiwan | Taïwan
+tz | Tanzania | Tanzanie
+ua | Ukraine
+ug | Uganda | Ouganda
+um | United States Minor Outlying Islands
+us | United States | États-Unis | USA | United States of America | U.S.
+uy | Uruguay
+uz | Uzbekistan | Ouzbékistan
+va | Vatican | Holy See | Saint-Siège
+vc | Saint Vincent and the Grenadines | Saint-Vincent-et-les-Grenadines
+ve | Venezuela
+vg | British Virgin Islands
+vi | US Virgin Islands
+vn | Vietnam | Viet Nam
+vu | Vanuatu
+wf | Wallis and Futuna | Wallis-et-Futuna
+ws | Samoa
+xk | Kosovo
+ye | Yemen | Yémen
+za | South Africa | Afrique du Sud
+zm | Zambia | Zambie
+zw | Zimbabwe

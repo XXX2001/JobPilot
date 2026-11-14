@@ -326,8 +326,8 @@ async def test_match_new_row_shape(monkeypatch):
         await db.commit()
     assert match.id is not None and match.job_id == job.id
     assert (match.status, match.batch_date) == ("new", date(2026, 11, 14))
-    # covered, then by family: the title's "robotics" through the ROS keyword
-    assert match.keyword_hits == {"python": True, "ros": True, "robotics": True}
+    # no CV: only the skills the keywords name are scored, and listed
+    assert match.keyword_hits == {"python": True, "ros": True}
     assert match.score == JobMatcher().score(raw_to_details(job), filters) > 0
     assert match.score_basis == JobMatcher().score_basis
 
@@ -364,6 +364,25 @@ async def test_match_new_scores_description_less_card_provisionally():
         assert match.job_id == hit.id
         assert match.score == 70
         assert match.keyword_hits == {"python": True, "robotics": True, "software engineer": True}
+
+
+async def test_match_new_stores_what_the_score_rests_on():
+    """A title-only score and an unproven location are kept on the match, for the UI."""
+    filters = JobFilters(keywords=["robotics"], locations=["France"])
+    async with AsyncSessionLocal() as db:
+        src = await source(db)
+        jobs = await upsert_discovered(
+            db,
+            src,
+            [
+                raw(external_id="card", company="A", description=""),
+                raw(external_id="town", company="B", description=POSTING, location="Massy"),
+            ],
+        )
+        card, town = await match_new(db, jobs, filters, 0)
+        await db.commit()
+        assert (card.provisional, card.location_unverified) == (True, False)
+        assert (town.provisional, town.location_unverified) == (False, True)
 
 
 async def test_match_new_skips_filtered_job():

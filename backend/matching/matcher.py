@@ -15,7 +15,13 @@ from backend.latex.artifacts import resolve_base_source
 from backend.matching.cv_parser import latex_to_text
 from backend.matching.filters import JobFilters
 from backend.matching.gazetteer import GAZETTEER_VERSION, Gazetteer
-from backend.matching.scorer import ScoreResult, cv_skills, score_job
+from backend.matching.scorer import (
+    SCORER_VERSION,
+    ScoreResult,
+    cv_skills,
+    keyword_skills,
+    score_job,
+)
 from backend.models.schemas import JobDetails
 from backend.models.user import SearchSettings, UserProfile
 
@@ -27,7 +33,8 @@ class JobMatcher:
 
     ``extra_terms`` are the owner's search keywords: they extend the gazetteer, so a
     profession the curated list does not cover still counts. Without a CV the skills
-    named in ``filters.keywords`` stand in for it. ``cv_text`` may be LaTeX source.
+    named in ``filters.keywords`` stand in for it and the score is how strongly the
+    posting asks for them. ``cv_text`` may be LaTeX source.
     """
 
     def __init__(self, cv_text: str = "", extra_terms: Iterable[str] = ()) -> None:
@@ -36,14 +43,16 @@ class JobMatcher:
         cv_text = latex_to_text(cv_text)  # "R\\&D" is not the skill R
         self._cv = cv_skills(cv_text, self._gaz) if cv_text.strip() else None
         # What a stored score was computed from: a match with another basis is stale.
-        digest = hashlib.sha256("\0".join([cv_text, *terms]).encode()).hexdigest()
+        digest = hashlib.sha256(
+            "\0".join([str(SCORER_VERSION), cv_text, *terms]).encode()
+        ).hexdigest()
         self.score_basis = f"{digest[:12]}:{GAZETTEER_VERSION}"
 
     def explain(self, job: JobDetails, filters: JobFilters) -> ScoreResult:
-        cv = self._cv
-        if cv is None:
-            cv = frozenset(s for kw in filters.keywords for s in self._gaz.skills(kw))
-        return score_job(job, cv, filters, self._gaz)
+        if self._cv is not None:
+            return score_job(job, self._cv, filters, self._gaz)
+        claimed = keyword_skills(tuple(filters.keywords), self._gaz)
+        return score_job(job, claimed, filters, self._gaz, claimed_only=True)
 
     def score(self, job: JobDetails, filters: JobFilters) -> float:
         """Return 0-100 relevance score; 0 when a hard filter rejects the job."""

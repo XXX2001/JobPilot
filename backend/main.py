@@ -101,7 +101,7 @@ async def lifespan(app: FastAPI):
         from backend.monitor.poller import rescore_stale
 
         async with database.AsyncSessionLocal() as session:
-            await rescore_stale(session)
+            await rescore_stale(session, after_save=False)
     except Exception:
         logger.exception("Rescoring stored matches failed (non-fatal)")
 

@@ -140,6 +140,8 @@ export interface NewMatchMsg {
 	source: string;
 	posted_at: string | null;
 	url: string;
+	provisional?: boolean;
+	location_unverified?: boolean;
 }
 
 export type WSMessage =

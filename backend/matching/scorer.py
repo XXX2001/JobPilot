@@ -4,9 +4,10 @@
     score = 100 * coverage * (0.4 + 0.6 * T)
 
 Coverage is the criticality-weighted share of the posting's skills the CV covers, the
-required tier and the rest scored separately. T is the title factor. A posting that
-fails a hard filter scores 0 and is flagged, never down-weighted. A posting whose
-description names no skill is scored on its title alone, like a description-less card.
+required tier and the rest scored separately. T is the title factor; a non-technical
+title gets no 0.4 floor (score = 100 * coverage * T). A posting that fails a hard
+filter scores 0 and is flagged, never down-weighted. A posting whose description names
+fewer than two skills is scored on its title alone, like a description-less card.
 No recency, no embeddings, no LLM, no network.
 """
 
@@ -15,6 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 
 from backend.matching.filters import JobFilters
 from backend.matching.gazetteer import Gazetteer, fold
@@ -29,15 +31,25 @@ TITLE_MATCH = 1.0
 TITLE_NEUTRAL = 0.6
 TITLE_NON_TECHNICAL = 0.1
 PROVISIONAL_MIN_CHARS = 80  # a shorter description is a card, not a posting
+# Fewer skills in the body is an incidental mention, not a description of the job: one
+# "Python" in a chief-of-staff posting would otherwise be 67% coverage.
+PROVISIONAL_MIN_SKILLS = 2
+# Bump when a scoring rule or the location data changes: stored scores go stale.
+SCORER_VERSION = 2
 PROVISIONAL_KEYWORD_SCORE = 70.0
 PROVISIONAL_CV_SKILL_SCORE = 45.0
 
 # Both run on accent-folded, lowercased text.
 _NON_TECHNICAL = re.compile(
-    r"\b(?:sales|account (?:executive|manager)|commercial|business developer|marketing"
-    r"|comptab\w*|accountant|legal|juriste|counsel|compliance|aml|recruit\w*|talent"
-    r"|customer (?:care|success|support)|biostatisti\w*|analyst|chef de projet)\b"
+    r"\b(?:sales|account (?:executive|manager)|business developer|marketing"
+    r"|comptab\w*|accountant|juriste|counsel|aml|recruit\w*"
+    r"|customer (?:care|success|support)|biostatisti\w*|chef de projet)\b"
 )
+# Words that also name a product or a team inside an engineering title ("Software
+# Engineer, Talent Platform", "Ingénieur logiciel - Commercial Aircraft"): they only
+# count in the head of the title, before its first separator.
+_NON_TECHNICAL_HEAD = re.compile(r"\b(?:commercial|legal|compliance|talent|analyst)\b")
+_TITLE_HEAD_END = re.compile(r"[,(|/:\u2013\u2014]|\s-\s")
 _REMOTE = re.compile(
     r"\b(?:remote|teletravail|home[- ]?office|home[- ]?based|work(?:ing)? from home"
     r"|a distance|distanciel|anywhere)\b"
@@ -55,54 +67,49 @@ _REMOTE_NOISE = re.compile(
     r"|\b(?:remote|teletravail) (?:partiel|occasionnel|partial|occasional)\b"
     r"|\bhybrid\w*[ /-]+remote\b|\bremote[ /-]+hybrid\w*"
 )
-# Folded country name -> ISO code, for the location filter. Not exhaustive: an unknown
-# country is an unknown place, which a country-level filter lets through.
-_COUNTRY_NAMES = {
-    name: code
-    for code, names in {
-        "fr": "france",
-        "de": "germany|allemagne|deutschland",
-        "gb": "united kingdom|uk|royaume uni|england|angleterre|scotland|great britain",
-        "us": "united states|usa|etats unis",
-        "es": "spain|espagne",
-        "it": "italy|italie",
-        "be": "belgium|belgique",
-        "ch": "switzerland|suisse",
-        "lu": "luxembourg",
-        "nl": "netherlands|pays bas",
-        "pt": "portugal",
-        "ie": "ireland|irlande",
-        "ca": "canada",
-        "pl": "poland|pologne",
-        "se": "sweden|suede",
-        "dk": "denmark|danemark",
-        "no": "norway|norvege",
-        "fi": "finland|finlande",
-        "at": "austria|autriche",
-        "ro": "romania|roumanie",
-        "cz": "czech republic|czechia",
-        "gr": "greece|grece",
-        "hu": "hungary|hongrie",
-        "ua": "ukraine",
-        "tr": "turkey|turquie",
-        "il": "israel",
-        "ma": "morocco|maroc",
-        "tn": "tunisia|tunisie",
-        "dz": "algeria|algerie",
-        "in": "india|inde",
-        "cn": "china|chine",
-        "jp": "japan|japon",
-        "sg": "singapore|singapour",
-        "au": "australia|australie",
-        "br": "brazil|bresil",
-        "mx": "mexico|mexique",
-    }.items()
-    for name in names.split("|")
-}
+_DATA = Path(__file__).resolve().parent / "data"
+
+
+def _place(text: str) -> str:
+    """Folded, with hyphen and space equivalent ("Île-de-France" == "ile de france")."""
+    return " ".join(fold(text).replace("-", " ").split())
+
+
+def _table(name: str) -> dict[str, str]:
+    """Folded place name -> ISO country code, from a ``code | name | name`` data file."""
+    table: dict[str, str] = {}
+    for line in (_DATA / name).read_text(encoding="utf-8").splitlines():
+        code, *names = (part.strip() for part in line.split("|"))
+        if code and not code.startswith("#"):
+            table.update((_place(n), code) for n in names if n)
+    return table
+
+
+def _names(table: dict[str, str]) -> re.Pattern[str]:
+    """Any name of the table as whole words, longest first; never after "new" (New Mexico)."""
+    names = "|".join(map(re.escape, sorted(table, key=len, reverse=True)))
+    return re.compile(r"(?<![^\W_])(?<!new )(?:" + names + r")(?![^\W_])")
+
+
+# For the location filter. A place neither table knows is an unknown place, which a
+# country-level filter lets through, unverified.
+_COUNTRY_NAMES = _table("countries.txt")  # every ISO 3166-1 country, English and French
 _COUNTRY_CODES = frozenset(_COUNTRY_NAMES.values())
-_COUNTRY_NAME = re.compile(
-    r"(?<![^\W_])(?:" + "|".join(sorted(_COUNTRY_NAMES, key=len, reverse=True)) + r")(?![^\W_])"
-)
+_COUNTRY_NAME = _names(_COUNTRY_NAMES)
+_CITIES = _table("cities.txt")  # capitals and large metros, to place "London"
+_CITY = _names(_CITIES)
+# A bare two-letter code is a US state or a Canadian province at least as often as the
+# ISO country that shares it ("Denver, CO", "Regina, SK"): it stands for both.
+# ponytail: US and Canada only. Add Indian and Australian states if "Pune, MH" shows up.
+_SUBDIVISIONS = {
+    **dict.fromkeys(
+        "al ak az ar ca co ct de fl ga hi id il in ia ks ky la me md ma mi mn ms mo mt ne nv nh"
+        " nj nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi wy dc".split(),
+        "us",
+    ),
+    **dict.fromkeys("ab bc mb nb nl ns nt nu on pe qc sk yt".split(), "ca"),
+}
+_WORD = re.compile(r"[^\W_]+")
 
 
 @dataclass(frozen=True)
@@ -113,7 +120,7 @@ class ScoreResult:
     covered: list[str]
     partial: list[str]  # same-family credit
     missing: list[str]  # sorted by criticality desc
-    provisional: bool  # no description, or one that names no skill: title-only score
+    provisional: bool  # no description, or one naming under two skills: title-only score
     # The location filter lists a country (or the job is remote) and the job's location
     # does not name its country: let through, not proven to be inside.
     location_unverified: bool = False
@@ -135,13 +142,19 @@ def _phrase(phrase: str) -> re.Pattern[str] | None:
     return re.compile(r"(?<![^\W_])" + r"\s+".join(map(re.escape, words)) + r"(?![^\W_])")
 
 
+@lru_cache(maxsize=64)
+def keyword_skills(keywords: tuple[str, ...], gaz: Gazetteer) -> frozenset[str]:
+    """The gazetteer skills the owner's search keywords name."""
+    return frozenset(s for keyword in keywords for s in gaz.skills(keyword))
+
+
+def _non_technical(folded_title: str) -> bool:
+    head = _TITLE_HEAD_END.split(folded_title, maxsplit=1)[0]
+    return bool(_NON_TECHNICAL.search(folded_title) or _NON_TECHNICAL_HEAD.search(head))
+
+
 def _has_any(phrases: list[str], folded_text: str) -> bool:
     return any((p := _phrase(phrase)) is not None and p.search(folded_text) for phrase in phrases)
-
-
-def _place(text: str) -> str:
-    """Folded, with hyphen and space equivalent ("Île-de-France" == "ile de france")."""
-    return " ".join(fold(text).replace("-", " ").split())
 
 
 def _country_code(text: str) -> str | None:
@@ -170,25 +183,38 @@ def _wanted(locations: tuple[str, ...]) -> tuple[tuple[str, ...], frozenset[str]
 
 
 def _job_countries(location: str, country: str) -> set[str]:
-    """Countries the job names: by name anywhere, by ISO code as the last comma part
-    (Indeed's "Lyon, ARA, FR") or in ``JobDetails.country``."""
-    found = {_COUNTRY_NAMES[name] for name in _COUNTRY_NAME.findall(location)}
-    for candidate in (location.rsplit(",", 1)[-1].strip(), _place(country)):
-        if code := _country_code(candidate):
-            found.add(code)
-    return found
+    """Countries the job's location (as posted) or ``JobDetails.country`` names.
+
+    By name anywhere; by ISO code as the last comma part (Indeed's "Lyon, ARA, FR") or,
+    in capitals, as the first or last word ("US - New York", "Remote US"); and when
+    none of those names a country, by a major city ("London").
+    """
+    place = _place(location)
+    found = {_COUNTRY_NAMES[name] for name in _COUNTRY_NAME.findall(place)}
+    if code := _country_code(_place(country)):
+        found.add(code)
+    codes = [place.rsplit(",", 1)[-1].strip()]
+    if not location.isupper():  # in "LA ROCHELLE" capitals say nothing
+        words = _WORD.findall(location)
+        codes += [w.lower() for w in (*words[:1], *words[-1:]) if w.isupper()]
+    for code in codes:
+        found |= {code} & _COUNTRY_CODES
+        if code in _SUBDIVISIONS:
+            found.add(_SUBDIVISIONS[code])
+    return found or {_CITIES[city] for city in _CITY.findall(place)}
 
 
 def _location(job: JobDetails, locations: list[str], remote: bool) -> tuple[bool, bool]:
     """(passes, unverified) for the location filter.
 
     A place entry must be in the location as whole words, unless the job is remote. A
-    country entry rejects only a job that names another country: without a city table
-    "Marseille" cannot be proven to be outside France, so it passes, unverified.
+    country entry rejects only a job proven to be in another country: a town the city
+    table does not know ("Massy") cannot be proven outside France, so it passes,
+    unverified.
     """
     places, countries = _wanted(tuple(locations))
     location = _place(job.location)
-    here = _job_countries(location, job.country)
+    here = _job_countries(job.location, job.country)
     if not (places or countries) or not (location or here):
         return True, False
     if _has_any(list(places), location):
@@ -222,10 +248,14 @@ def _reject_reason(job: JobDetails, filters: JobFilters) -> tuple[str | None, bo
 
 
 def skill_credit(weights: dict[str, float], cv: frozenset[str], gaz: Gazetteer) -> dict[str, float]:
-    """Per posting skill: 1.0 on the CV, FAMILY_CREDIT for a same-family CV skill, else 0.0."""
+    """Per posting skill: 1.0 on the CV, FAMILY_CREDIT for a same-family CV skill, else 0.0.
+
+    A search keyword the gazetteer took as a skill of its own (``gaz.extra_skills``) is
+    the owner's term: it counts whether or not the CV spells it out.
+    """
     return {
         skill: 1.0
-        if skill in cv
+        if skill in cv or skill in gaz.extra_skills
         else FAMILY_CREDIT
         if any(gaz.related(skill, have) for have in cv)
         else 0.0
@@ -249,9 +279,19 @@ def coverage(weights: dict[str, float], credit: dict[str, float]) -> float:
 
 
 def score_job(
-    job: JobDetails, cv: frozenset[str], filters: JobFilters, gaz: Gazetteer
+    job: JobDetails,
+    cv: frozenset[str],
+    filters: JobFilters,
+    gaz: Gazetteer,
+    *,
+    claimed_only: bool = False,
 ) -> ScoreResult:
-    """Score one posting against the CV's skills (see :func:`cv_skills`)."""
+    """Score one posting against the CV's skills (see :func:`cv_skills`).
+
+    ``claimed_only``: ``cv`` is not a CV but the skills the owner's keywords name. The
+    score is then how strongly the posting asks for those; a skill nobody claimed is
+    not a missing one.
+    """
     reason, unverified = _reject_reason(job, filters)
     if reason is not None:
         return ScoreResult(0.0, False, reason, [], [], [], False)
@@ -260,16 +300,21 @@ def score_job(
     weights: dict[str, float] = {}
     if len(job.description.strip()) >= PROVISIONAL_MIN_CHARS:
         weights = extract_job_skills("", job.description, gaz)
-    # Nothing to cover in the body: coverage is undefined, the title is all there is.
-    provisional = not weights
+    # Too little to cover in the body: the title is all there is.
+    provisional = len(weights) < PROVISIONAL_MIN_SKILLS
     weights.update(dict.fromkeys(title_skills, REQUIRED))
+    if claimed_only:
+        weights = {s: w for s, w in weights.items() if s in cv or s in gaz.extra_skills}
     credit = skill_credit(weights, cv, gaz)
     covered = sorted(s for s, c in credit.items() if c == 1.0)
     partial = sorted(s for s, c in credit.items() if c == FAMILY_CREDIT)
     missing = sorted((s for s, c in credit.items() if c == 0.0), key=lambda s: (-weights[s], s))
 
     title = fold(job.title)
-    keyword_in_title = _has_any(filters.keywords, title)
+    # Literally, or by any alias of a skill it names ("Ingénieur Robotique" for robotics).
+    keyword_in_title = _has_any(filters.keywords, title) or not title_skills.isdisjoint(
+        keyword_skills(tuple(filters.keywords), gaz)
+    )
     cv_skill_in_title = not cv.isdisjoint(title_skills)
     if provisional:
         if keyword_in_title:
@@ -283,13 +328,17 @@ def score_job(
         # products") but not one of the owner's own search keywords.
         if keyword_in_title:
             factor = TITLE_MATCH
-        elif _NON_TECHNICAL.search(title):
+        elif _non_technical(title):
             factor = TITLE_NON_TECHNICAL
         elif cv_skill_in_title:
             factor = TITLE_MATCH
         else:
             factor = TITLE_NEUTRAL
-        score = 100 * coverage(weights, credit) * ((1 - TITLE_WEIGHT) + TITLE_WEIGHT * factor)
+        multiplier = (1 - TITLE_WEIGHT) + TITLE_WEIGHT * factor
+        if factor == TITLE_NON_TECHNICAL:
+            # No floor: a sales posting that lists every skill of the CV stays near zero.
+            multiplier = factor
+        score = 100 * coverage(weights, credit) * multiplier
     return ScoreResult(
         round(score, 2), True, None, covered, partial, missing, provisional, unverified
     )

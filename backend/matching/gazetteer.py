@@ -105,6 +105,8 @@ class Gazetteer:
         self._ci: dict[tuple[str, ...], str] = {}
         self._cs: dict[tuple[str, ...], str] = {}
         self._families = families or {}
+        # Canonical names of the owner's keywords :meth:`load` added as skills of their own.
+        self.extra_skills: frozenset[str] = frozenset()
         for canon, alias, case_sensitive in entries:
             key = _key(alias)
             if not key:
@@ -150,6 +152,9 @@ class Gazetteer:
         for key, canon in extra.items():  # after the loop: keywords do not hide each other
             gazetteer._ci.setdefault(key, canon)
             gazetteer._max_len = max(gazetteer._max_len, len(key))
+        gazetteer.extra_skills = frozenset(
+            canon for key, canon in extra.items() if gazetteer._ci[key] == canon
+        )
         return gazetteer
 
     def extract(self, text: str) -> list[Mention]:

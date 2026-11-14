@@ -539,11 +539,15 @@ class BatchRunner:
                 # keyword -> True: the column is ``Mapped[Optional[dict]]`` and
                 # the frontend treats a dict of truthy values as the hit set.
                 matched = matcher.matched_keywords(jd, filters)
+                explain = getattr(matcher, "explain", None)  # absent on an injected stub
+                result = explain(jd, filters) if explain else None
                 match_row = JobMatch(
                     job_id=job_row.id,
                     score=score,
                     keyword_hits={kw: True for kw in matched},
                     score_basis=getattr(matcher, "score_basis", None),
+                    provisional=bool(result and result.provisional),
+                    location_unverified=bool(result and result.location_unverified),
                     batch_date=today,
                     status="new",
                 )

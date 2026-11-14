@@ -7,7 +7,7 @@ JobPilot discovers postings on two paths:
 
 ## The discovery monitor
 
-Off by default. Set `MONITOR_ENABLED=true` and restart: the app's APScheduler then runs `monitor_tick` every `MONITOR_TICK_SECONDS`.
+Off by default. Set `MONITOR_ENABLED=true` and restart: the app's APScheduler then runs `monitor_tick` every `MONITOR_TICK_SECONDS`. Architecture, concurrency, rescoring, migrations and known shortcuts: [monitor.md](monitor.md).
 
 ### What one tick does
 
@@ -15,13 +15,14 @@ Off by default. Set `MONITOR_ENABLED=true` and restart: the app's APScheduler th
 
 1. Calls the adapter with the stored `etag` and `last_scraped_at`. A `304 Not Modified` ends the poll there.
 2. `upsert_discovered` stores the jobs. Identity is `(source, external_id)`, with `dedup_hash` as the cross-source fallback; a job already stored is not inserted again.
-3. `match_new` scores each new job with the owner's CV and search settings ([Matching](matching.md)) and creates one `new` match per job at or above `min_match_score`. A job has one match, ever.
-4. Each new match is announced: a `new_match` WebSocket frame, and one POST to `NTFY_URL` when set (title `New match <score>`, body `<title> — <company> (<location>)`, click-through to the posting).
-5. The source row records the outcome: `last_scraped_at`, `etag`, `fail_count`, `last_error`, `next_poll_at`.
+3. `match_new` scores each new job with the owner's CV (or `my_skills.txt`) and search settings ([Matching](matching.md)) and creates one `new` match per job at or above `min_match_score`. A job has one match, ever.
+4. LinkedIn guest only: up to 5 matched cards are opened in the owner's logged-in JobPilot Chrome, when it is running, to read the description and apply method, and are rescored ([browser.md](browser.md#reading-linkedin-job-pages)). A closed posting, or one that now scores under the threshold, stays in the queue but is not announced.
+5. Each new match is announced: a `new_match` WebSocket frame, and one POST to `NTFY_URL` when set (title `New match <score>`, with `(title only, location unverified, Easy Apply)` when they apply; body `<title> — <company> (<location>)`; click-through to the posting).
+6. The source row records the outcome: `last_scraped_at`, `etag`, `fail_count`, `last_error`, `next_poll_at`. It is committed before step 4.
 
-The first successful poll of a source **seeds** it: every job is stored and matched, none is announced. For Indeed and LinkedIn, postings older than the seed that surface later are stored and matched but not announced either.
+The first successful poll of a source **seeds** it: every job is stored and matched, none is announced. For Indeed and LinkedIn, postings older than the seed that surface later are stored and matched but not announced either. Their windows are cut differently from poll to poll, so old postings keep surfacing. Company boards do not get this guard: a board returns everything on every poll, so the seed has seen every old posting, and a newly (re)published posting can carry an old date.
 
-Each source has its own DB session and transaction. A failed poll rolls back whole, increments `fail_count` and doubles the wait (interval × 2^fails, capped at 6 h). After a success the next poll is one interval away, ±20% jitter. An authentication failure (Indeed's app key revoked) disables the source and sends one "Source disabled" notification; it is not retried.
+Each source has its own DB session and transaction. A failed poll rolls back whole, increments `fail_count` and doubles the wait (interval × 2^fails, capped at 6 h). After a success the next poll is one interval away, ±20% jitter. An authentication failure (HTTP 401 from a board or Indeed, e.g. Indeed's app key revoked) disables the source and sends one "Source disabled" notification; it is not retried until resumed.
 
 ### Sources
 
@@ -37,7 +38,7 @@ Adapters live in `backend/scraping/sources/` and register in `ADAPTERS`. All are
 
 A source is a `job_sources` row with `type="monitor"` and `config = {"adapter": …, …}`. `poll_interval_s` overrides the default interval. Rows without an adapter belong to the batch scrape and are never polled by the monitor.
 
-Cards without a description get a provisional, title-only score (see [Matching](matching.md)). When Indeed's window overflows one page, the source's window is halved for the next polls. LinkedIn's guest endpoint is not proven under sustained polling: anything that is not a card list counts as blocked and the source backs off.
+Cards without a description get a provisional, title-only score (see [Matching](matching.md)). For LinkedIn, step 4 replaces it with a full score when the page could be read. When Indeed's window overflows one page, the source's window is halved for the next polls. LinkedIn's guest endpoint is not proven under sustained polling: anything that is not a card list counts as blocked and the source backs off.
 
 ### Adding sources
 

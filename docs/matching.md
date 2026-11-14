@@ -52,7 +52,7 @@ A town neither table knows ("Massy", "Remote") cannot be placed: it passes with 
 
 **What is not in the score:** recency (applied at read time), salary and experience. `JobFilters` (`backend/matching/filters.py`) still carries `salary_min`, `experience_range`, `job_types` and `languages`; the scorer does not read them.
 
-**Stale scores.** Each match stores `score_basis` = hash of (`SCORER_VERSION`, CV text, keywords) + `GAZETTEER_VERSION` (hash of `skills.txt`). Bump `SCORER_VERSION` in `scorer.py` when a scoring rule or the location data changes. `rescore_all` (`backend/monitor/store.py`) recomputes the `new` matches whose basis differs; it runs at startup and after a CV or settings save (`rescore_stale` in `backend/monitor/poller.py`). `rescore_stale` then scores the stored jobs that have no match and were stored in the last 30 days, so a job the old CV or keywords left out gets a match (without a notification). At startup that sweep runs only when a stored score was stale.
+**Stale scores.** Each match stores `score_basis` = hash of (`SCORER_VERSION`, CV text, keywords) + the hash of the active vocabulary file (the bundled `skills.txt`, or `<data dir>/skills.txt`); the hashed text is `my_skills.txt` instead of the CV when that file is in use. Bump `SCORER_VERSION` in `scorer.py` when a scoring rule or the location data changes. `rescore_all` (`backend/monitor/store.py`) recomputes the `new` matches whose basis differs; it runs at startup and after a CV or settings save (`rescore_stale` in `backend/monitor/poller.py`). `rescore_stale` then scores the stored jobs that have no match and were stored in the last 30 days, so a job the old CV or keywords left out gets a match (without a notification). At startup that sweep runs only when a stored score was stale.
 
 ---
 
@@ -127,7 +127,7 @@ django | django rest framework | drf
 - Do not add a bare ordinary word as an alias (`vue`, `node`, `shell`): it matches prose.
 - The first line to claim an alias keeps it.
 
-Any edit changes `GAZETTEER_VERSION`, so stored `new` matches are rescored at the next startup. Add a unit test in `tests/test_gazetteer.py` for a name that could match prose.
+Any edit changes the vocabulary hash, so stored `new` matches are rescored at the next startup. Add a unit test in `tests/test_gazetteer.py` for a name that could match prose.
 
 **Search keywords extend the list at runtime.** A keyword in which the list finds no skill becomes a skill of its own (`Gazetteer.load(extra_terms)`), so a profession the list does not cover still counts. A keyword that contains a listed skill ("Python Developer") is treated as a job title and adds nothing.
 

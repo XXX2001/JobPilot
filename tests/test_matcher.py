@@ -53,7 +53,7 @@ def _make_job(
 
 
 def test_perfect_match_scores_high():
-    """A job requiring exactly the owner's skills, in the right city, scores >= 80."""
+    """A job requiring exactly the owner's skills, in the right city, scores >= 65 (two skills are thin evidence)."""
     matcher = JobMatcher()
     filters = JobFilters(
         keywords=["python", "machine learning"],
@@ -61,7 +61,7 @@ def test_perfect_match_scores_high():
     )
     job = _make_job(description="Requirements\n- Python\n- Machine learning\n- Paris based\n")
     score = matcher.score(job, filters)
-    assert score >= 80.0
+    assert score >= 65.0
 
 
 def test_excluded_term_in_title_returns_zero():

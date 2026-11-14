@@ -120,7 +120,7 @@ def test_keyword_in_title_overrides_the_non_technical_family(g, cv):
 
 def test_title_factor_values(g, cv):
     description = "We work with Python, Docker and Linux on a daily basis, in a team of ten people."
-    coverage = 1.8 / 2.3  # three neutral skills, all covered
+    coverage = 1.8 / 2.8  # three neutral skills, all covered
     cases = {
         "Python Developer": 1.0,  # CV skill in the title (which also makes it required)
         "Platform Engineer": 0.6,
@@ -129,7 +129,7 @@ def test_title_factor_values(g, cv):
     for title, factor in cases.items():
         r = score_job(job(title=title, description=description), cv, filters(), g)
         if title == "Python Developer":
-            expected = 0.65 * (1.0 / 1.5) + 0.35 * (1.2 / 1.7)
+            expected = 0.65 * (1.0 / 2.0) + 0.35 * (1.2 / 2.2)
         else:
             expected = coverage
         # A non-technical title gets no floor: the bare factor.
@@ -343,8 +343,8 @@ def test_coverage_lists(g, cv):
     assert r.partial == ["kubernetes"]  # same family as Docker
     assert r.missing == []
     assert not r.provisional
-    required = 4.0 / 4.5  # python, c++, ros 2 and the title's robotics at 1.0
-    other = (0.3 + 0.3 * 0.5) / (0.6 + 0.5)  # nice-to-have: docker covered, kubernetes half
+    required = 4.0 / 5.0  # python, c++, ros 2 and the title's robotics at 1.0
+    other = (0.3 + 0.3 * 0.5) / (0.6 + 1.0)  # nice-to-have: docker covered, kubernetes half
     # A CV skill is in the title: T = 1.
     expected = 100 * (0.65 * required + 0.35 * other)
     assert r.score == pytest.approx(expected, abs=0.1)
@@ -419,8 +419,8 @@ def test_all_required_posting_is_not_capped_by_the_empty_other_tier(g, cv):
     passing = "Day to day the team works with Python, C++, ROS 2, Docker and Linux in production."
     required = score_job(job(title="Engineer", description=structured), cv, filters(), g)
     neutral = score_job(job(title="Engineer", description=passing), cv, filters(), g)
-    assert required.score == pytest.approx(100 * (5 / 5.5) * 0.76, abs=0.1)
-    assert neutral.score == pytest.approx(100 * (3 / 3.5) * 0.76, abs=0.1)
+    assert required.score == pytest.approx(100 * (5 / 6) * 0.76, abs=0.1)
+    assert neutral.score == pytest.approx(100 * (3 / 4) * 0.76, abs=0.1)
     assert required.score > neutral.score
 
 
@@ -464,7 +464,7 @@ def test_claimed_only_scores_the_claimed_skills(g):
     claimed = score_job(posting, frozenset({"python"}), f, g, claimed_only=True)
     assert penalised.score < MIN_MATCH_SCORE <= claimed.score
     assert claimed.covered == ["python"] and claimed.missing == []
-    assert claimed.score == pytest.approx(100 * (1 / 1.5) * 0.76, abs=0.1)
+    assert claimed.score == pytest.approx(100 * (1 / 2) * 0.76, abs=0.1)
     # A posting that never names the claimed skill scores nothing.
     other = job(title="Backend Engineer", description=description.replace("Python", "Java"))
     assert score_job(other, frozenset({"python"}), f, g, claimed_only=True).score == 0

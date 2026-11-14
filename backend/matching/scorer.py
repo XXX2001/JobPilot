@@ -25,6 +25,9 @@ from backend.models.schemas import JobDetails
 
 REQUIRED_SHARE = 0.65  # coverage = 0.65 * cov(required) + 0.35 * cov(other)
 SHRINK = 0.5  # pseudo-weight of unknown skills: a one-skill posting cannot reach 100
+# The match score shrinks harder than the fit assessment: with 0.5 a posting naming two
+# skills reached 80. Few skills are weak evidence of a fit.
+MATCH_SHRINK = 1.0
 FAMILY_CREDIT = 0.5  # the CV has a skill of the same family (Django for FastAPI)
 TITLE_WEIGHT = 0.6
 TITLE_MATCH = 1.0
@@ -35,7 +38,7 @@ PROVISIONAL_MIN_CHARS = 80  # a shorter description is a card, not a posting
 # "Python" in a chief-of-staff posting would otherwise be 67% coverage.
 PROVISIONAL_MIN_SKILLS = 2
 # Bump when a scoring rule or the location data changes: stored scores go stale.
-SCORER_VERSION = 2
+SCORER_VERSION = 3
 PROVISIONAL_KEYWORD_SCORE = 50.0
 PROVISIONAL_CV_SKILL_SCORE = 40.0
 
@@ -263,11 +266,13 @@ def skill_credit(weights: dict[str, float], cv: frozenset[str], gaz: Gazetteer) 
     }
 
 
-def coverage(weights: dict[str, float], credit: dict[str, float]) -> float:
+def coverage(
+    weights: dict[str, float], credit: dict[str, float], shrink: float = SHRINK
+) -> float:
     """Criticality-weighted share (0-1) of the posting's skills the CV covers."""
     def cov(skills: list[str]) -> float:
         total = sum(weights[s] for s in skills)
-        return sum(weights[s] * credit[s] for s in skills) / (total + SHRINK)
+        return sum(weights[s] * credit[s] for s in skills) / (total + shrink)
 
     required = [s for s, w in weights.items() if w >= REQUIRED]
     other = [s for s, w in weights.items() if w < REQUIRED]
@@ -338,7 +343,7 @@ def score_job(
         if factor == TITLE_NON_TECHNICAL:
             # No floor: a sales posting that lists every skill of the CV stays near zero.
             multiplier = factor
-        score = 100 * coverage(weights, credit) * multiplier
+        score = 100 * coverage(weights, credit, MATCH_SHRINK) * multiplier
     return ScoreResult(
         round(score, 2), True, None, covered, partial, missing, provisional, unverified
     )

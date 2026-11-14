@@ -339,6 +339,7 @@ try:
     import backend.api.gmail as gmail  # type: ignore
     import backend.api.gmail_auth as gmail_auth  # type: ignore
     import backend.api.jobs as jobs  # type: ignore
+    import backend.api.monitor as monitor  # type: ignore
     import backend.api.queue as queue  # type: ignore
     import backend.api.settings as api_settings  # type: ignore
     import backend.api.today as today  # type: ignore
@@ -356,6 +357,7 @@ try:
     app.include_router(gmail_auth.router)
     app.include_router(gmail.router)
     app.include_router(correspondence.router)
+    app.include_router(monitor.router)
     # ws.py is present but may not register routes yet
     app.include_router(ws.router)
 except Exception as e:

@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Callable, Optional
 
-from backend.applier._strategy_common import restricted_tools
+from backend.applier._strategy_common import open_own_tab, restricted_tools
 from backend.applier._strategy_common import (
     PHONE_NUMBER_NOTE,
     build_browser,
@@ -325,6 +325,7 @@ class AutoApplyStrategy:
         browser = build_browser(browser_kwargs, state_path, apply_url=apply_url)
         self._active_browser = browser
         try:
+            await open_own_tab(browser, apply_url)
             from backend.llm.factory import make_browser_llm
             llm = make_browser_llm()
             # Collect file paths the agent is allowed to upload

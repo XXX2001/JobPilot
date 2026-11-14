@@ -54,3 +54,31 @@ async def test_fill_only_failure_closes_the_tab_not_the_owners_session(monkeypat
         )
     page.close.assert_awaited_once()
     context.close.assert_not_awaited()
+
+
+def test_build_browser_attaches_without_launch_or_security_flags(monkeypatch, tmp_path: Path):
+    from backend.applier import _strategy_common as common
+
+    seen: dict = {}
+    monkeypatch.setattr(common, "_Browser", lambda **kw: seen.update(kw) or "browser")
+    monkeypatch.setattr(common, "running_endpoint", lambda: {"port": 4242})
+    state = tmp_path / "state.json"
+    state.write_text("{}")
+    kwargs = {"headless": False, "disable_security": True, "keep_alive": True}
+    assert common.build_browser(kwargs, state, apply_url="https://jobs.example.com/a") == "browser"
+    assert seen["cdp_url"] == "http://127.0.0.1:4242" and seen["permissions"] == []
+    launch_only = {"headless", "disable_security", "storage_state", "user_data_dir", "args"}
+    assert not launch_only & set(seen)
+    assert "jobs.example.com" in seen["allowed_domains"]
+
+
+async def test_open_own_tab_only_when_attached(monkeypatch):
+    from backend.applier import _strategy_common as common
+
+    browser = MagicMock(start=AsyncMock(), navigate_to=AsyncMock())
+    monkeypatch.setattr(common, "running_endpoint", lambda: None)
+    await common.open_own_tab(browser, "https://x/")
+    browser.navigate_to.assert_not_awaited()
+    monkeypatch.setattr(common, "running_endpoint", lambda: {"port": 1})
+    await common.open_own_tab(browser, "https://x/")
+    browser.navigate_to.assert_awaited_once_with("https://x/", new_tab=True)

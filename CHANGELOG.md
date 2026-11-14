@@ -4,6 +4,19 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## monitor-discovery (discovery monitor + gazetteer scoring) 2026-11-14
+
+Not yet merged to `main` (branch `feat/monitor-discovery`). Spec: `docs/superpowers/specs/2026-11-14-monitor-redesign.md`, phases 1 and 2.
+
+- **Discovery monitor.** With `MONITOR_ENABLED=true` an APScheduler tick (`MONITOR_TICK_SECONDS`, default 30 s) polls the due sources through deterministic HTTP adapters — Greenhouse, Ashby, SmartRecruiters (conditional GET, 60 s), Indeed (GraphQL, 7 min), LinkedIn guest search (5 min) — logged out, with no LLM and no browser. New jobs are stored once (`(source, external_id)` identity), scored, matched once and announced by a `new_match` WebSocket frame and an optional ntfy POST (`NTFY_URL`). Failed sources back off up to 6 h.
+- **Monitor API and watchlist.** `GET /api/monitor/status`, `POST /api/monitor/sources`, `POST /api/monitor/sources/{id}/pause|resume`; `scripts/import_watchlist.py` imports a company CSV as monitor sources.
+- **Gazetteer scoring.** `JobMatcher` now scores with a curated bilingual skill list (`backend/matching/data/skills.txt`): hard filters (location, excluded keywords and companies), criticality-weighted coverage of the posting's skills by the CV, and a title factor. About 2 ms per job, no network. Description-less cards get a provisional title-only score. The score no longer includes recency, salary or experience.
+- **Fit engine on the same extraction; embedding stack removed.** `FitAssessment` keeps its shape. `EMBEDDING_*` settings are ignored.
+- **Stale scores are recomputed.** Each match records the CV, keywords and skill-list version it was scored on; `new` matches are rescored at startup and after a CV or settings save.
+- **Evaluation.** `tests/test_scoring_ranking.py` (12 adversarial postings: every `good` outranks every `bad`) and `scripts/diagnostics/score_report.py` (read-only score report on a database). Measured numbers and known weak spots are in [`docs/matching.md`](docs/matching.md#7-evaluation).
+
+---
+
 ## production-readiness (Docker + Windows install) 2026-06-18
 
 Makes JobPilot easy to install and run for Docker and Windows users, and hardens the container for production.

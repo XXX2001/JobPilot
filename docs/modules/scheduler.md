@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The `scheduler` package contains the on-demand batch pipeline that drives JobPilot's job-discovery and CV pre-generation workflow. Despite the package name, no APScheduler/cron machinery is wired up: runs are triggered explicitly by `POST /api/queue/refresh` (or any other caller of `BatchRunner.run_batch()`). The pipeline scrapes all enabled job sources, scores and filters results against the user's search preferences, persists the best matches to the database, runs a skill-gap fit assessment, and pre-generates tailored CVs so they are ready when the user opens the dashboard.
+The `scheduler` package contains the on-demand batch pipeline that drives JobPilot's job-discovery and CV pre-generation workflow. The batch itself is not on a timer: runs are triggered explicitly by `POST /api/queue/refresh` (or any other caller of `BatchRunner.run_batch()`). The timed work — the discovery monitor and the Gmail poll — is scheduled in `backend/main.py` and described under [Scheduled jobs](#scheduled-jobs). The pipeline scrapes all enabled job sources, scores and filters results against the user's search preferences, persists the best matches to the database, runs a skill-gap fit assessment, and pre-generates tailored CVs so they are ready when the user opens the dashboard.
 
 ---
 
@@ -21,6 +21,38 @@ Contains the `BatchRunner` class and two private helper functions. The class own
 ### `__init__.py`
 
 Empty package marker (`# scheduler package`). Exports nothing; consumers import directly from `backend.scheduler.batch_runner`.
+
+---
+
+## Scheduled jobs
+
+One `AsyncIOScheduler` is started in `backend.main.lifespan` and kept on `app.state.scheduler`. It lives in the app process: no second process, no broker.
+
+| Job id | Function | Interval | Condition |
+|---|---|---|---|
+| `gmail_poll` | `_run_gmail_poll` | `GMAIL_POLL_INTERVAL_MINUTES` (5 min) | always |
+| `monitor_tick` | `backend.monitor.poller.monitor_tick` | `MONITOR_TICK_SECONDS` (30 s) | `MONITOR_ENABLED=true` |
+
+`monitor_tick` is added with `max_instances=1, coalesce=True`: a tick that outlasts the interval is not overlapped, and missed runs collapse into one.
+
+### The discovery monitor
+
+A tick polls every enabled adapter source whose `next_poll_at` is due, at most `MONITOR_MAX_CONCURRENCY` (8) at once, each in its own DB session. Poll state is on the `job_sources` row, not in the scheduler:
+
+| Column | Meaning |
+|---|---|
+| `poll_interval_s` | Seconds between polls; null uses the adapter default (Greenhouse, Ashby, SmartRecruiters 60 s; LinkedIn guest 300 s; Indeed 420 s; otherwise 300 s) |
+| `next_poll_at` | When the source is due. After a success: now + interval ±20%. After a failure: now + interval × 2^`fail_count`, capped at 6 h |
+| `last_scraped_at`, `first_polled_at` | Last and first successful poll. A null `last_scraped_at` marks the seeding poll, which announces nothing |
+| `etag` | Validator for the conditional GET |
+| `fail_count`, `last_error` | Consecutive failures and the last error (500 characters) |
+| `window_hours` | Indeed's window, halved when a poll overflows one page |
+
+The effective poll period is the source interval rounded up to the next tick. DB writes of concurrent polls are serialised by one in-process lock (`_write_lock`); the HTTP fetches are not.
+
+Per poll: adapter fetch → `upsert_discovered` → `match_new` → notify (`backend/monitor/notify.py`: `new_match` WebSocket frame, plus a background POST to `NTFY_URL`). A failed notification never undoes a committed poll. Sources, source configuration, the status API (`GET /api/monitor/status`, pause, resume, add) and the watchlist import (`scripts/import_watchlist.py`) are described in [Job scraping & sources](../scraping.md#the-discovery-monitor).
+
+`rescore_stale` (same module) recomputes stored `new` matches at startup and after a CV or search-settings save.
 
 ---
 
@@ -196,13 +228,13 @@ All filtering parameters are read from the `search_settings` database table (`Se
 
 **Concurrency** for both fit assessment and CV generation is governed by `CONCURRENCY_LLM` in `backend/defaults.py` (default `3`) — bounded by an `asyncio.Semaphore` to respect the LLM provider rate limit.
 
-**No auto-start.** The batch runs only when explicitly triggered (the common path is `POST /api/queue/refresh`, which schedules `runner.run_batch()` on the event loop in the background). The `SearchSettings.batch_time` column is persisted and surfaced in the settings API but is currently unused at runtime.
+**No auto-start for the batch.** It runs only when explicitly triggered (the common path is `POST /api/queue/refresh`, which schedules `runner.run_batch()` on the event loop in the background). The `SearchSettings.batch_time` column is persisted and surfaced in the settings API but is currently unused at runtime. Continuous discovery is the monitor's job (`MONITOR_ENABLED`, `MONITOR_TICK_SECONDS`, `MONITOR_MAX_CONCURRENCY`, `NTFY_URL` in `.env`).
 
 ---
 
 ## Known Limitations / TODOs
 
-1. **No auto-scheduler.** There is no APScheduler/cron machinery wired up. `SearchSettings.batch_time` is persisted but unused at runtime — time-based scheduling would require wiring an `AsyncIOScheduler` (or equivalent) inside `backend.main.lifespan` and reading the column.
+1. **The batch is not scheduled.** `SearchSettings.batch_time` is persisted but unused at runtime. The discovery monitor covers timed discovery; it does not pre-generate CVs.
 2. **Hardcoded fallback defaults in `_load_settings`.** When no `SearchSettings` row exists the method fabricates a row with `keywords=["python", "machine learning"]`, `daily_limit=10`, `min_match_score=30.0`. These defaults are not written to the DB, so they reappear on every call rather than being seeded once.
 3. **Single-user assumption.** All DB queries use `.limit(1)` for both `UserProfile` and `SearchSettings`. The scheduler has no concept of multiple users; adding multi-tenancy would require a significant redesign.
 4. **Only `doc_type="cv"` is pre-generated.** Cover letters (`doc_type="letter"`) are never pre-generated by the batch job; they must be generated on demand.

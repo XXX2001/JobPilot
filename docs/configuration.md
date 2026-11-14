@@ -124,6 +124,19 @@ Model names are configured per role via `LLM_MODEL` / `BROWSER_LLM_MODEL` (see t
 
 ---
 
+## Discovery monitor
+
+| Env var | Field | Default | Effect |
+|---|---|---|---|
+| `MONITOR_ENABLED` | `MONITOR_ENABLED` | `false` | Schedules the monitor tick. Off: nothing polls |
+| `MONITOR_TICK_SECONDS` | `MONITOR_TICK_SECONDS` | `30` | Seconds between ticks; each tick polls the sources that are due |
+| `MONITOR_MAX_CONCURRENCY` | `MONITOR_MAX_CONCURRENCY` | `8` | Sources polled at the same time within a tick |
+| `NTFY_URL` | `NTFY_URL` | empty | ntfy topic URL for new-match and source-disabled notifications. Empty: no outbound notification |
+
+Applied on restart. Per-source intervals are on the `job_sources` rows, not in `.env`. See [Job scraping & sources](scraping.md#the-discovery-monitor).
+
+---
+
 ## Timeouts (seconds)
 
 | Env var | Field | Default | Notes |

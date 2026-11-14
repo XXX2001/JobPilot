@@ -1,10 +1,94 @@
 # Job scraping & sources
 
-How JobPilot discovers job postings: a tiered orchestrator that fans out across an API source (Adzuna), a fast HTTP + single-LLM-call tier, and a full browser-use agent tier, then dedupes and tracks per-source health.
+JobPilot discovers postings on two paths:
+
+- **The discovery monitor** (`backend/monitor/`, `backend/scraping/sources/`) — always on when enabled. Deterministic HTTP polls of job boards every minute or few, no LLM, no browser, logged out. Stores, scores and notifies. See [The discovery monitor](#the-discovery-monitor).
+- **The batch scrape** (`ScrapingOrchestrator`) — on demand, started from `POST /api/queue/refresh`: an API source (Adzuna), an HTTP + single-LLM-call tier and a browser-use agent tier. The rest of this page from [Overview](#overview) on describes it.
+
+## The discovery monitor
+
+Off by default. Set `MONITOR_ENABLED=true` and restart: the app's APScheduler then runs `monitor_tick` every `MONITOR_TICK_SECONDS`.
+
+### What one tick does
+
+`monitor_tick` (`backend/monitor/poller.py`) selects the enabled `job_sources` rows that carry an adapter and are due (`next_poll_at` null or past), and polls them concurrently, at most `MONITOR_MAX_CONCURRENCY` at a time. For each source, `poll_source`:
+
+1. Calls the adapter with the stored `etag` and `last_scraped_at`. A `304 Not Modified` ends the poll there.
+2. `upsert_discovered` stores the jobs. Identity is `(source, external_id)`, with `dedup_hash` as the cross-source fallback; a job already stored is not inserted again.
+3. `match_new` scores each new job with the owner's CV and search settings ([Matching](matching.md)) and creates one `new` match per job at or above `min_match_score`. A job has one match, ever.
+4. Each new match is announced: a `new_match` WebSocket frame, and one POST to `NTFY_URL` when set (title `New match <score>`, body `<title> — <company> (<location>)`, click-through to the posting).
+5. The source row records the outcome: `last_scraped_at`, `etag`, `fail_count`, `last_error`, `next_poll_at`.
+
+The first successful poll of a source **seeds** it: every job is stored and matched, none is announced. For Indeed and LinkedIn, postings older than the seed that surface later are stored and matched but not announced either.
+
+Each source has its own DB session and transaction. A failed poll rolls back whole, increments `fail_count` and doubles the wait (interval × 2^fails, capped at 6 h). After a success the next poll is one interval away, ±20% jitter. An authentication failure (Indeed's app key revoked) disables the source and sends one "Source disabled" notification; it is not retried.
+
+### Sources
+
+Adapters live in `backend/scraping/sources/` and register in `ADAPTERS`. All are logged out: no account, no cookies.
+
+| Adapter | Request | Default interval | Descriptions | `config` keys |
+|---|---|---|---|---|
+| `greenhouse` | Conditional GET of the whole board | 60 s | yes | `slug` |
+| `ashby` | Conditional GET of the whole board | 60 s | yes | `slug` |
+| `smartrecruiters` | Conditional GET, first 100 postings, newest first | 60 s | no (cards) | `slug` |
+| `indeed` | One GraphQL POST for the last N hours (vendored mobile-app query) | 420 s | yes | `what`, `where`, `country` (`FR`), `radius_km` (30), `window_hours` (2) |
+| `linkedin_guest` | Guest search fragment, newest first, up to 5 pages of 10 cards | 300 s | no (cards) | `keywords`, `location` |
+
+A source is a `job_sources` row with `type="monitor"` and `config = {"adapter": …, …}`. `poll_interval_s` overrides the default interval. Rows without an adapter belong to the batch scrape and are never polled by the monitor.
+
+Cards without a description get a provisional, title-only score (see [Matching](matching.md)). When Indeed's window overflows one page, the source's window is halved for the next polls. LinkedIn's guest endpoint is not proven under sustained polling: anything that is not a card list counts as blocked and the source backs off.
+
+### Adding sources
+
+One source over the API (needs the local session, like every POST under `/api`):
+
+```bash
+curl -X POST http://localhost:8000/api/monitor/sources -H 'Content-Type: application/json' \
+  -d '{"adapter": "linkedin_guest", "name": "linkedin:robotics:Paris",
+       "config": {"keywords": "robotics", "location": "Paris"}}'
+```
+
+A company watchlist from a CSV (`company,sample_url,fr_jobs,relevant_jobs`; the board slug is read from `sample_url`):
+
+```bash
+env -u PYTHONPATH uv run python scripts/import_watchlist.py --ats greenhouse \
+    --csv path/to/fr_greenhouse.csv [--title-regex 'robot|embedded|software'] [--limit 20]
+```
+
+Each board is polled once. It is kept, as `JobSource(name="<ats>:<slug>", type="monitor")`, when at least one of its jobs is in the owner's area (`SearchSettings.locations` / `countries`) and, with `--title-regex`, that job's title matches. Names that already exist are skipped without a request, so the script can be re-run. One request per second.
+
+### Status API
+
+| Route | Effect |
+|---|---|
+| `GET /api/monitor/status` | `{"enabled": bool, "sources": [...]}`; per source `id`, `name`, `adapter`, `enabled`, `interval_s`, `last_scraped_at`, `next_poll_at`, `fail_count`, `last_error`, `jobs_seen`, `median_lag_s` |
+| `POST /api/monitor/sources` | Add a source: `{"adapter", "name", "config", "interval_s"?}`. `422` for an unknown adapter, `409` for a taken name |
+| `POST /api/monitor/sources/{id}/pause` | Stop polling the source |
+| `POST /api/monitor/sources/{id}/resume` | Resume; clears the backoff, so it is polled at the next tick |
+
+`median_lag_s` is the median time from `posted_at` to first sighting over the last 7 days, the seeding poll left out.
+
+### Settings
+
+| Env var | Default | Effect |
+|---|---|---|
+| `MONITOR_ENABLED` | `false` | Schedules `monitor_tick`. Nothing polls when false |
+| `MONITOR_TICK_SECONDS` | `30` | How often due sources are looked for. A source cannot be polled more often than this |
+| `MONITOR_MAX_CONCURRENCY` | `8` | Sources polled at the same time within one tick |
+| `NTFY_URL` | empty | ntfy topic URL (`https://ntfy.sh/<topic>` or self-hosted). Empty: WebSocket frame only |
+
+Applied on restart.
+
+### Measured
+
+Live run, 2026-11-14, 27 minutes, 30 sources (18 Greenhouse, 5 Ashby, 5 SmartRecruiters, 1 Indeed, 1 LinkedIn guest): 3,447 jobs stored, no source in a failed state at the end, 13 ntfy notifications delivered. The LinkedIn source measured a median lag of 840 s from posting to first sighting; no other source published a posting during the run, so their lag is unmeasured.
+
+Soak results: pending
 
 ## Overview
 
-All scraping lives in `backend/scraping/`. One `ScrapingOrchestrator` (`backend/scraping/orchestrator.py:76`) coordinates a single "batch" — one scan triggered by a user or the scheduler. It receives all collaborators by constructor injection (so the app can wire real ones and tests can mock them), runs three phases, then post-filters by date and deduplicates.
+The batch scrape lives in `backend/scraping/`. One `ScrapingOrchestrator` (`backend/scraping/orchestrator.py:76`) coordinates a single "batch" — one scan triggered by a user or the scheduler. It receives all collaborators by constructor injection (so the app can wire real ones and tests can mock them), runs three phases, then post-filters by date and deduplicates.
 
 | File | Role |
 |------|------|

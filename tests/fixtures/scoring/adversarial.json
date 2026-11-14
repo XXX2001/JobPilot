@@ -1,0 +1,110 @@
+[
+  {
+    "id": "syn-stuffed-sales",
+    "title": "Enterprise Account Executive - Developer Platform",
+    "company": "CloudCo",
+    "location": "Paris, France",
+    "description": "About the role\nYou will sell our developer platform to enterprise accounts in France. Our customers are engineering teams that use Python, Go, Kubernetes, Docker, PostgreSQL, Redis, FastAPI, Airflow and GitHub Actions every day, so you must be comfortable talking about Python, Kubernetes, Docker and PostgreSQL with CTOs.\n\nRequirements:\n- 5+ years of B2B SaaS sales, quota-carrying\n- Track record of closing six-figure deals\n- Pipeline generation, negotiation, Salesforce CRM\n- Familiarity with Python, Kubernetes, Docker, Redis, PostgreSQL ecosystems is a plus\n\nWhat we offer: OTE, equity, Paris office.",
+    "label": "bad",
+    "note": "keyword-stuffed sales job"
+  },
+  {
+    "id": "syn-negation-python",
+    "title": "Backend Engineer (Java)",
+    "company": "Banque Exemple",
+    "location": "Paris, France",
+    "description": "We are rewriting our core banking services. Note: this role does NOT involve Python - you will not use Python; we migrated away from Python and Django last year.\n\nRequirements:\n- Strong Java 17 and Spring Boot\n- Oracle and PL/SQL\n- Maven, JUnit, Kafka\n- 4+ years of backend experience\n\nNice to have:\n- Kubernetes, Docker",
+    "label": "bad",
+    "note": "explicit negation of Python"
+  },
+  {
+    "id": "syn-lowercase",
+    "title": "backend developer python",
+    "company": "petitestartup",
+    "location": "paris",
+    "description": "we are a small team building a b2b api platform. you will design and run python services in production.\n\nwhat you will do\n- build rest apis with fastapi and sqlalchemy on postgresql\n- run async jobs with redis and airflow\n- ship with docker, kubernetes and github actions\n\nabout you\n- 3+ years of python backend experience\n- comfortable with sql and data modelling\n- bonus: go, aws",
+    "label": "good",
+    "note": "all-lowercase posting"
+  },
+  {
+    "id": "syn-header-nocolon",
+    "title": "Software Engineer, Backend",
+    "company": "DataFlow",
+    "location": "Paris, France",
+    "description": "DataFlow builds ingestion pipelines for retailers.\n\nRequirements\n- Python\n- PostgreSQL\n- Docker and Kubernetes\n- Experience designing REST APIs\n\nNice to have\n- Scala\n- Spark\n\nBenefits\n- Paris office, 2 days remote",
+    "label": "good",
+    "note": "headers without colon, first bullet right after header"
+  },
+  {
+    "id": "syn-wrong-city",
+    "title": "Python Backend Engineer (FastAPI)",
+    "company": "LyonTech",
+    "location": "Lyon, France (on-site)",
+    "description": "On-site position in Lyon, no remote.\n\nRequirements:\n- Python, FastAPI, SQLAlchemy\n- PostgreSQL, Redis\n- Docker, Kubernetes, GitHub Actions\n- 3+ years experience",
+    "label": "bad",
+    "note": "perfect skills, wrong city, on-site only"
+  },
+  {
+    "id": "syn-nice-python",
+    "title": "Backend Engineer",
+    "company": "InsureCo",
+    "location": "Paris, France",
+    "description": "Requirements:\n- Java and Spring Boot (must have)\n- Oracle database, Hibernate\n- Angular for internal tools\n- 5+ years experience in insurance IT\n\nNice to have:\n- Python\n- Docker",
+    "label": "bad",
+    "note": "required Java stack, Python only nice-to-have"
+  },
+  {
+    "id": "syn-required-python",
+    "title": "Data Backend Engineer",
+    "company": "RetailData",
+    "location": "Paris, France",
+    "description": "Requirements:\n- Python (must have)\n- PostgreSQL and SQL\n- Docker\n- Airflow\n\nNice to have:\n- Scala\n- Apache Spark\n- Snowflake",
+    "label": "good",
+    "note": "required matches CV, nice-to-have does not"
+  },
+  {
+    "id": "syn-fr-devops",
+    "title": "Ingénieur DevOps H/F",
+    "company": "InfraFR",
+    "location": "Paris (télétravail partiel)",
+    "description": "Au sein de l'équipe plateforme, vous automatisez l'infrastructure cloud.\n\nProfil recherché :\n- Maîtrise de Kubernetes et Terraform (indispensable)\n- Expérience sur AWS ou GCP\n- Mise en place de pipelines CI/CD (GitLab CI)\n- Supervision avec Prometheus et Grafana\n\nCompétences appréciées :\n- Scripting Python ou Go\n- Docker",
+    "label": "partial",
+    "note": "FR DevOps, Python apprécié"
+  },
+  {
+    "id": "syn-fr-marketing",
+    "title": "Chef de projet marketing digital",
+    "company": "ModeFR",
+    "location": "Paris",
+    "description": "Vous pilotez nos campagnes d'acquisition et le reporting.\n\nProfil :\n- 3 ans d'expérience en marketing digital\n- Maîtrise de Google Analytics, Excel et des outils CRM\n- Excellent relationnel, sens de l'organisation\n- Anglais professionnel",
+    "label": "bad",
+    "note": "FR marketing, Excel, no backend"
+  },
+  {
+    "id": "syn-short",
+    "title": "Backend developer (Python/FastAPI) - Paris - CDI",
+    "company": "MiniCo",
+    "location": "Paris",
+    "description": "Python / FastAPI / PostgreSQL. CDI à Paris.",
+    "label": "good",
+    "note": "very short posting"
+  },
+  {
+    "id": "syn-r-substring",
+    "title": "Biostatisticien(ne) R / SAS",
+    "company": "PharmaFR",
+    "location": "Paris",
+    "description": "Rejoignez notre département de biostatistique. Good knowledge of R and SAS required. Regulatory reporting (CDISC, ADaM). Going forward you will support clinical trials. Doctorat ou Master en statistiques.",
+    "label": "bad",
+    "note": "'R' and 'Go' substring traps"
+  },
+  {
+    "id": "syn-fr-good-noheaders",
+    "title": "Ingénieur backend Go / Python",
+    "company": "PaieFR",
+    "location": "Paris, France",
+    "description": "Nous cherchons un ingénieur backend pour notre moteur de paie. Vous développerez des microservices en Go et en Python, exposés via des API REST, avec une base PostgreSQL et un cache Redis. Le tout tourne sur Kubernetes, déployé par GitHub Actions. Une première expérience de 3 ans en développement backend est attendue; la connaissance d'Airflow est un plus.",
+    "label": "good",
+    "note": "FR prose, no bullets, no headers"
+  }
+]

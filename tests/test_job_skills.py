@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from backend.matching.gazetteer import Gazetteer
@@ -127,3 +129,87 @@ def test_french_plus_meaning_more_is_not_nice_to_have(g):
 
 def test_empty_posting(g):
     assert extract_job_skills("", "", g) == {}
+
+
+# --- review fixes ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        (
+            "Requirements\n- Ideally 3+ years of experience\n- Python\n- ROS 2",
+            {"python": 1.0, "ros 2": 1.0},
+        ),
+        ("Requirements\n- Bonus: a PhD\n- Python\n- ROS 2", {"python": 1.0, "ros 2": 1.0}),
+        ("Requirements\n- Competitive mindset, benefits of teamwork\n- Python", {"python": 1.0}),
+        (
+            "Nice to have\n- Rust\n- You have a driving licence\n- Scala",
+            {"rust": 0.3, "scala": 0.3},
+        ),
+        ("Requirements\n1) About you and the team\n2) Python", {"python": 1.0}),
+    ],
+)
+def test_a_bullet_is_not_a_section_header(g, description, expected):
+    assert extract_job_skills("Dev", description, g) == expected
+
+
+def test_a_bullet_that_is_only_a_header_and_a_colon_opens_a_section(g):
+    d = "- Requirements:\n- Python\n- Nice to have:\n- Rust\n**Must have**\n* Docker"
+    assert extract_job_skills("Dev", d, g) == {"python": 1.0, "rust": 0.3, "docker": 1.0}
+
+
+def test_french_wanted_profile_headers_are_requirements(g):
+    assert extract_job_skills("Dev", "Profil souhaité\n- Python\n- ROS 2", g) == {
+        "python": 1.0,
+        "ros 2": 1.0,
+    }
+    assert extract_job_skills("Dev", "Compétences souhaitées :\n- Python", g) == {"python": 1.0}
+    assert extract_job_skills("Dev", "Expérience souhaitée\n- Docker", g) == {"docker": 1.0}
+    # inline, "souhaité" stays a nice-to-have marker
+    assert extract_job_skills("Dev", "Docker souhaité", g) == {"docker": 0.3}
+
+
+@pytest.mark.parametrize(
+    ("description", "expected"),
+    [
+        ("Python is not required", {"python": 0.3}),
+        ("Python n'est pas obligatoire", {"python": 0.3}),
+        ("Docker is not mandatory", {"docker": 0.3}),
+        ("Requirements\n- Python is not strictly required", {"python": 0.3}),
+        ("Expérience ROS 2 exigée, Docker souhaité", {"ros 2": 1.0, "docker": 0.3}),
+        ("Python required, Kubernetes is a plus", {"python": 1.0, "kubernetes": 0.3}),
+        ("Python (required), Docker (bonus)", {"python": 1.0, "docker": 0.3}),
+        (
+            "Python, Docker required, Kubernetes a plus",
+            {"python": 1.0, "docker": 1.0, "kubernetes": 0.3},
+        ),
+        (
+            "Python, Docker and Kubernetes are required",
+            {"python": 1.0, "docker": 1.0, "kubernetes": 1.0},
+        ),
+        ("We do not require Java, but Python is a must.", {"python": 1.0}),
+        ("Not only Python but also Go.", {"python": 0.6, "go": 0.6}),
+        ("Pas seulement Python mais aussi Go.", {"python": 0.6, "go": 0.6}),
+        ("Sans oublier Python.", {"python": 0.6}),
+        ("We don't care whether you know Python or Go", {}),
+        ("No Python, Java or Go.", {}),
+    ],
+)
+def test_inline_markers_and_negation_scope(g, description, expected):
+    assert extract_job_skills("Dev", description, g) == expected
+
+
+def test_trailing_hash_is_part_of_the_skill(g):
+    d = "Requirements\n- Python\n- C#\n- Experience with C#"
+    assert extract_job_skills("Dev", d, g) == {"python": 1.0, "c#": 1.0}
+    assert extract_job_skills("Dev", "## Requirements\n- C#", g) == {"c#": 1.0}
+
+
+@pytest.mark.parametrize("unit", ["Python, Docker, Kubernetes, ROS 2, ", "C++ "])
+def test_one_keyword_stuffed_line_is_linear(g, unit):
+    description = (unit * 20000)[:20000]  # the sources' MAX_DESCRIPTION, on one line
+    start = time.perf_counter()
+    skills = extract_job_skills("Dev", description, g)
+    assert time.perf_counter() - start < 0.5  # was 1.5 s and 3.6 s
+    assert skills

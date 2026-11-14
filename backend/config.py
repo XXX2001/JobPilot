@@ -103,6 +103,13 @@ class Settings(BaseSettings):
     GMAIL_BACKFILL_DAYS: int = 30
     GMAIL_POLL_INTERVAL_MINUTES: int = 5
 
+    # ── Discovery monitor ────────────────────────────────────────────────
+    # Off by default: nothing polls until the owner turns it on.
+    MONITOR_ENABLED: bool = False
+    MONITOR_TICK_SECONDS: int = 30
+    MONITOR_MAX_CONCURRENCY: int = 8
+    NTFY_URL: str = ""
+
     def is_configured(self, field_name: str) -> bool:
         """Return True if *field_name* holds a real, non-placeholder value.
 

@@ -1,0 +1,200 @@
+"""Monitor poller: one scheduler tick polls the sources that are due.
+
+No LLM, no browser, no cookies (spec D1, D7). Poll state lives on the
+``job_sources`` row; each source gets its own DB session and transaction, so a
+failed poll rolls back as a whole and never touches stored jobs.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import random
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
+
+import httpx
+from sqlalchemy import or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from backend.config import settings
+from backend.database import AsyncSessionLocal
+from backend.matching.filters import JobFilters
+from backend.models.job import Job, JobMatch, JobSource
+from backend.models.user import SearchSettings
+from backend.monitor.store import match_new, upsert_discovered
+from backend.scheduler.batch_runner import _extract_json_list
+from backend.scraping.sources import ADAPTERS, SourceError
+from backend.utils.time import naive_utc_now
+
+logger = logging.getLogger(__name__)
+
+Notify = Callable[[JobMatch, Job, str], Awaitable[None]]  # (match, job, source_name)
+Alert = Callable[[str, str], Awaitable[None]]  # (title, body)
+
+# Seconds between polls when ``poll_interval_s`` is NULL, by adapter.
+DEFAULT_INTERVAL_S = {
+    "greenhouse": 60,
+    "smartrecruiters": 60,
+    "ashby": 60,
+    "indeed": 420,
+    "linkedin_guest": 300,
+}
+FALLBACK_INTERVAL_S = 300
+MAX_BACKOFF = timedelta(hours=6)
+DEFAULT_WINDOW_HOURS = 2  # the indeed adapter's default when nothing is configured
+MAX_ERROR_CHARS = 500
+
+_rng = random.Random()
+
+
+def next_due(now: datetime, interval_s: float, fail_count: int, rng: random.Random) -> datetime:
+    """When to poll next: jittered interval after a success, capped doubling after failures."""
+    if fail_count <= 0:
+        return now + timedelta(seconds=interval_s * rng.uniform(0.8, 1.2))
+    # exponent capped so a long outage cannot overflow; 2**20 intervals is far past 6 h
+    backoff = timedelta(seconds=interval_s * 2 ** min(fail_count, 20))
+    return now + min(backoff, MAX_BACKOFF)
+
+
+async def _load_filters(db: AsyncSession) -> JobFilters:
+    """The owner's search settings as matcher filters (same mapping as the batch runner)."""
+    row = (await db.execute(select(SearchSettings).limit(1))).scalar_one_or_none()
+    if row is None:
+        return JobFilters()
+    return JobFilters(
+        keywords=_extract_json_list(row.keywords, "include"),
+        locations=_extract_json_list(row.locations, "items"),
+        salary_min=row.salary_min,
+        remote_only=bool(row.remote_only),
+        excluded_keywords=_extract_json_list(row.excluded_keywords, "items"),
+        excluded_companies=_extract_json_list(row.excluded_companies, "items"),
+        min_score=float(row.min_match_score),
+    )
+
+
+async def poll_source(
+    db: AsyncSession,
+    source: JobSource,
+    client: httpx.AsyncClient,
+    notify: Notify,
+    alert: Alert,
+) -> int:
+    """Poll one source and record the outcome on its row. Returns the new matches.
+
+    Commits on ``db``. Never raises for a failed poll: the failure is stored as
+    ``fail_count`` / ``last_error`` and the next poll is pushed back.
+    """
+    now = naive_utc_now()
+    name = source.name
+    cfg = dict(source.config or {})
+    adapter = str(cfg.get("adapter") or "")
+    interval_s = source.poll_interval_s or DEFAULT_INTERVAL_S.get(adapter, FALLBACK_INTERVAL_S)
+    if source.window_hours:
+        cfg["window_hours"] = source.window_hours
+    # First successful poll: every job in the window is unseen. Seed silently.
+    seeding = source.last_scraped_at is None
+    fail_count = source.fail_count or 0
+
+    created: list[tuple[JobMatch, Job]] = []
+    try:
+        poll = ADAPTERS.get(adapter)
+        if poll is None:
+            raise SourceError("transient", f"unknown adapter {adapter!r}")
+        result = await poll(client, cfg, source.etag, source.last_scraped_at)
+        if not result.not_modified:
+            jobs = await upsert_discovered(db, source, result.jobs)
+            filters = await _load_filters(db)
+            matches = await match_new(db, jobs, filters, filters.min_score)
+            by_id = {job.id: job for job in jobs}
+            created = [(match, by_id[match.job_id]) for match in matches]
+            source.etag = result.etag
+            if result.truncated and adapter == "indeed":
+                # The window overflowed the page: ask for half as much next time.
+                # ponytail: never widened back; the adapter already widens to cover
+                # downtime. Grow it on quiet polls if a halved window proves too small.
+                window = int(cfg.get("window_hours") or DEFAULT_WINDOW_HOURS)
+                source.window_hours = max(1, window // 2)
+        source.fail_count = 0
+        source.last_error = None
+        source.last_scraped_at = now
+        source.next_poll_at = next_due(now, interval_s, 0, _rng)
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 - one source must never break the tick
+        # ponytail: a SQLite "database is locked" lands here too and costs one
+        # backoff step; set busy_timeout (planned hardening) if it shows up in logs.
+        await db.rollback()
+        await db.refresh(source)  # rollback expired it
+        if isinstance(exc, SourceError):
+            error, detail = str(exc), exc.detail
+        else:
+            error = detail = f"{type(exc).__name__}: {exc}"
+            if not isinstance(exc, httpx.HTTPError):
+                logger.exception("monitor: source %s failed unexpectedly", name)
+        source.last_error = error[:MAX_ERROR_CHARS]
+        disabled = isinstance(exc, SourceError) and exc.kind == "auth"
+        if disabled:
+            # e.g. a revoked app key: retrying cannot help, the owner has to act.
+            source.enabled = False
+        else:
+            source.fail_count = fail_count + 1
+            source.next_poll_at = next_due(now, interval_s, source.fail_count, _rng)
+        await db.commit()
+        logger.warning("monitor: source %s: %s", name, error)
+        if disabled:
+            await _safely(alert("Source disabled", f"{name}: {detail}"), "alert", name)
+        return 0
+
+    if not seeding:
+        for match, job in created:
+            await _safely(notify(match, job, name), "notify", name)
+    return len(created)
+
+
+async def _safely(call: Awaitable[None], what: str, source_name: str) -> None:
+    """A notification that fails must not undo or fail a poll that was committed."""
+    try:
+        await call
+    except Exception:  # noqa: BLE001
+        logger.exception("monitor: %s failed for source %s", what, source_name)
+
+
+async def _no_notify(match: JobMatch, job: Job, source_name: str) -> None:
+    return None
+
+
+async def _no_alert(title: str, body: str) -> None:
+    return None
+
+
+async def monitor_tick() -> None:
+    """Poll every enabled adapter source that is due, a few at a time."""
+    now = naive_utc_now()
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(JobSource.id, JobSource.config).where(
+                    JobSource.enabled.is_(True),
+                    or_(JobSource.next_poll_at.is_(None), JobSource.next_poll_at <= now),
+                )
+            )
+        ).all()
+    # Sources of the old batch path carry no adapter: they are not the monitor's.
+    due = [sid for sid, cfg in rows if isinstance(cfg, dict) and cfg.get("adapter")]
+    if not due:
+        return
+
+    semaphore = asyncio.Semaphore(max(1, settings.MONITOR_MAX_CONCURRENCY))
+
+    async def poll_one(source_id: int, client: httpx.AsyncClient) -> None:
+        async with semaphore:
+            try:
+                async with AsyncSessionLocal() as db:
+                    source = await db.get(JobSource, source_id)
+                    if source is not None:
+                        await poll_source(db, source, client, _no_notify, _no_alert)
+            except Exception:  # noqa: BLE001 - e.g. the failure itself could not be stored
+                logger.exception("monitor: tick failed for source %d", source_id)
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        await asyncio.gather(*(poll_one(sid, client) for sid in due))

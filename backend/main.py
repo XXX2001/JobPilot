@@ -262,6 +262,19 @@ async def lifespan(app: FastAPI):
         scheduler = AsyncIOScheduler()
         interval = max(1, int(settings.GMAIL_POLL_INTERVAL_MINUTES))
         scheduler.add_job(_run_gmail_poll, "interval", minutes=interval, id="gmail_poll")
+        if settings.MONITOR_ENABLED:
+            from backend.monitor.poller import monitor_tick
+
+            tick = max(1, int(settings.MONITOR_TICK_SECONDS))
+            scheduler.add_job(
+                monitor_tick,
+                "interval",
+                seconds=tick,
+                id="monitor_tick",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("Discovery monitor ticking every %d second(s)", tick)
         scheduler.start()
         app.state.scheduler = scheduler
         logger.info("Gmail poller scheduled every %d minute(s)", interval)

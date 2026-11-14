@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.matching.filters import JobFilters
@@ -54,9 +55,11 @@ async def upsert_discovered(db: AsyncSession, source: JobSource, jobs: list[RawJ
     The second is not stored; it is logged. Telling them apart needs a
     source-qualified hash column.
     """
-    # ponytail: lookup-then-insert, no savepoint. Two sources inserting the same
-    # new hash in the same tick -> IntegrityError on one of them; that poll fails
-    # and the next one finds the row. Add begin_nested + re-lookup if it shows up.
+    # Two sources can insert the same new hash in one tick: the lookup of both
+    # misses, so the insert itself skips the conflict (ON CONFLICT DO NOTHING) and
+    # the loser treats the winner's row as existing. Not a SAVEPOINT: pysqlite
+    # opens no transaction before one, so its RELEASE would commit the job ahead
+    # of its match.
     now = naive_utc_now()
     inserted: list[Job] = []
     for raw in jobs:
@@ -92,37 +95,45 @@ async def upsert_discovered(db: AsyncSession, source: JobSource, jobs: list[RawJ
             existing.title, existing.company = raw.title, raw.company
             existing.location, existing.dedup_hash = raw.location, dedup_hash
 
-        if existing is not None:
-            existing.last_seen_at = now
-            if len(raw.description) > len(existing.description or ""):
-                existing.description = raw.description
-            if raw.apply_url and not existing.apply_url:
-                existing.apply_url = raw.apply_url
-            continue
+        if existing is None:
+            job = await db.scalar(
+                insert(Job)
+                .values(
+                    source_id=source.id,
+                    external_id=raw.external_id or None,
+                    title=raw.title,
+                    company=raw.company,
+                    location=raw.location,
+                    country=raw.country,
+                    salary_text=raw.salary_text or None,
+                    salary_min=raw.salary_min,
+                    salary_max=raw.salary_max,
+                    description=raw.description,
+                    url=raw.url,
+                    apply_url=raw.apply_url or raw.url,
+                    apply_method=raw.apply_method,
+                    posted_at=raw.posted_at,
+                    dedup_hash=dedup_hash,
+                    raw_data=raw.raw_data,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                )
+                .on_conflict_do_nothing(index_elements=["dedup_hash"])
+                .returning(Job)
+            )
+            if job is not None:
+                inserted.append(job)
+                continue
+            # Lost the race: another session committed this hash since the lookup.
+            existing = (
+                await db.execute(select(Job).where(Job.dedup_hash == dedup_hash))
+            ).scalar_one()
 
-        job = Job(
-            source_id=source.id,
-            external_id=raw.external_id or None,
-            title=raw.title,
-            company=raw.company,
-            location=raw.location,
-            country=raw.country,
-            salary_text=raw.salary_text or None,
-            salary_min=raw.salary_min,
-            salary_max=raw.salary_max,
-            description=raw.description,
-            url=raw.url,
-            apply_url=raw.apply_url or raw.url,
-            apply_method=raw.apply_method,
-            posted_at=raw.posted_at,
-            dedup_hash=dedup_hash,
-            raw_data=raw.raw_data,
-            first_seen_at=now,
-            last_seen_at=now,
-        )
-        db.add(job)
-        await db.flush()  # the next RawJob in this list must see it
-        inserted.append(job)
+        existing.last_seen_at = now
+        if len(raw.description) > len(existing.description or ""):
+            existing.description = raw.description
+        if raw.apply_url and not existing.apply_url:
+            existing.apply_url = raw.apply_url
     return inserted
 
 

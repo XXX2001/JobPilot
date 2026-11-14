@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 
 from backend.database import AsyncSessionLocal
 from backend.models.job import Job, JobMatch, JobSource
+from backend.models.schemas import RawJob
 from backend.models.user import SearchSettings
 from backend.monitor import poller, store
 from backend.monitor.poller import monitor_tick, next_due, poll_source
@@ -399,3 +400,93 @@ async def test_tick_limits_concurrency(monkeypatch):
     await monitor_tick()
 
     assert peak == 2
+
+
+def raw_job(external_id: str, title: str) -> RawJob:
+    return RawJob(
+        external_id=external_id,
+        title=title,
+        company="Mirakl",
+        location="Paris",
+        url=f"https://example.com/{external_id}",
+    )
+
+
+async def test_tick_same_job_from_two_sources_fails_neither(monkeypatch):  # Review Focus 3
+    """Both sources insert the same new hash in one tick: one row, and no failed poll."""
+    import asyncio
+
+    freeze(monkeypatch)
+    notify = AsyncMock()
+    monkeypatch.setattr(poller, "notify_new_match", notify)
+    both_fetched = asyncio.Barrier(2)  # neither stores before the other has its jobs
+    jobs = {
+        "board": [raw_job("gh-1", "Backend Engineer")],
+        # one job of its own before and after the shared one: they must survive it
+        "linkedin": [
+            raw_job("li-1", "Data Engineer"),
+            raw_job("li-9", "Backend  Engineer"),
+            raw_job("li-2", "Site Reliability Engineer"),
+        ],
+    }
+
+    async def poll(client, cfg, etag, last_scraped_at) -> PollResult:
+        await both_fetched.wait()
+        return PollResult(jobs=jobs[cfg["slug"]])
+
+    monkeypatch.setitem(ADAPTERS, "fake", poll)
+    async with AsyncSessionLocal() as db:
+        seeded = NOW - timedelta(minutes=5)
+        await add_fake(db, "board", last_scraped_at=seeded)
+        await add_fake(db, "linkedin", last_scraped_at=seeded)
+
+    await monitor_tick()
+
+    async with AsyncSessionLocal() as db:
+        rows = {s.name: s for s in (await db.execute(select(JobSource))).scalars()}
+        assert {n: (s.fail_count, s.last_error) for n, s in rows.items()} == {
+            "board": (0, None),
+            "linkedin": (0, None),
+        }
+        assert rows["board"].last_scraped_at == NOW and rows["linkedin"].last_scraped_at == NOW
+        assert await count(db, Job) == 3 and await count(db, JobMatch) == 3
+    notified = sorted(call.args[1].title.replace("  ", " ") for call in notify.await_args_list)
+    assert notified == ["Backend Engineer", "Data Engineer", "Site Reliability Engineer"]
+
+
+async def test_db_error_mid_poll_rolls_back_then_recovers(monkeypatch):
+    """A DB error after the jobs were written: nothing is kept, and nothing is lost later."""
+    from sqlalchemy.exc import OperationalError
+
+    freeze(monkeypatch)
+    notify, alert = hooks()
+    real_match_new = poller.match_new
+
+    async def locked(*args, **kw):
+        raise OperationalError("INSERT INTO job_matches", {}, Exception("database is locked"))
+
+    async with AsyncSessionLocal() as db:
+        src = await add_source(db)
+        await poll_source(db, src, board_client(), notify, alert)  # seed
+        etag = src.etag
+
+        monkeypatch.setattr(poller, "match_new", locked)
+        changed = board_client(board_with_extra_job(), 'W/"v2"')
+        n = await poll_source(db, src, changed, notify, alert)
+        assert n == 0 and notify.await_count == 0
+        assert src.fail_count == 1 and "database is locked" in src.last_error
+        assert src.etag == etag  # or the next poll would be answered 304 and skip the job
+
+    async with AsyncSessionLocal() as db:  # what was really committed
+        assert await count(db, Job) == 3 and await count(db, JobMatch) == 3
+        stored = await db.get(JobSource, src.id)
+        assert (stored.fail_count, stored.etag, stored.last_scraped_at) == (1, etag, NOW)
+
+        monkeypatch.setattr(poller, "match_new", real_match_new)
+        n = await poll_source(
+            db, stored, board_client(board_with_extra_job(), 'W/"v2"'), notify, alert
+        )
+        assert n == 1 and notify.await_count == 1
+        assert notify.await_args.args[1].title == "Robotics Software Engineer"
+        assert await count(db, Job) == 4 and await count(db, JobMatch) == 4
+        assert stored.fail_count == 0

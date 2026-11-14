@@ -130,3 +130,20 @@ def chrome_dir() -> Path:
 def running_endpoint() -> dict | None:
     """The JobPilot Chrome's CDP endpoint when it is running; never starts it."""
     return _active(chrome_dir())
+
+
+async def open_context(pw, profile_dir: Path, args: list[str]):
+    """(context, attached) for an apply run.
+
+    The running JobPilot Chrome when there is one: ``attached`` is True and the context
+    is the owner's logged-in session, so the caller closes its own page, never the
+    context. Otherwise a per-site Playwright profile is launched, as before.
+    """
+    endpoint = running_endpoint()
+    if endpoint is not None:
+        browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{endpoint['port']}")
+        return browser.contexts[0], True
+    context = await pw.chromium.launch_persistent_context(
+        user_data_dir=profile_dir.as_posix(), headless=False, args=args
+    )
+    return context, False

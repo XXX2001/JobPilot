@@ -92,6 +92,8 @@ class PlaywrightFormFiller:
         """
         from playwright.async_api import async_playwright
 
+        from backend.browser.chrome import open_context
+
         from backend.applier.captcha_handler import (
             check_and_handle_captcha,
             site_profile_key,
@@ -114,20 +116,18 @@ class PlaywrightFormFiller:
 
         pw = await async_playwright().start()
         context = None
+        page = None
+        attached = False
         try:
-            context = await pw.chromium.launch_persistent_context(
-                user_data_dir=profile_dir.as_posix(),
-                headless=False,
-                args=launch_args,
-            )
+            context, attached = await open_context(pw, profile_dir, launch_args)
+            page = await context.new_page()
+            if not attached:  # a genuine Chrome needs no patching, and patches show
+                try:
+                    from playwright_stealth import stealth_async  # type: ignore
 
-            # Apply stealth if available
-            try:
-                from playwright_stealth import stealth_async  # type: ignore
-                page = await context.new_page()
-                await stealth_async(page)
-            except ImportError:
-                page = await context.new_page()
+                    await stealth_async(page)
+                except ImportError:
+                    pass
 
             await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
 
@@ -218,7 +218,8 @@ class PlaywrightFormFiller:
         finally:
             if context:
                 try:
-                    await context.close()
+                    # Attached: the context is the owner's session. Close our tab only.
+                    await (page.close() if attached else context.close())
                 except Exception:
                     pass
             try:
@@ -411,6 +412,8 @@ class PlaywrightFormFiller:
         """
         from playwright.async_api import async_playwright
 
+        from backend.browser.chrome import open_context
+
         from backend.applier.captcha_handler import site_profile_key
 
         site_key = site_profile_key(apply_url)
@@ -424,18 +427,18 @@ class PlaywrightFormFiller:
 
         pw = await async_playwright().start()
         context = None
+        page = None
+        attached = False
         try:
-            context = await pw.chromium.launch_persistent_context(
-                user_data_dir=profile_dir.as_posix(),
-                headless=False,
-                args=launch_args,
-            )
-            try:
-                from playwright_stealth import stealth_async  # type: ignore
-                page = await context.new_page()
-                await stealth_async(page)
-            except ImportError:
-                page = await context.new_page()
+            context, attached = await open_context(pw, profile_dir, launch_args)
+            page = await context.new_page()
+            if not attached:  # a genuine Chrome needs no patching, and patches show
+                try:
+                    from playwright_stealth import stealth_async  # type: ignore
+
+                    await stealth_async(page)
+                except ImportError:
+                    pass
 
             await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
 
@@ -491,7 +494,8 @@ class PlaywrightFormFiller:
         finally:
             if context:
                 try:
-                    await context.close()
+                    # Attached: the context is the owner's session. Close our tab only.
+                    await (page.close() if attached else context.close())
                 except Exception:
                     pass
             try:

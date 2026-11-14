@@ -5,54 +5,69 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from backend.models.schemas import RawJob
 from backend.security.sanitizer import sanitize_for_prompt, sanitize_url
+from backend.utils.time import naive_utc_now
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_posted_date(value: Any) -> datetime | None:
-    """Best-effort parsing of a posted_date from LLM output.
+_RELATIVE_UNITS = (
+    (r"minutes?|mins?", timedelta(minutes=1)),
+    (r"hours?|heures?|h", timedelta(hours=1)),
+    (r"days?|jours?", timedelta(days=1)),
+    (r"weeks?|semaines?", timedelta(weeks=1)),
+    (r"months?|mois", timedelta(days=30)),
+)
+# Explicit unit words only, each closed by a word boundary: "12 Dec" is not 12 days.
+_RELATIVE_RES = tuple(
+    (re.compile(rf"\b(\d+)\+?\s*(?:{words})\b"), step) for words, step in _RELATIVE_UNITS
+)
 
-    Handles ISO formats, relative strings like '2 days ago', 'yesterday', etc.
+
+def _parse_posted_date(value: Any) -> datetime | None:
+    """Best-effort parsing of a posted date into naive UTC.
+
+    Handles ISO formats (with ``Z`` or an offset), a few plain date formats and
+    relative strings like '2 days ago', 'il y a 3 jours', 'yesterday'.
     Returns None on failure.
     """
     if value is None:
         return None
-    s = str(value).strip().lower()
+    raw = str(value).strip()
+    s = raw.lower()
     if not s or s == "null" or s == "none":
         return None
 
-    # Try ISO / common date formats
-    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%d %B %Y"):
+    try:
+        parsed = datetime.fromisoformat(raw[:-1] + "+00:00" if raw[-1] in "Zz" else raw)
+    except ValueError:
+        pass
+    else:
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
+
+    for fmt in ("%d/%m/%Y", "%m/%d/%Y", "%B %d, %Y", "%d %B %Y"):
         try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(s, fmt)
         except ValueError:
             continue
 
     # Relative dates: "X days ago", "yesterday", "today", etc.
-    from datetime import timedelta
-    now = datetime.now(timezone.utc)
+    now = naive_utc_now()
     if "today" in s or "just posted" in s or "just now" in s:
         return now
     if "yesterday" in s:
         return now - timedelta(days=1)
-    m = re.search(r"(\d+)\s*(day|jour|d)", s)
-    if m:
-        return now - timedelta(days=int(m.group(1)))
-    m = re.search(r"(\d+)\s*(week|semaine|w)", s)
-    if m:
-        return now - timedelta(weeks=int(m.group(1)))
-    m = re.search(r"(\d+)\s*(hour|heure|h)", s)
-    if m:
-        return now - timedelta(hours=int(m.group(1)))
-    m = re.search(r"(\d+)\s*(month|mois)", s)
-    if m:
-        return now - timedelta(days=int(m.group(1)) * 30)
+    for pattern, step in _RELATIVE_RES:
+        m = pattern.search(s)
+        if m:
+            return now - int(m.group(1)) * step
 
     return None
 

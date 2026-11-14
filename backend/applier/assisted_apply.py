@@ -139,6 +139,19 @@ class AssistedApplyStrategy:
                 message=f"browser-use not installed. Opened {apply_url} manually.",
             )
 
+        from backend.llm.factory import make_browser_llm
+
+        try:
+            llm = make_browser_llm()
+        except ValueError as exc:
+            logger.warning("[Tier 2 assisted] %s — Tier 2 disabled", exc)
+            return ApplicationResult(
+                status=RESULT_AWAITING_USER,
+                method="assisted",
+                next_action_url=apply_url,
+                message="Browser model unavailable. Open the application URL and complete it manually.",
+            )
+
         # Build a detailed task prompt
         task = self._build_fill_task(
             apply_url=apply_url,
@@ -180,8 +193,6 @@ class AssistedApplyStrategy:
             on_browser(browser)
         try:
             await open_own_tab(browser, apply_url)
-            from backend.llm.factory import make_browser_llm
-            llm = make_browser_llm()
             file_paths = []
             if cv_pdf and cv_pdf.exists():
                 file_paths.append(str(cv_pdf.resolve()))

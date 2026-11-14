@@ -284,6 +284,19 @@ class AutoApplyStrategy:
                 message=f"browser-use not installed. Opened {apply_url}; submit it yourself.",
             )
 
+        from backend.llm.factory import make_browser_llm
+
+        try:
+            llm = make_browser_llm()
+        except ValueError as exc:
+            logger.warning("[Tier 2] %s — Tier 2 disabled", exc)
+            return ApplicationResult(
+                status="awaiting_user_submission",
+                method="auto",
+                next_action_url=apply_url,
+                message="Browser model unavailable. Open the application URL and complete it manually.",
+            )
+
         # ── Reuse saved session (cookies/auth) from scraping ──────────────
         # T4a: use the canonical profile key — same as captcha_handler /
         # form_filler — so the storage_state file we read here is the
@@ -328,8 +341,6 @@ class AutoApplyStrategy:
             on_browser(browser)
         try:
             await open_own_tab(browser, apply_url)
-            from backend.llm.factory import make_browser_llm
-            llm = make_browser_llm()
             # Collect file paths the agent is allowed to upload
             file_paths = []
             if cv_pdf and cv_pdf.exists():

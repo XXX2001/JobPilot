@@ -13,7 +13,7 @@ def _settings(monkeypatch, **env) -> Settings:
     # might leak in, then set only what the test wants.
     for name in (
         "ADZUNA_APP_ID", "ADZUNA_APP_KEY",
-        "LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
+        "LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_CLI_MODEL",
         "BROWSER_LLM_PROVIDER", "BROWSER_LLM_BASE_URL", "BROWSER_LLM_API_KEY",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
     ):
@@ -67,7 +67,7 @@ def test_startup_tolerates_leftover_embedding_env(monkeypatch, tmp_path):
 def test_unknown_provider_flagged(monkeypatch):
     s = _settings(monkeypatch, LLM_PROVIDER="bogus", OPENAI_API_KEY="sk-test")
     problems = s.validate_runtime_config()
-    assert any("must be one of openai|anthropic" in p for p in problems)
+    assert any("must be one of auto|claude|codex|openai|anthropic" in p for p in problems)
 
 
 def test_hosted_openai_key_satisfies_both(monkeypatch):
@@ -76,4 +76,16 @@ def test_hosted_openai_key_satisfies_both(monkeypatch):
         LLM_PROVIDER="openai", BROWSER_LLM_PROVIDER="openai",
         OPENAI_API_KEY="sk-test",
     )
+    assert s.validate_runtime_config() == []
+
+
+def test_explicit_cli_requires_executable(monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    s = _settings(monkeypatch, LLM_PROVIDER="claude")
+    assert any("claude" in p and "PATH" in p for p in s.validate_runtime_config())
+
+
+def test_browser_config_problems_do_not_fail_startup(monkeypatch):
+    s = _settings(monkeypatch, LLM_PROVIDER="openai", OPENAI_API_KEY="test-key",
+                  BROWSER_LLM_PROVIDER="bogus")
     assert s.validate_runtime_config() == []

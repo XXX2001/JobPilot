@@ -8,7 +8,10 @@ from pydantic import BaseModel
 
 from backend.config import settings
 from backend.llm.base import (
-    LLMCallFailed, LLMJSONError, LLMRateLimitError, parse_json_response,
+    LLMCallFailed,
+    LLMJSONError,
+    LLMRateLimitError,
+    parse_json_response,
 )
 
 logger = logging.getLogger(__name__)

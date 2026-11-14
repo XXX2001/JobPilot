@@ -4,7 +4,7 @@ Every JobPilot setting, where it lives, whether it is required, and the startup 
 
 All settings are defined as fields on the `Settings` class in `backend/config.py:11` and loaded from environment variables or a `.env` file (`backend/config.py:14`, `env_file=".env"`, `case_sensitive=False`). A template lives at `.env.example`. Because matching is case-insensitive, the lowercase field `jobpilot_host` reads the env var `JOBPILOT_HOST`, and so on.
 
-Almost nothing is *required at the type level* — every credential field defaults to an empty string so the app can boot with a local model and no cloud keys. What each *configured* provider needs is enforced at startup by `Settings.validate_runtime_config()` (`backend/config.py:105`), called from the FastAPI lifespan (`backend/main.py:99`).
+Almost nothing is *required at the type level* — every credential field defaults to an empty string. The app can boot with a logged-in CLI, a local model, or no writing model. Explicit generation-provider requirements are enforced at startup by `Settings.validate_runtime_config()`, called from the FastAPI lifespan. Browser-model problems only produce warnings and disable Tier 2.
 
 ---
 
@@ -30,13 +30,27 @@ JobPilot has two independent LLM roles — generation and the browser agent — 
 
 | Env var | Field | Default | Required? |
 |---|---|---|---|
-| `LLM_PROVIDER` | `LLM_PROVIDER` | `openai` | One of `openai` \| `anthropic` |
-| `LLM_MODEL` | `LLM_MODEL` | `""` (provider default) | Optional |
+| `LLM_PROVIDER` | `LLM_PROVIDER` | `auto` | One of `auto` \| `claude` \| `codex` \| `openai` \| `anthropic` |
+| `LLM_MODEL` | `LLM_MODEL` | `""` (API provider default) | Optional; used by `openai` and `anthropic` |
+| `LLM_CLI_MODEL` | `LLM_CLI_MODEL` | `""` | Optional; Claude uses `sonnet`, Codex uses its configured default |
 | `LLM_BASE_URL` | `LLM_BASE_URL` | `""` | For OpenAI-compatible / local servers, e.g. `http://localhost:11434/v1` |
 | `LLM_API_KEY` | `LLM_API_KEY` (secret) | `""` | See validation rules |
 | `LLM_DISABLE_THINKING` | `LLM_DISABLE_THINKING` | `false` | For local reasoning models (Qwen3, DeepSeek-R1): when true, asks the server to skip chain-of-thought via `chat_template_kwargs.enable_thinking=false` — typically a large latency win (measured ~124s → ~16s on a CV-tailoring call). Ignored by servers that don't support the flag |
 
 `config.py:49-52`. Provider-default and base-URL details are wired through `backend/llm/factory.py` (`make_llm_client`, used at `backend/main.py:141`).
+
+With `LLM_PROVIDER=auto`, JobPilot chooses `claude` on PATH, then `codex`, then OpenAI
+when `LLM_BASE_URL`, `LLM_API_KEY`, or `OPENAI_API_KEY` is configured, then Anthropic
+when `ANTHROPIC_API_KEY` is configured. Log in to the chosen CLI beforehand; executable
+detection does not check authentication. Set an explicit provider to override this order.
+If none is available, startup logs "no writing model", health reports `llm_key_set=false`,
+and generation calls fail with that message while other services remain available.
+
+CLI calls send prompts on stdin, remove `PYTHONPATH` from the child environment, and
+use `LLM_TIMEOUT_SECONDS`. Claude runs without tools, settings sources, MCP servers,
+or session persistence; schema responses come from `structured_output`. Codex runs
+in a fresh temporary directory with the read-only sandbox and ephemeral sessions,
+and returns its last-message file. `LLM_CLI_MODEL` is separate from API model names.
 
 ### Browser agent (`BROWSER_LLM_*`)
 
@@ -48,6 +62,10 @@ JobPilot has two independent LLM roles — generation and the browser agent — 
 | `BROWSER_LLM_API_KEY` | `BROWSER_LLM_API_KEY` (secret) | `""` | See validation rules |
 
 `config.py:58-62`.
+
+CLI providers supply text generation only. Tier 2 still needs a configured browser
+endpoint or API key; otherwise it logs a warning and returns the application URL
+for manual completion without starting the browser agent.
 
 > Changes to any `LLM_*` / `BROWSER_LLM_*` value are **applied on restart** — clients are constructed once in the lifespan, not per-request.
 
@@ -109,7 +127,7 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 
 ## Models
 
-Model names are configured per role via `LLM_MODEL` / `BROWSER_LLM_MODEL` (see the provider tables above). Each is optional; when empty the provider adapter falls back to a sensible default.
+Model names are configured via `LLM_MODEL` for API generation, `LLM_CLI_MODEL` for CLI generation, and `BROWSER_LLM_MODEL` for the browser agent. Each is optional; when empty the provider adapter uses its default.
 
 ---
 
@@ -184,7 +202,7 @@ All optional — leave empty to disable. Obtain client credentials at `console.c
 
 ## Startup validation rules (`validate_runtime_config`)
 
-`Settings.validate_runtime_config()` (`backend/config.py:105`) returns a list of human-readable problems; an empty list means ready to run. The lifespan calls it and **refuses to start** if non-empty (`backend/main.py:99-108`). Each role independently checks only the credentials *its* provider needs — so a local-model user is never asked for a hosted key.
+`Settings.validate_runtime_config()` returns a list of human-readable generation-provider problems; the lifespan **refuses to start** if non-empty. `auto` with no available writer is allowed and logs a warning. `Settings.validate_browser_llm_config()` checks the browser role separately; its problems warn and disable Tier 2.
 
 The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and the literal `"placeholder"` as not-configured, and transparently unwraps `SecretStr`.
 
@@ -192,7 +210,9 @@ The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and
 
 | Provider | Requirement |
 |---|---|
-| invalid value | Must be one of `openai` \| `anthropic` |
+| invalid value | Must be one of `auto` \| `claude` \| `codex` \| `openai` \| `anthropic` |
+| `auto` | No requirement; missing writing model is a warning |
+| `claude` / `codex` | Selected executable must be on PATH; log in before generation |
 | `openai` | `LLM_BASE_URL` (local/self-hosted) **or** `LLM_API_KEY` **or** `OPENAI_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` (or `LLM_API_KEY`) |
 
@@ -200,12 +220,13 @@ The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and
 
 | Provider | Requirement |
 |---|---|
-| invalid value | Must be `openai` |
-| `openai` | `BROWSER_LLM_BASE_URL` **or** `BROWSER_LLM_API_KEY` **or** `OPENAI_API_KEY` |
+| invalid value | Must be `openai`, or `anthropic` with an OpenAI-compatible base URL |
+| `openai` | `BROWSER_LLM_BASE_URL` **or** `BROWSER_LLM_API_KEY` **or** a provider API key |
+| `anthropic` | `BROWSER_LLM_BASE_URL` is required; browser-use uses the OpenAI-compatible endpoint |
 
 For `openai`-type roles, a configured `*_BASE_URL` (a local/self-hosted server, where the key is usually ignored) satisfies the requirement on its own; otherwise a hosted-OpenAI key is required (`_openai_compatible_ok`, `backend/config.py:117`).
 
-On failure the lifespan raises `RuntimeError` pointing you at the setup scripts (`scripts/setup.sh` / `scripts/setup.ps1`) or `.env.example`.
+On a generation configuration error the lifespan raises `RuntimeError` pointing you at the setup scripts (`scripts/setup.sh` / `scripts/setup.ps1`) or `.env.example`. Browser configuration errors never prevent startup.
 
 ---
 

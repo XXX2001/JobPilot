@@ -40,17 +40,17 @@
 **Interfaces:**
 - Produces: `./jobpilot start|stop [--chrome]|status|logs|help`; pid file `data/jobpilot.pid`; log `data/logs/backend.out`; exit 0 on success, 1 on a failed check with the fix printed.
 
-- [ ] **Step 1: Failing tests** (`tests/test_launcher.py`, subprocess with a fake PATH containing stub `uv`, `google-chrome`, `curl` scripts that record calls):
+- [x] **Step 1: Failing tests** (`tests/test_launcher.py`, subprocess with a fake PATH containing stub `uv`, `google-chrome`, `curl` scripts that record calls):
   - `start` with every prerequisite stubbed starts the backend once and records `/api/health` polling; a second `start` does not start another backend.
   - missing frontend build → exit 1, message contains `npm ci && npm run build`.
   - missing Tectonic → exit 1, message contains `scripts/download_tectonic.py`.
   - no writer (no claude, no codex, no LLM_API_KEY) → warning line, still exit 0.
   - stale pid file pointing at a dead pid → treated as stopped; a pid of a live non-JobPilot process → not killed by `stop`.
   - port 8000 busy by a foreign process → exit 1, "port 8000 is in use".
-- [ ] **Step 2:** run, expect FAIL.
-- [ ] **Step 3:** implement `jobpilot`. `start` runs `uv run uvicorn backend.main:app --host 127.0.0.1 --port ${JOBPILOT_PORT:-8000}` under `nohup` with `env -u PYTHONPATH`, waits up to 60 s for `/api/health`, then `uv run python -c "from backend.browser.chrome import show_app; ..."` to open the app in the JobPilot Chrome (falls back to printing the URL). The pid file stores the pid and the process start time (`/proc/<pid>/stat` or `ps -o lstart`) so a reused pid is never mistaken for ours.
-- [ ] **Step 4:** PASS; then a real run on this machine: `./jobpilot start`, `./jobpilot status`, `./jobpilot stop`.
-- [ ] **Step 5:** commit `feat(launcher): ./jobpilot start, stop, status and logs`.
+- [x] **Step 2:** run, expect FAIL.
+- [x] **Step 3:** implement `jobpilot`. `start` runs `uv run uvicorn backend.main:app --host 127.0.0.1 --port ${JOBPILOT_PORT:-8000}` under `nohup` with `env -u PYTHONPATH`, waits up to 60 s for `/api/health`, then `uv run python -c "from backend.browser.chrome import show_app; ..."` to open the app in the JobPilot Chrome (falls back to printing the URL). The pid file stores the pid and the process start time (`/proc/<pid>/stat` or `ps -o lstart`) so a reused pid is never mistaken for ours.
+- [x] **Step 4:** PASS; then a real run on this machine: `./jobpilot start`, `./jobpilot status`, `./jobpilot stop`.
+- [x] **Step 5:** commit `feat(launcher): ./jobpilot start, stop, status and logs`.
 
 ### Task 2: Docker with its own Chrome (optional)
 
@@ -63,15 +63,37 @@
 - Consumes: existing `ensure_chrome_running`, `running_endpoint`, `LOGIN_PAGES`.
 - Produces: `GET /api/browser/status` adds `"view_url": str | None` (the noVNC URL when `JOBPILOT_CHROME_VIEW_URL` is set) and `"view_password_hint": "data/chrome-view.password"` in Docker mode; `POST /api/browser/open` in Docker mode opens the missing sign-in pages in the container's Chrome and returns `view_url`.
 
-- [ ] **Step 1: Failing tests**: status/open include `view_url` when the setting is set and not otherwise; `tests/test_docker_config.py` parses `docker-compose.yml` and asserts every published port starts with `127.0.0.1:`, no `privileged`, `security_opt` includes `no-new-privileges:true` and the seccomp file, `read_only: true`, the debug port is not published; parses the Dockerfile for no `--no-sandbox`; `docker-compose.cli.yml` mounts are `:ro`.
-- [ ] **Step 2:** run, expect FAIL.
-- [ ] **Step 3:** implement. Image: Google Chrome stable (amd64; document arm64 as unsupported or Chromium fallback), Xvfb, x11vnc, noVNC/websockify, a supervisor; the entrypoint creates `data/chrome-view.password` (random, 600) if missing, copies mounted CLI credentials (if `/host-cli/.claude` or `/host-cli/.codex` exist) into `$HOME`, then starts Xvfb `:99`, Chrome with `--user-data-dir=/app/data/jobpilot-chrome --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1`, x11vnc with the password on `localhost:5900`, websockify/noVNC on `0.0.0.0:6080` (published as `127.0.0.1:6080` by compose), and uvicorn. Compose: `read_only: true`, `tmpfs: [/tmp, /run, /home/jobpilot/.cache]`, `security_opt: [no-new-privileges:true, seccomp=docker/chrome-seccomp.json]`, `shm_size: 1gb`. The seccomp profile is the widely used Chrome profile (cite its source in a comment) allowing the user-namespace syscalls Chrome's sandbox needs. `docker-compose.cli.yml` adds the CLI image stage (`npm i -g @anthropic-ai/claude-code @openai/codex`) and mounts `~/.claude`, `~/.claude.json`, `~/.codex` read-only under `/host-cli/`.
-- [ ] **Step 4:** PASS; `docker compose build` and `docker compose up -d` on this machine: `/api/health` 200, noVNC at `http://127.0.0.1:6080` asks for the password and shows Chrome, `/api/browser/status` returns `running: true`; `docker compose -f docker-compose.yml -f docker-compose.cli.yml up -d`: `claude --version` and `codex --version` work as the container user. `docker compose down`.
-- [ ] **Step 5:** commit `feat(docker): own Chrome viewed through noVNC, hardened`.
+- [x] **Step 1: Failing tests**: status/open include `view_url` when the setting is set and not otherwise; `tests/test_docker_config.py` parses `docker-compose.yml` and asserts every published port starts with `127.0.0.1:`, no `privileged`, `security_opt` includes `no-new-privileges:true` and the seccomp file, `read_only: true`, the debug port is not published; parses the Dockerfile for no `--no-sandbox`; `docker-compose.cli.yml` mounts are `:ro`.
+- [x] **Step 2:** run, expect FAIL.
+- [x] **Step 3:** implement. Image: Google Chrome stable (amd64; document arm64 as unsupported or Chromium fallback), Xvfb, x11vnc, noVNC/websockify, a supervisor; the entrypoint creates `data/chrome-view.password` (random, 600) if missing, copies mounted CLI credentials (if `/host-cli/.claude` or `/host-cli/.codex` exist) into `$HOME`, then starts Xvfb `:99`, Chrome with `--user-data-dir=/app/data/jobpilot-chrome --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1`, x11vnc with the password on `localhost:5900`, websockify/noVNC on `0.0.0.0:6080` (published as `127.0.0.1:6080` by compose), and uvicorn. Compose: `read_only: true`, `tmpfs: [/tmp, /run, /home/jobpilot/.cache]`, `security_opt: [no-new-privileges:true, seccomp=docker/chrome-seccomp.json]`, `shm_size: 1gb`. The seccomp profile is the widely used Chrome profile (cite its source in a comment) allowing the user-namespace syscalls Chrome's sandbox needs. `docker-compose.cli.yml` adds the CLI image stage (`npm i -g @anthropic-ai/claude-code @openai/codex`) and mounts `~/.claude`, `~/.claude.json`, `~/.codex` read-only under `/host-cli/`.
+- [x] **Step 4:** PASS; `docker compose build` and `docker compose up -d` on this machine: `/api/health` 200, noVNC at `http://127.0.0.1:6080` asks for the password and shows Chrome, `/api/browser/status` returns `running: true`; `docker compose -f docker-compose.yml -f docker-compose.cli.yml up -d`: `claude --version` and `codex --version` work as the container user. `docker compose down`.
+- [x] **Step 5:** commit `feat(docker): own Chrome viewed through noVNC, hardened`.
 
 ### Task 3: Docs
 
 **Files:** `README.md` (a "Run it" section: native first, Docker optional), `docs/browser.md`, `docs/docker.md` (create: ports, password, remote access through SSH tunnel or Tailscale, the two writer options and the power of mounted logins, the seccomp profile and what to do if Chrome's sandbox fails), `CHANGELOG.md`.
 
-- [ ] **Step 1:** write; every command in the docs was run in Task 1 or 2.
-- [ ] **Step 2:** commit `docs: native and Docker launch`.
+- [x] **Step 1:** write; every command in the docs was run in Task 1 or 2.
+- [x] **Step 2:** commit `docs: native and Docker launch`.
+
+---
+
+## Status (2026-11-15, paused by the owner)
+
+Done: all three tasks, in PR #9. Checked: 2692 tests pass, pyright 10 errors,
+svelte-check clean; Docker image built and run (no capabilities, no-new-privileges,
+read-only root, Chrome sandbox on, 9222/5900 inside only, 8000/6080 on 127.0.0.1).
+
+Next, when resumed:
+
+1. Merge PR #9 once CI is green.
+2. Main checkout: `git pull`, `uv sync`, `cd frontend && npm ci && npm run build`;
+   stop the backend started by hand; `./jobpilot start`.
+3. Owner, in the JobPilot Chrome, welcome page "You" step: set the job-site
+   password, check the profile, "Open sign-in pages" and sign in to Google. If Google
+   blocks the sign-in, use the restart workaround in `docs/browser.md`.
+4. FANUC live test (match 22): `POST /api/applications/22/apply` with
+   `{"method":"assisted","use_base_cv":true}`. Expected: SuccessFactors sign-up with
+   the profile email and password, Gmail verification, form filled, stop before submit.
+5. Cleanup: remove the `JobPilot-accounts` and `JobPilot-launch` worktrees; the local
+   `jobpilot:latest` image can go with `docker image rm jobpilot:latest`.

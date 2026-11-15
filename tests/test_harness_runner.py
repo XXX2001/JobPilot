@@ -840,15 +840,28 @@ async def test_linkedin_offsite_apply_opens_company_page(browser):
         '<a href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Facme.io">Acme website</a>'
     )
 
+    pages = {
+        "https://jobs.acme.io/apply": (
+            '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>'
+            '<a href="https://jobs.acme.io/apply/form">Postuler »</a>'
+        ),
+        "https://jobs.acme.io/apply/form": '<label>Email <input name="email"></label>',
+        "https://jobs.acme.io/other": '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>',
+    }
+
     async def serve(route):
-        body = posting if "linkedin.com/jobs" in route.request.url else "<h1>Acme form</h1>"
+        url = route.request.url
+        body = posting if "linkedin.com/jobs" in url else pages.get(url, "<h1>other</h1>")
         await route.fulfill(content_type="text/html", body=body)
 
     await context.route("https://**/*", serve)
     await page.goto("https://www.linkedin.com/jobs/view/1/")
     await runner._follow_offsite_apply(page)
-    assert page.url == "https://jobs.acme.io/apply"
+    # LinkedIn -> company posting -> its "Postuler" link; the nav link is never followed.
+    assert page.url == "https://jobs.acme.io/apply/form"
+    await runner._follow_offsite_apply(page)  # a form is here: stays put
+    assert page.url == "https://jobs.acme.io/apply/form"
     await page.goto("https://jobs.acme.io/other")
-    await runner._follow_offsite_apply(page)  # not on LinkedIn: stays put
+    await runner._follow_offsite_apply(page)  # no apply verb link: stays put
     assert page.url == "https://jobs.acme.io/other"
     await context.close()

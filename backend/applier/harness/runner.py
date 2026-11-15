@@ -53,25 +53,51 @@ def unwrap_linkedin_redirect(href: str) -> str | None:
     return None if host == "linkedin.com" or host.endswith(".linkedin.com") else target
 
 
+# A posting page's link to its application form: the whole link text is an apply verb.
+_POSTING_APPLY_LINK = """() => {
+    const verb = /^\\W*(apply( now| online| for this (job|position))?|postuler( maintenant| en ligne| à cette offre)?|je postule|candidater|(jetzt )?bewerben)\\W*$/i;
+    const a = [...document.querySelectorAll('a[href]')].find(e =>
+        /^https?:/.test(e.href) && e.href.split('#')[0] !== location.href.split('#')[0] &&
+        e.getClientRects().length && verb.test(e.innerText.trim()));
+    return a ? a.href : null;
+}"""
+_MAX_POSTING_HOPS = 3
+
+
+def _is_linkedin(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host == "linkedin.com" or host.endswith(".linkedin.com")
+
+
 async def _follow_offsite_apply(page) -> None:
-    """On a LinkedIn posting without Easy Apply, open the company's application page.
+    """From a job posting, open its application form before the harness starts.
 
     The harness never clicks a link that reads like "Apply", so without this it stops
-    on the posting with nothing filled (live run 2026-11-15, FANUC via contactrh.com).
+    on the posting with nothing filled (live runs 2026-11-15: LinkedIn to contactrh.com,
+    then FANUC's SuccessFactors posting to its apply page). Links are followed with a
+    plain GET (page.goto), never a click, so no page script runs and nothing is sent.
     """
-    host = (urlsplit(page.url).hostname or "").lower()
-    if not (host == "linkedin.com" or host.endswith(".linkedin.com")):
-        return
-    href = None
-    for _ in range(8):  # the top card renders after domcontentloaded
-        href = await page.evaluate(_LINKEDIN_OFFSITE_APPLY)
-        if href or await page.locator("button.jobs-apply-button").count():
-            break
-        await page.wait_for_timeout(1000)
-    target = unwrap_linkedin_redirect(href) if href else None
-    if target:
+    if _is_linkedin(page.url):
+        href = None
+        for _ in range(8):  # the top card renders after domcontentloaded
+            href = await page.evaluate(_LINKEDIN_OFFSITE_APPLY)
+            if href or await page.locator("button.jobs-apply-button").count():
+                break
+            await page.wait_for_timeout(1000)
+        target = unwrap_linkedin_redirect(href) if href else None
+        if not target:
+            return  # Easy Apply (or nothing to follow): the harness starts on LinkedIn
         logger.info("LinkedIn posting applies offsite; opening %s", urlsplit(target).hostname)
         await page.goto(target, wait_until="domcontentloaded", timeout=20_000)
+    for _ in range(_MAX_POSTING_HOPS):
+        snap = await observe(page)
+        if any(a["kind"] in ("fill", "select") for a in snap["actions"]):
+            return  # a form is here
+        href = await page.evaluate(_POSTING_APPLY_LINK)
+        if not href or _is_linkedin(href):
+            return
+        logger.info("Posting page; following its apply link to %s", urlsplit(href).path)
+        await page.goto(href, wait_until="domcontentloaded", timeout=20_000)
 
 
 # Launched browsers handed to the owner need their Playwright connection to stay alive.

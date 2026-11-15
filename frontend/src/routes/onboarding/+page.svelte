@@ -12,11 +12,17 @@
 		Rocket,
 		PartyPopper
 	} from 'lucide-svelte';
-	import type { SetupStatus } from '$lib/types/api';
+	import type {
+		BrowserStatus,
+		JobSitePasswordStatus,
+		ProfileDetails,
+		SetupStatus
+	} from '$lib/types/api';
 	import {
 		ONBOARDING_DISMISSED_KEY,
 		ONBOARDING_TOTAL_STEPS,
-		firstIncompleteStep
+		firstIncompleteStep,
+		passwordSaveError
 	} from '$lib/utils/onboarding';
 
 	interface SiteItem {
@@ -34,6 +40,32 @@
 	let error = $state('');
 
 	let step = $state(1);
+
+	// Step 1 — profile, write-only job-site password, and browser sign-ins
+	let profile = $state({ full_name: '', email: '', phone: '', location: '', linkedin_url: '' });
+	let profileLoaded = $state(false);
+	let profileSaving = $state(false);
+	let savedProfile = $state('');
+	let profileForm = $state<HTMLFormElement>();
+	const profileDirty = $derived(JSON.stringify(profile) !== savedProfile);
+	const youReady = $derived(profileLoaded && !!profile.full_name.trim() && !!profile.email.trim());
+	let toolsRefreshing = $state(false);
+	let toolsError = $state('');
+
+	// Keep the password only in the input, never in a shared store or profile payload.
+	let passwordInput = $state<HTMLInputElement>();
+	let passwordStatus = $state<JobSitePasswordStatus | null>(null);
+	let passwordChecking = $state(true);
+	let passwordSaving = $state(false);
+	let passwordError = $state('');
+	let showPassword = $state(false);
+	let browser = $state<BrowserStatus | null>(null);
+	let browserBusy = $state(true);
+	let browserError = $state('');
+	const signIns = [
+		{ key: 'google', label: 'Google (Gmail)' },
+		{ key: 'linkedin', label: 'LinkedIn' }
+	] as const;
 
 	// Step 2 — CV upload
 	let cvUploading = $state(false);
@@ -59,7 +91,7 @@ ADZUNA_APP_ID=your_adzuna_app_id
 ADZUNA_APP_KEY=your_adzuna_app_key`;
 
 	const steps = [
-		{ n: 1, label: 'Tools' },
+		{ n: 1, label: 'You' },
 		{ n: 2, label: 'CV Template' },
 		{ n: 3, label: 'Keywords' },
 		{ n: 4, label: 'First Batch' }
@@ -70,14 +102,118 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 		loading = true;
 		error = '';
 		try {
-			status = await apiFetch<SetupStatus>('/api/settings/status');
+			const [setup, details] = await Promise.all([
+				apiFetch<SetupStatus>('/api/settings/status'),
+				apiFetch<ProfileDetails>('/api/settings/profile')
+			]);
+			status = setup;
+			setProfile(details);
+			profileLoaded = true;
 			cvDone = status.base_cv_uploaded;
 			// Resume on the first step that still needs attention.
-			step = firstIncompleteStep(status);
+			step = firstIncompleteStep(status, profile);
 		} catch (e: unknown) {
 			error = e instanceof Error ? e.message : 'Failed to load setup status';
 		} finally {
 			loading = false;
+		}
+	}
+
+	function setProfile(details: ProfileDetails) {
+		profile = {
+			full_name: details.full_name,
+			email: details.email,
+			phone: details.phone ?? '',
+			location: details.location ?? '',
+			linkedin_url: details.linkedin_url ?? ''
+		};
+		savedProfile = JSON.stringify(profile);
+	}
+
+	async function saveProfile(): Promise<boolean> {
+		if (!profileLoaded || profileSaving || !profile.full_name.trim() || !profile.email.trim())
+			return false;
+		profileSaving = true;
+		error = '';
+		try {
+			const details = await apiFetch<ProfileDetails>('/api/settings/profile', {
+				method: 'PUT',
+				body: JSON.stringify({
+					full_name: profile.full_name.trim(),
+					email: profile.email.trim(),
+					phone: profile.phone.trim() || null,
+					location: profile.location.trim() || null,
+					linkedin_url: profile.linkedin_url.trim() || null
+				})
+			});
+			setProfile(details);
+			return true;
+		} catch (e: unknown) {
+			error = e instanceof Error ? e.message : 'Failed to save profile';
+			return false;
+		} finally {
+			profileSaving = false;
+		}
+	}
+
+	async function loadPasswordStatus() {
+		passwordChecking = true;
+		passwordError = '';
+		try {
+			passwordStatus = await apiFetch<JobSitePasswordStatus>('/api/settings/job-site-password');
+		} catch {
+			passwordError = 'Could not check whether a job-site password is saved.';
+		} finally {
+			passwordChecking = false;
+		}
+	}
+
+	async function savePassword(): Promise<boolean> {
+		if (!passwordInput || passwordSaving) return false;
+		const input = passwordInput;
+		passwordSaving = true;
+		passwordError = '';
+		try {
+			passwordStatus = await apiFetch<JobSitePasswordStatus>('/api/settings/job-site-password', {
+				method: 'PUT',
+				body: JSON.stringify({ password: input.value })
+			});
+			input.value = '';
+			return true;
+		} catch (e: unknown) {
+			// Never display or log a response/exception that could echo the password.
+			passwordError = passwordSaveError(e);
+			return false;
+		} finally {
+			showPassword = false;
+			passwordSaving = false;
+		}
+	}
+
+	async function refreshBrowser(open = false) {
+		browserBusy = true;
+		browserError = '';
+		try {
+			browser = await apiFetch<BrowserStatus>(open ? '/api/browser/open' : '/api/browser/status', {
+				method: open ? 'POST' : 'GET'
+			});
+		} catch {
+			browser = null;
+			browserError = 'Could not reach the JobPilot Chrome. Try again.';
+		} finally {
+			browserBusy = false;
+		}
+	}
+
+	async function refreshTools() {
+		toolsRefreshing = true;
+		toolsError = '';
+		try {
+			status = await apiFetch<SetupStatus>('/api/settings/status');
+		} catch (e: unknown) {
+			toolsError = e instanceof Error ? e.message : 'Failed to check tools';
+		} finally {
+			toolsRefreshing = false;
 		}
 	}
 
@@ -164,7 +300,12 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 	}
 
 	// ─── Navigation ────────────────────────────────────────────────────────────────
-	function next() {
+	async function next() {
+		if (step === 1) {
+			if (!youReady || profileSaving || passwordSaving || !profileForm?.reportValidity()) return;
+			if (profileDirty && !(await saveProfile())) return;
+			if (passwordInput?.value && !(await savePassword())) return;
+		}
 		if (step < ONBOARDING_TOTAL_STEPS) step += 1;
 	}
 
@@ -187,6 +328,8 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 
 	onMount(() => {
 		load();
+		loadPasswordStatus();
+		refreshBrowser();
 		loadSites();
 	});
 </script>
@@ -247,6 +390,9 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 			class="mb-4 flex items-center gap-2 rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400"
 		>
 			<AlertCircle size={13} />{error}
+			{#if !profileLoaded}
+				<button onclick={load} class="underline">Retry setup</button>
+			{/if}
 			<button onclick={() => (error = '')} class="ml-auto hover:text-red-300">✕</button>
 		</div>
 	{/if}
@@ -261,9 +407,225 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 		<!-- Step content -->
 		<div class="border-border bg-card rounded-xl border p-6">
 			{#if step === 1}
-				<!-- Step 1: API keys (instructional) -->
+				<!-- Step 1: everything the owner provides -->
 				<div class="space-y-4">
-					<h2 class="text-lg font-medium">1. Tools</h2>
+					<h2 class="text-lg font-medium">1. You</h2>
+					<p class="text-muted-foreground text-sm">
+						Your details for job applications. Full name and email are required.
+					</p>
+					<form
+						bind:this={profileForm}
+						onsubmit={(e) => {
+							e.preventDefault();
+							saveProfile();
+						}}
+						class="space-y-3"
+					>
+						<fieldset disabled={!profileLoaded || profileSaving} class="grid gap-3 sm:grid-cols-2">
+							<label class="space-y-1 text-sm">
+								<span>Full name</span>
+								<input
+									type="text"
+									autocomplete="name"
+									required
+									bind:value={profile.full_name}
+									class="bg-background border-border w-full rounded-md border px-3 py-2 text-sm"
+								/>
+							</label>
+							<label class="space-y-1 text-sm">
+								<span>Email</span>
+								<input
+									type="email"
+									autocomplete="email"
+									required
+									bind:value={profile.email}
+									class="bg-background border-border w-full rounded-md border px-3 py-2 text-sm"
+								/>
+							</label>
+							<label class="space-y-1 text-sm">
+								<span>Phone <span class="text-muted-foreground">(optional)</span></span>
+								<input
+									type="tel"
+									autocomplete="tel"
+									bind:value={profile.phone}
+									class="bg-background border-border w-full rounded-md border px-3 py-2 text-sm"
+								/>
+							</label>
+							<label class="space-y-1 text-sm">
+								<span>Location <span class="text-muted-foreground">(optional)</span></span>
+								<input
+									type="text"
+									autocomplete="address-level2"
+									bind:value={profile.location}
+									class="bg-background border-border w-full rounded-md border px-3 py-2 text-sm"
+								/>
+							</label>
+							<label class="space-y-1 text-sm sm:col-span-2">
+								<span>LinkedIn URL <span class="text-muted-foreground">(optional)</span></span>
+								<input
+									type="url"
+									bind:value={profile.linkedin_url}
+									placeholder="https://www.linkedin.com/in/…"
+									class="bg-background border-border w-full rounded-md border px-3 py-2 text-sm"
+								/>
+							</label>
+						</fieldset>
+						<div class="flex items-center gap-3">
+							<button
+								type="submit"
+								disabled={!profileLoaded ||
+									profileSaving ||
+									!profile.full_name.trim() ||
+									!profile.email.trim()}
+								class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-1.5 text-xs disabled:opacity-50"
+							>
+								{profileSaving ? 'Saving…' : 'Save profile'}
+							</button>
+							{#if profileLoaded && !profileDirty && profile.full_name.trim() && profile.email.trim()}
+								<span role="status" class="text-xs text-green-400">Profile saved</span>
+							{/if}
+						</div>
+					</form>
+
+					<form
+						onsubmit={(e) => {
+							e.preventDefault();
+							savePassword();
+						}}
+						class="border-border space-y-3 border-t pt-4"
+					>
+						<div class="flex items-center justify-between gap-2">
+							<label for="job-site-password" class="text-sm font-medium"
+								>Job-site password <span class="text-muted-foreground font-normal"
+									>(recommended)</span
+								></label
+							>
+							<span
+								role="status"
+								class="text-xs {passwordStatus?.set ? 'text-green-400' : 'text-muted-foreground'}"
+							>
+								{passwordStatus === null
+									? passwordChecking
+										? 'Checking…'
+										: 'Status unavailable'
+									: passwordStatus.set
+										? 'Saved'
+										: 'Not set'}
+							</span>
+						</div>
+						<p id="job-site-password-help" class="text-muted-foreground text-xs">
+							Used to create and sign in to accounts on company job sites. Stored encrypted on this
+							machine.
+						</p>
+						<div class="flex gap-2">
+							<input
+								id="job-site-password"
+								type={showPassword ? 'text' : 'password'}
+								bind:this={passwordInput}
+								autocomplete="new-password"
+								required
+								minlength={8}
+								maxlength={128}
+								disabled={passwordSaving}
+								aria-describedby="job-site-password-help"
+								placeholder="8–128 characters"
+								class="bg-background border-border min-w-0 flex-1 rounded-md border px-3 py-2 text-sm"
+							/>
+							<button
+								type="button"
+								onclick={() => (showPassword = !showPassword)}
+								aria-pressed={showPassword}
+								aria-label={showPassword ? 'Hide job-site password' : 'Show job-site password'}
+								disabled={passwordSaving}
+								class="border-border hover:bg-accent rounded-md border px-3 py-1.5 text-xs disabled:opacity-50"
+							>
+								{showPassword ? 'Hide' : 'Show'}
+							</button>
+						</div>
+						<button
+							type="submit"
+							disabled={passwordSaving}
+							class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-1.5 text-xs disabled:opacity-50"
+						>
+							{passwordSaving ? 'Saving…' : 'Save password'}
+						</button>
+						{#if passwordError}
+							<p role="alert" class="text-xs text-red-400">{passwordError}</p>
+							{#if passwordStatus === null}
+								<button type="button" onclick={loadPasswordStatus} class="text-xs underline"
+									>Retry password status</button
+								>
+							{/if}
+						{/if}
+					</form>
+
+					<div class="border-border space-y-3 border-t pt-4">
+						<h3 class="text-sm font-medium">
+							JobPilot Chrome sign-ins <span class="text-muted-foreground font-normal"
+								>(recommended)</span
+							>
+						</h3>
+						<p class="text-muted-foreground text-sm">
+							JobPilot's Chrome is your applications browser: sign in to Google and LinkedIn there
+							once.
+						</p>
+						<p class="text-muted-foreground text-xs">
+							Enter your Google password and any two-factor code in Chrome, then refresh here.
+						</p>
+						<div class="space-y-2" aria-live="polite">
+							{#if browser?.running === false}
+								<p class="text-muted-foreground text-sm">JobPilot's Chrome is not running</p>
+							{:else}
+								{#each signIns as site}
+									<div class="flex items-center justify-between gap-2 text-sm">
+										<span>{site.label}</span>
+										<span
+											class={browser?.running && browser.logged_in[site.key]
+												? 'text-green-400'
+												: 'text-muted-foreground'}
+										>
+											{browser === null
+												? browserBusy
+													? 'Checking…'
+													: 'Status unavailable'
+												: browser.logged_in[site.key]
+													? 'Signed in'
+													: 'Not signed in'}
+										</span>
+									</div>
+								{/each}
+							{/if}
+						</div>
+						<div class="flex flex-wrap gap-2">
+							<button
+								onclick={() => refreshBrowser(true)}
+								disabled={browserBusy}
+								class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-1.5 text-xs disabled:opacity-50"
+								>Open sign-in pages</button
+							>
+							<button
+								onclick={() => refreshBrowser()}
+								disabled={browserBusy}
+								class="border-border hover:bg-accent rounded-md border px-3 py-1.5 text-xs disabled:opacity-50"
+								>Refresh</button
+							>
+						</div>
+						{#if browserError}<p role="alert" class="text-xs text-red-400">{browserError}</p>{/if}
+					</div>
+
+					<div class="border-border flex items-center justify-between gap-2 border-t pt-4">
+						<h3 class="text-sm font-medium">Tools</h3>
+						<button
+							onclick={refreshTools}
+							disabled={toolsRefreshing}
+							class="border-border hover:bg-accent rounded-md border px-3 py-1.5 text-xs disabled:opacity-50"
+						>
+							{toolsRefreshing ? 'Checking…' : 'Check tools'}
+						</button>
+					</div>
+					{#if toolsError}
+						<p role="alert" class="text-xs text-red-400">{toolsError}</p>
+					{/if}
 					<p class="text-muted-foreground text-sm">
 						JobPilot writes with your logged-in Claude Code or Codex CLI, so no AI key is needed.
 						Optional keys go in a <code class="bg-muted rounded px-1">.env</code> file at the project
@@ -288,7 +650,8 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 								<span>Adzuna keys set</span>
 							{:else}
 								<CheckCircle2 size={15} class="text-muted-foreground" />
-								<span class="text-muted-foreground">Adzuna not set (optional extra job source)</span>
+								<span class="text-muted-foreground">Adzuna not set (optional extra job source)</span
+								>
 							{/if}
 						</div>
 						<div class="flex items-center gap-2 text-sm">
@@ -334,14 +697,21 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						<label
 							class="border-border hover:border-primary/50 relative block cursor-pointer rounded-lg border-2 border-dashed p-8 text-center transition-colors"
 						>
-							<input type="file" accept=".tex,.cls,.pdf,.docx" onchange={handleCvUpload} class="sr-only" />
+							<input
+								type="file"
+								accept=".tex,.cls,.pdf,.docx"
+								onchange={handleCvUpload}
+								class="sr-only"
+							/>
 							<div class="flex flex-col items-center gap-2">
 								<Upload size={28} class="text-muted-foreground" />
 								{#if cvUploading}
 									<p class="text-muted-foreground text-sm">Uploading / converting…</p>
 								{:else}
 									<p class="text-sm font-medium">Click to upload your CV (.tex, .pdf or .docx)</p>
-									<p class="text-muted-foreground text-xs">PDF/DOCX are converted to LaTeX with your LLM (may take a moment).</p>
+									<p class="text-muted-foreground text-xs">
+										PDF/DOCX are converted to LaTeX with your LLM (may take a moment).
+									</p>
 								{/if}
 							</div>
 						</label>
@@ -471,7 +841,8 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 				{#if step < ONBOARDING_TOTAL_STEPS}
 					<button
 						onclick={next}
-						class="bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-1.5 rounded-md px-4 py-1.5 text-xs transition-colors"
+						disabled={step === 1 && (!youReady || profileSaving || passwordSaving)}
+						class="bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-1.5 rounded-md px-4 py-1.5 text-xs transition-colors disabled:opacity-50"
 					>
 						Next <ArrowRight size={13} />
 					</button>

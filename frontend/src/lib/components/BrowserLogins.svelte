@@ -23,9 +23,10 @@
 
 <div class="space-y-4">
 	<p class="text-sm text-muted-foreground">
-		JobPilot uses its own Chrome window, separate from your everyday browser. Open it and log into
-		the sites you want to apply on (LinkedIn, Indeed…). You do this once; the logins are kept. Do
-		not sign that window into your Google account.
+		JobPilot uses its own Chrome window, separate from your everyday browser: your applications
+		browser. Open it and sign in to Google (Gmail) and LinkedIn there, plus any job site you use.
+		You do this once; the logins are kept. JobPilot uses the Google login for "Sign in with Google"
+		on job sites and to read their verification emails.
 	</p>
 	<div class="flex items-center gap-2">
 		<button

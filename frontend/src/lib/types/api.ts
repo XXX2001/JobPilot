@@ -104,6 +104,27 @@ export interface Application {
 
 // ─── Settings ───────────────────────────────────────────────────────────────
 
+/** Contact fields from `GET /api/settings/profile`; also accepted by PUT. */
+export interface ProfileDetails {
+	full_name: string;
+	email: string;
+	phone: string | null;
+	location: string | null;
+	linkedin_url: string | null;
+}
+
+/** Password metadata only; the stored value is never returned. */
+export interface JobSitePasswordStatus {
+	set: boolean;
+	source: 'app' | 'env' | null;
+}
+
+/** `logged_in` is empty when the JobPilot Chrome is not running. */
+export interface BrowserStatus {
+	running: boolean;
+	logged_in: Partial<Record<'linkedin' | 'google', boolean>>;
+}
+
 /**
  * Onboarding readiness flags from `GET /api/settings/status`.
  * Used by SetupWizard, the analytics page (to gate the wizard), and the

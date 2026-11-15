@@ -1,6 +1,7 @@
 """Code-owned account preparation; no secret enters the decision model."""
 
 import asyncio
+import html
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -8,8 +9,8 @@ from difflib import SequenceMatcher
 from typing import Any
 from urllib.parse import quote, quote_plus, unquote_plus, urlsplit
 
+from playwright.async_api import ElementHandle, Frame, Page
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Frame, Locator, Page
 
 from backend.scraping.site_prompts import SITE_CONFIGS
 
@@ -38,6 +39,28 @@ _GOOGLE_CHALLENGE = re.compile(
     r"2[- ]?(?:step|factor)|two[- ](?:step|factor)|verify it['’]s you|"
     r"validez votre identit[eé]|validation en deux [eé]tapes|"
     r"best[aä]tigung in zwei schritten|captcha|not a robot|je ne suis pas un robot",
+    re.I,
+)
+_GOOGLE_EXTRA_SCOPES = re.compile(
+    r"\b(?:drive|contacts?|calendar|gmail|agenda|calendrier|fichiers?|files?|"
+    r"kalender|kontakte)\b|(?<!e-)\bmail\b",
+    re.I,
+)
+_GOOGLE_IDENTITY_SCOPE = re.compile(
+    r"\b(?:full name|name|e-?mail address|language preference|profile picture|"
+    r"nom|adresse e-?mail|pr[eé]f[eé]rence linguistique|photo de profil|"
+    r"e-mail-adresse|spracheinstellung|profilbild)\b", re.I,
+)
+_GOOGLE_SCOPE_VERB = re.compile(
+    r"\b(?:see|view|read|manage|edit|delete|download|upload|"
+    r"consulter|lire|g[eé]rer|modifier|supprimer|anzeigen|lesen|verwalten|l[oö]schen)\b|"
+    r"^access\b", re.I,
+)
+_GOOGLE_SCOPE_CONNECTORS = re.compile(
+    r"\b(?:and|your|the|et|votre|vos|und|ihre?|ihren)\b|[\W_]+", re.I,
+)
+_GOOGLE_OTHER_ACCOUNT = re.compile(
+    r"use another account|utiliser un autre compte|anderes konto|\b(?:not|pas)\s+",
     re.I,
 )
 _EMAIL_IN_TEXT = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]+@[\w.-]+", re.I)
@@ -116,11 +139,37 @@ _DOM = r"""
         e.matches('button, input[type=submit], input[type=button], input[type=reset]') ||
         (e.matches('input, select') && (accountField(e) || (allowCode && code(e))));
     const applicationText = text => {
-        const verb = '(sav|enregistr|submit|soumettr|envoy|send|finali|complét|abschließ|absend)';
-        const noun = '(application|candidature|bewerbung)';
+        const verb = '(sav|enregistr|submit|soumettr|envoy|send|valid|confirm|complet|' +
+            'finali|transmet|abschließ|abschliess|ab(?:zu)?schick|ab(?:zu)?send|' +
+            'ein(?:zu)?reich|apply|postul|bewerb)';
+        const noun = '(application|candidature|dossier|bewerbung)';
         return new RegExp(verb + '.{0,60}' + noun + '|' + noun + '.{0,60}' + verb +
-            '|review your application|récapitulatif de (votre|ma) candidature|' +
-            'Zusammenfassung Ihrer Bewerbung', 'i').test(text.replace(/\s+/g, ' '));
+            '|apply.{0,60}profile?|profile?.{0,60}apply|' +
+            'review your application|recapitulatif de (votre|ma) candidature|' +
+            'Zusammenfassung Ihrer Bewerbung', 'i').test(
+                text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' '));
+    };
+    const contains = (parent, child) => {
+        while (child) {
+            if (parent === child) return true;
+            child = child.parentElement || child.getRootNode().host;
+        }
+        return false;
+    };
+    const accountText = e => {
+        let container = e.form || e.closest('form, fieldset, dialog, section');
+        if (container) return container.textContent || '';
+        const targets = [e, ...query(document, 'input[type=password]')];
+        container = e.parentElement || e.getRootNode().host;
+        while (container && !targets.every(target => contains(container, target)))
+            container = container.parentElement || container.getRootNode().host;
+        if (container === document.body) {
+            const parts = [...container.children].filter(child =>
+                targets.some(target => contains(child, target)));
+            parts.push(...query(document, 'h1, h2, h3, [role=heading]'));
+            return [...new Set(parts)].map(part => part.textContent || '').join(' ');
+        }
+        return container?.textContent || '';
     };
     const accountContainer = (e, allowCode = false) => {
         // form= can associate controls outside the form's descendant tree.
@@ -131,8 +180,7 @@ _DOM = r"""
                 c.constructor.formAssociated))].some(c => !accountElement(c, allowCode)) ||
             fields(container).some(c => !accountField(c) && !(allowCode && code(c)))
         )) return false;
-        const textContainer = e.form || e.closest('form, fieldset, dialog, section');
-        return !textContainer || !applicationText(textContainer.textContent || '');
+        return !applicationText(accountText(e));
     };
     const googleControl = e => {
         const names = [e.getAttribute('aria-label'), e.innerText, e.title,
@@ -175,14 +223,36 @@ ACCOUNT_PAGE_JS = (
             fields(document).some(e => !accountField(e) && !code(e)) ||
             query(document, 'form').some(f =>
                 [...f.elements].some(e => !accountElement(e, true))) ||
-            [...passwords, ...codes].some(e => !accountContainer(e, true))
+            [...passwords, ...codes, ...controls.filter(e =>
+                !e.form && !e.closest('form, fieldset, dialog, section') &&
+                /__ACCOUNT_WORDS__/i.test(label(e)))].some(e => !accountContainer(e, true))
     };
 }"""
-)
+).replace("__ACCOUNT_WORDS__", rf"^(?:{_SIGNIN}|{_SIGNUP})$")
 _LABEL_JS = "e => {" + _DOM + "return label(e); }"
 _CODE_JS = "e => {" + _DOM + "return code(e); }"
 _ACCOUNT_CONTROL_JS = "(e, allowCode) => {" + _DOM + "return accountContainer(e, allowCode); }"
 _GOOGLE_CONTROL_JS = "e => {" + _DOM + "return googleControl(e); }"
+_GOOGLE_ORIGIN_JS = (
+    'e => e.isConnected && e.ownerDocument.location.origin === "https://accounts.google.com"'
+)
+_SWITCH_STATE_JS = r"""e => {
+    return {label: (e.getAttribute('aria-label') || e.innerText || e.value || '').trim(),
+        submits: !!e.form && e.type === 'submit'};
+}"""
+_APPLICATION_SEEN_JS = "nodes => {" + _DOM + r"""
+    if (query(document, 'input[type=file], textarea, [contenteditable]').length) return true;
+    if (query(document, 'input[type=radio], input[type=checkbox], [role=radio], ' +
+        '[role=checkbox], [role=switch]').some(e => e.form || e.closest('form'))) return true;
+    const search = e => e.type === 'search' || e.getAttribute('role') === 'searchbox' ||
+        e.closest('[role=search], form[action*="search" i]') ||
+        /\b(search|rechercher?|recherche par|suche|suchen|keywords?|mot-clé|mots-clés)\b/i
+            .test(label(e));
+    return nodes.some(node => {
+        const e = window.__jobpilotHarness?.nodes.get(node);
+        return e?.isConnected && !search(e);
+    });
+}"""
 
 
 class AccountError(RuntimeError):
@@ -324,28 +394,42 @@ async def account_page(
     )
 
 
-async def _google_button(page: Page) -> Locator | None:
+async def _google_button(page: Page) -> ElementHandle | None:
+    origin = await page.evaluate("location.origin")
     for frame in await _writable_frames(page):
         for control in await frame.locator(
             "button, a, input[type=submit], input[type=button], [role=button], [role=link]"
-        ).all():
-            if (
-                await control.is_visible()
-                and await control.evaluate(_GOOGLE_CONTROL_JS)
-                and await control.evaluate(_ACCOUNT_CONTROL_JS, False)
+        ).element_handles():
+            if await control.evaluate(
+                "(e, origin) => {" + _DOM +
+                "return e.isConnected && e.ownerDocument.defaultView.origin === origin && "
+                "visible(e) && googleControl(e) && accountContainer(e); }", origin,
             ):
                 return control
+            await control.dispose()
     for frame in page.frames:
         if frame.url.startswith("https://accounts.google.com/gsi/") and await _visible_frame(frame):
-            for control in await frame.get_by_role("button").all():
-                if await control.is_visible():
+            for control in await frame.get_by_role("button").element_handles():
+                if await control.is_visible() and await control.evaluate(_GOOGLE_ORIGIN_JS):
                     return control
+                await control.dispose()
     return None
+
+
+def _basic_google_scope(text: str) -> bool:
+    """A listed permission must describe only the four identity attributes."""
+    if not _GOOGLE_IDENTITY_SCOPE.search(text):
+        return False
+    remainder = _GOOGLE_IDENTITY_SCOPE.sub("", text)
+    remainder = _GOOGLE_SCOPE_VERB.sub("", remainder)
+    return not _GOOGLE_SCOPE_CONNECTORS.sub("", remainder)
 
 
 async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) -> bool:
     """False means human input is required; never enter text on Google's pages."""
     text = ""
+    scope_checkboxes = False
+    scope_rows: list[str] = []
     for frame in page.frames:
         if await frame.locator(
             'input[type=password], input[autocomplete~="one-time-code" i]'
@@ -353,7 +437,13 @@ async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) ->
             return False
         if await frame.locator("iframe[src*=captcha], [class*=captcha], [id*=captcha]").count():
             return False
-        text += await frame.locator("body").inner_text(timeout=1000)
+        text += "\n" + await frame.locator("body").inner_text(timeout=1000)
+        scope_checkboxes |= bool(
+            await frame.locator('input[type=checkbox], [role=checkbox]').count()
+        )
+        scope_rows.extend(
+            await frame.locator('li, [role=listitem], [data-scope]').all_inner_texts()
+        )
     if _GOOGLE_CHALLENGE.search(text):
         return False
     identity = (page.url, text)
@@ -367,25 +457,53 @@ async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) ->
         )
     )
     if not chooser:
-        for control in await page.get_by_role("button", name=_GOOGLE_CONSENT_WORDS).all():
-            if await control.is_visible():
-                await control.click(timeout=1500)
-                clicked.add(identity)
-                return True
+        # An account's Gmail address is identity, not a request for mailbox access.
+        consent = _EMAIL_IN_TEXT.sub("", text)
+        for line in consent.splitlines():
+            if match := _GOOGLE_SCOPE_VERB.search(line):
+                scope_rows.append(line[match.start():])
+        if (
+            scope_checkboxes or _GOOGLE_EXTRA_SCOPES.search(consent)
+            or any(not _basic_google_scope(row) for row in scope_rows)
+        ):
+            return False
+        for control in await page.get_by_role(
+            "button", name=_GOOGLE_CONSENT_WORDS
+        ).element_handles():
+            try:
+                if await control.is_visible():
+                    # The page can navigate between any two awaits. Click only this
+                    # checked node; a locator could resolve to the site's Continue.
+                    if not await control.evaluate(_GOOGLE_ORIGIN_JS):
+                        return False
+                    await control.click(timeout=1500)
+                    clicked.add(identity)
+                    return True
+            finally:
+                await control.dispose()
         return True
     controls = await page.locator(
         "button, a, [role=button], [role=link], [data-identifier], [data-email], li"
-    ).all()
+    ).element_handles()
     # Innermost controls first; a chooser container with multiple emails is never eligible.
-    for control in reversed(controls):
-        if not await control.is_visible():
-            continue
-        emails = _EMAIL_IN_TEXT.findall(await control.inner_text())
-        if len(emails) == 1 and emails[0].casefold() == email.strip().casefold():
-            await control.click(timeout=1500)
-            clicked.add(identity)
-            return True
-    return False
+    try:
+        for control in reversed(controls):
+            if not await control.is_visible():
+                continue
+            row = await control.inner_text()
+            if _GOOGLE_OTHER_ACCOUNT.search(row):
+                continue
+            emails = _EMAIL_IN_TEXT.findall(row)
+            if len(emails) == 1 and emails[0].casefold() == email.strip().casefold():
+                if not await control.evaluate(_GOOGLE_ORIGIN_JS):
+                    return False
+                await control.click(timeout=1500)
+                clicked.add(identity)
+                return True
+        return False
+    finally:
+        for control in controls:
+            await control.dispose()
 
 
 async def google_sign_in(page: Page, email: str) -> bool:
@@ -412,7 +530,10 @@ async def google_sign_in(page: Page, email: str) -> bool:
             button = await _google_button(page)
             if button is None:
                 return False
-            await button.click(timeout=1500)
+            try:
+                await button.click(timeout=1500)
+            finally:
+                await button.dispose()
             while not page.is_closed():
                 if auth is None:
                     candidates = [page] + [
@@ -481,19 +602,26 @@ async def tick_required_terms(page: Page) -> list[str]:
     if not account_allowed(page.url):
         return chosen
     try:
+        origin = await page.evaluate("location.origin")
         for frame in await _writable_frames(page):
             for box in await frame.locator(
                 "input[type=checkbox]:visible, [role=checkbox]:visible"
-            ).all():
-                label = await box.evaluate(_LABEL_JS)
-                if (
-                    label
-                    and _TERMS.search(label)
-                    and not OPT_IN_WORDS.search(label)
-                    and not await box.is_checked()
-                ):
-                    await box.check(timeout=1500)
-                    chosen.append(label)
+            ).element_handles():
+                try:
+                    label = await box.evaluate(_LABEL_JS)
+                    if label and _TERMS.search(label) and not OPT_IN_WORDS.search(label):
+                        if await box.evaluate(
+                            "(e, [expected, origin]) => {" + _DOM +
+                            "return e.isConnected && "
+                            "e.ownerDocument.defaultView.origin === origin && visible(e) && "
+                            "e.matches('input[type=checkbox], [role=checkbox]') && "
+                            "!e.checked && e.getAttribute('aria-checked') !== 'true' && "
+                            "label(e) === expected && accountContainer(e); }", [label, origin],
+                        ):
+                            await box.check(timeout=1500)
+                            chosen.append(label)
+                finally:
+                    await box.dispose()
     except PlaywrightError:
         raise AccountError("account terms could not be checked") from None
     return chosen
@@ -558,6 +686,7 @@ class AccountFlow:
     verified: bool = field(default=False, init=False)
     failed: bool = field(default=False, init=False)
     application_started: bool = field(default=False, init=False)
+    application_seen: bool = field(default=False, init=False)
     google_attempted: bool = field(default=False, init=False)
     google_failed: bool = field(default=False, init=False)
     before_text: str = field(default="", init=False, repr=False)
@@ -570,10 +699,13 @@ class AccountFlow:
                 return value
             # GET forms may encode even unreserved characters and may use legacy charsets.
             # Decode only when a secret is present, preserving unrelated outward data.
-            for encoding in ("utf-8", "latin-1"):
-                decoded = unquote_plus(value, encoding=encoding)
-                if self.password in decoded:
-                    value = decoded.replace(self.password, "[redacted]")
+            for encoding in ("utf-8", "latin-1", "cp1252"):
+                # Chromium uses decimal HTML entities for characters a legacy
+                # form charset cannot represent, then percent-encodes the entities.
+                for decoded in (value, unquote_plus(value, encoding=encoding)):
+                    for candidate in (decoded, html.unescape(decoded)):
+                        if self.password in candidate:
+                            value = candidate.replace(self.password, "[redacted]")
             for encoded in {
                 quote(self.password),
                 quote(self.password, safe=""),
@@ -614,7 +746,17 @@ class AccountFlow:
             raise AccountHandoff("Daily limit of 10 new accounts reached")
 
     async def _switch_form(self, page: Page, acct: AccountPage) -> bool:
-        controls: list[tuple[Locator, str, bool]] = []
+        controls: list[tuple[ElementHandle, str, bool]] = []
+        try:
+            return await self._switch_form_handles(page, acct, controls)
+        finally:
+            for control, _, _ in controls:
+                await control.dispose()
+
+    async def _switch_form_handles(
+        self, page: Page, acct: AccountPage, controls: list[tuple[ElementHandle, str, bool]]
+    ) -> bool:
+        origin = await page.evaluate("location.origin")
         new_password = False
         for frame in await _writable_frames(page):
             new_password |= bool(
@@ -622,13 +764,10 @@ class AccountFlow:
             )
             for control in await frame.locator(
                 "a:visible, button:visible, input[type=submit]:visible, [role=link]:visible"
-            ).all():
+            ).element_handles():
                 # Accessible name first, then visible text; avoid duplicate combined names.
-                label = await control.get_attribute("aria-label") or await control.inner_text()
-                if not label:
-                    label = await control.get_attribute("value") or ""
-                submits = await control.evaluate("e => !!e.form && e.type === 'submit'")
-                controls.append((control, label.strip(), submits))
+                state = await control.evaluate(_SWITCH_STATE_JS)
+                controls.append((control, state["label"], state["submits"]))
         signup = (
             new_password
             or acct.password_inputs > 1
@@ -638,13 +777,19 @@ class AccountFlow:
         if signup == (self.mode == "signup"):
             return False
         for control, label, submits in controls:
-            if (
-                not submits and desired.fullmatch(label)
-                and await control.evaluate(_ACCOUNT_CONTROL_JS, acct.code_only)
-            ):
+            if not submits and desired.fullmatch(label):
                 identity = (page.url, self.mode, label)
                 if identity in self.form_switches:
                     raise AccountHandoff("Account mode could not be switched")
+                if not await control.evaluate(
+                    "(e, [expected, allowCode, origin]) => {" + _DOM +
+                    f"const state = ({_SWITCH_STATE_JS})(e); "
+                    "return e.isConnected && e.ownerDocument.defaultView.origin === origin && "
+                    "visible(e) && !state.submits && "
+                    "state.label === expected && accountContainer(e, allowCode); }",
+                    [label, acct.code_only, origin],
+                ):
+                    continue
                 self.form_switches.add(identity)
                 await control.click(timeout=1500)
                 await page.wait_for_load_state("domcontentloaded")
@@ -662,13 +807,30 @@ class AccountFlow:
     async def detect(self, page: Page) -> AccountPage | None:
         return (
             None
-            if self.application_started
+            if self.application_started or self.application_seen
             else await _account_page(
                 page,
                 after_signup=self.signup_since is not None,
                 google=self.google_failed or await _google_session(page, self.email),
             )
         )
+
+    async def observe_application(self, snap: dict) -> None:
+        """Latch observed application fields, including restored values and hidden uploads.
+
+        Called only after observing a page that did not qualify as an account page.
+        Keep this separate from application_started, which records actual writes.
+        """
+        if self.application_seen:
+            return
+        for index, frame in enumerate(snap["_frame_refs"]):
+            nodes = [
+                action["node"] for action in snap["actions"]
+                if action["kind"] in {"fill", "select"} and action["frame"] == index
+            ]
+            if await frame.evaluate(_APPLICATION_SEEN_JS, nodes):
+                self.application_seen = True
+                return
 
     async def prepare(self, page: Page) -> tuple[AccountPage | None, list[str], bool]:
         """Return account detection, chosen terms, and whether to observe a new page."""
@@ -735,7 +897,7 @@ class AccountFlow:
             if acct.has_password and site_host(page.url) != site_host(self.login_url):
                 await page.goto(self.login_url, wait_until="domcontentloaded")
             acct = (
-                await account_page(page)
+                await self.detect(page)
                 if site_host(page.url) == site_host(self.login_url)
                 else None
             )

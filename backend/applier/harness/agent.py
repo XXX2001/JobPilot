@@ -545,6 +545,8 @@ class _Run:
                     previous = None
                     continue
                 snap = await observe(self.page)
+                if self.account is None:
+                    await self.account_flow.observe_application(snap)
                 # A site's job search box is never part of the application (live: FANUC's
                 # "Rechercher par lieu" got the owner's city).
                 self.excluded.update(
@@ -661,7 +663,8 @@ class _Run:
                     self.account = (
                         await self.account_flow.detect(self.page)
                         if self.account and account_allowed(self.page.url)
-                        and not self.account_flow.application_started and not self.result.uploads
+                        and not self.account_flow.application_started
+                        and not self.account_flow.application_seen and not self.result.uploads
                         else None
                     )
                     if self.account and not await account_control(

@@ -11,8 +11,8 @@ from urllib.parse import quote, quote_plus
 
 import pytest
 import pytest_asyncio
+from playwright.async_api import ElementHandle, FileChooser, Frame, Locator, async_playwright
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import FileChooser, Frame, Locator, async_playwright
 
 from backend.applier.harness import account_flow, accounts, agent, mailbox
 from backend.applier.harness.account_flow import AccountFlow, account_page, fill_passwords
@@ -991,7 +991,7 @@ async def test_unlabelled_checkbox_is_never_checked_by_code_or_model(page, servi
 
 async def test_checkbox_playwright_error_is_wrapped_without_secrets(page, monkeypatch):
     await page.goto(URL + "/signup")
-    monkeypatch.setattr(Locator, "check", AsyncMock(side_effect=PlaywrightError(SECRET)))
+    monkeypatch.setattr(ElementHandle, "check", AsyncMock(side_effect=PlaywrightError(SECRET)))
     with pytest.raises(account_flow.AccountError, match="terms could not be checked") as exc:
         await account_flow.tick_required_terms(page)
     assert SECRET not in "".join(traceback.format_exception(exc.value))
@@ -1921,3 +1921,360 @@ async def test_upload_latches_before_dispatch_and_spa_swap(
     assert acct.application_started and await acct.detect(page) is None
     assert result.clicked == int(chooser) and not result.clicked_submit
     assert await page.locator("input[type=password]").input_value() == ""
+
+
+# critic-acc5: restored drafts must close the account exception before any write.
+@pytest.mark.parametrize("destination", ["password", "google"])
+async def test_critic5_prefilled_draft_then_account_shape_never_submits(
+    page, services, destination
+):
+    await google_session(page)
+    await page.goto(URL + "/signin")
+    await page.set_content("""<div id=app><h1>Apply: contact details</h1>
+        <label>First Name<input name=first value=Ada></label>
+        <label>Email<input type=email value=ada@example.com></label>
+        <label>Phone<input type=tel value=0123456789></label>
+        <fieldset><legend>Authorized to work?</legend>
+        <label><input type=radio name=auth value=y checked>Yes</label>
+        <label><input type=radio name=auth value=n>No</label></fieldset>
+        <button type=button id=next>Next</button></div>""")
+    button = "Create account" if destination == "password" else "Continue with Google"
+    target = (
+        '<h1>Review</h1><p>Create a password to submit your application</p>'
+        '<form onsubmit="event.preventDefault(); window.submitted=true">'
+        '<label>Password<input type=password></label>'
+        f'<button onclick="window.submitted=true">{button}</button></form>'
+    )
+    await page.locator("#next").evaluate(
+        "(e, html) => e.onclick=() => {document.querySelector('#app').innerHTML=html}", target
+    )
+    acct = flow(services)
+    result = await run(page, ScriptedClient([
+        step("TYPE_TEXT", "First Name"), step("CLICK", "Next"),
+        step("CLICK", button), step("DONE"), step("DONE"),
+    ]), account_flow=acct)
+    assert acct.application_seen and not acct.application_started
+    assert await acct.detect(page) is None
+    assert not acct.google_attempted and not result.clicked_submit
+    assert result.clicked == 1 and not await page.evaluate("!!window.submitted")
+    services[0].find_account.assert_not_awaited()
+
+
+@pytest.mark.parametrize("field", [
+    '<label>Email<input type=email value=ada@example.com></label>',
+    '<label>Country<select><option selected>France</option>'
+    '<option>Germany</option></select></label>',
+    '<form><input type=radio checked></form>',
+    '<form><input type=checkbox checked></form>',
+    '<form><button role=switch aria-checked=true>Yes</button></form>',
+    '<input type=file hidden>', '<textarea hidden>Draft</textarea>',
+    '<div contenteditable hidden>Draft</div>',
+])
+async def test_application_observation_latches_without_writes(page, services, field):
+    await page.goto(URL + "/application")
+    await page.set_content(field)
+    acct = flow(services)
+    await run(page, ScriptedClient([step("DONE"), step("DONE")]), account_flow=acct)
+    assert acct.application_seen and not acct.application_started
+    await page.set_content('<input type=password><button>Create account</button>')
+    assert await acct.detect(page) is None
+
+
+@pytest.mark.parametrize("field", [
+    '<label>Search jobs<input type=search></label>',
+    '<form role=search><label>City<input></label></form>',
+    '<form action="/search"><select><option>A</option><option>B</option></select></form>',
+    '<button role=switch aria-checked=true>Dark mode</button>',
+])
+async def test_site_search_and_nonform_toggles_do_not_close_account_path(page, services, field):
+    await page.goto(URL + "/application")
+    await page.set_content(field)
+    acct = flow(services)
+    await run(page, ScriptedClient([step("DONE"), step("DONE")]), account_flow=acct)
+    assert not acct.application_seen and not acct.application_started
+    await page.set_content('<input type=password><button>Create account</button>')
+    assert await acct.detect(page) is not None
+
+
+@pytest.mark.parametrize("phrase", [
+    "Créez votre compte pour valider votre candidature",
+    "Pour finaliser votre dossier, créez votre compte",
+    "Create an account to complete your profile and apply",
+    "Create your account to complete your application",
+    "Konto erstellen und fortfahren, um Ihre Bewerbung abzuschicken",
+    "Confirm your application by creating an account",
+    "Transmettre ma candidature", "Submit your application",
+    "Completer votre candidature", "Compléter votre candidature",
+    "Bewerbung einreichen", "Bewerbung absenden", "Postuler à cette candidature",
+    "Apply with your profil", "Apply with your profile",
+])
+async def test_critic5_application_text_gaps(page, phrase):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        f'<form><p>{phrase}</p><label>Email<input type=email></label>'
+        '<label>Password<input type=password></label><button>Create account</button></form>'
+    )
+    assert await account_page(page) is None
+
+
+@pytest.mark.parametrize("phrase", [
+    "Créer votre compte", "Create your account to get started", "Konto erstellen",
+    "Complete your profile",  # Profile alone is not an application noun.
+])
+async def test_plain_signup_text_still_allows_account_page(page, phrase):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        f'<form><p>{phrase}</p><input type=password><button>Create account</button></form>'
+    )
+    assert await account_page(page) is not None
+
+
+@pytest.mark.parametrize("container", ["div", "main", "body"])
+async def test_critic5_formless_application_text_never_submits(page, services, container):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        f'<{container}><h1>Last step</h1><p>Create a password to submit your application</p>'
+        '<label>Password<input type=password></label>'
+        f'<button onclick="window.submitted=true">Create account</button></{container}>'
+    )
+    # At body scope unrelated paragraphs are intentionally ignored; headings count.
+    if container == "body":
+        await page.locator("h1").evaluate("e => e.textContent='Submit your application'")
+    assert await account_page(page) is None
+    result = await run(page, ScriptedClient([
+        step("CLICK", "Create account"), step("DONE"), step("DONE"),
+    ]), account_flow=flow(services))
+    assert result.clicked == 0 and not await page.evaluate("!!window.submitted")
+
+
+async def test_formless_body_text_uses_field_children_and_all_headings(page):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        '<aside><p>Submit your application</p></aside>'
+        '<div><label>Password<input type=password></label></div>'
+        '<div><button>Create account</button></div>'
+    )
+    assert await account_page(page) is not None
+    await page.locator("aside").evaluate("e => e.innerHTML='<h3>Submit your application</h3>'")
+    assert await account_page(page) is None
+
+
+@pytest.mark.parametrize("password,encoded", [
+    ("pass€word1", "pass%80word1"), ("passπword1", "pass%26%23960%3Bword1"),
+    ("pass–word1", "pass%96word1"), ("passπword1", "pass&#960;word1"),
+    ("pass€πword1", "pass%80%26%23960%3bword1"),
+])
+async def test_critic5_clean_legacy_charsets(password, encoded):
+    acct = AccountFlow(password=password, email=PROFILE[1], company="Example")
+    assert acct.clean(f"https://x.example/signin?pwd={encoded}") == (
+        "https://x.example/signin?pwd=[redacted]"
+    )
+
+
+@pytest.mark.parametrize("password,encoded", [
+    ("pass€word1", "pass%80word1"), ("passπword1", "pass%26%23960%3Bword1"),
+    ("pass–word1", "pass%96word1"),
+])
+async def test_critic5_chromium_legacy_get_form_redacts_password(page, services, password, encoded):
+    async def legacy(route):
+        await route.fulfill(
+            body=(
+                '<meta charset="iso-8859-1"><form action="/legacy"><input name=email>'
+                '<input type=password name=pwd><button>Sign in</button></form>'
+            ).encode("latin-1"),
+            content_type="text/html; charset=iso-8859-1",
+        )
+
+    await page.context.route("**/legacy**", legacy)
+    await page.goto(URL + "/legacy")
+    await page.locator("input[type=password]").fill(password)
+    await page.locator("button").click()
+    await page.wait_for_load_state()
+    assert encoded in page.url
+    assert flow(services, password).clean(page.url) == URL + "/legacy?email=&pwd=[redacted]"
+
+
+@pytest.mark.parametrize("delay", [0, 7, 14])
+@pytest.mark.parametrize("popup", [False, True])
+async def test_critic5_google_redirect_race_never_clicks_site_continue(
+    page, monkeypatch, delay, popup
+):
+    await google_session(page)
+    monkeypatch.setattr(account_flow, "_GOOGLE_START_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.8)
+    opener = "window.open" if popup else "location.assign"
+    await page.context.route("**/*", lambda route: route.fulfill(
+        body=(
+            '<p>One moment</p><iframe src="https://accounts.google.com/f1"></iframe>'
+            '<iframe src="https://accounts.google.com/f2"></iframe>'
+            f'<script>setTimeout(() => location.href="{URL}/app", {delay})</script>'
+            if route.request.url.startswith("https://accounts.google.com/o") else
+            '<p>frame</p>' if route.request.url.startswith("https://accounts.google.com/") else
+            '<h1>Your application</h1><p>Everything is ready.</p>'
+            '<button onclick="window.submitted=true">Continue</button>'
+            if route.request.url.endswith("/app") else
+            f'<button onclick="{opener}(\'https://accounts.google.com/o\')">'
+            'Continue with Google</button>'
+        ), content_type="text/html",
+    ))
+    await page.goto(URL + "/signin")
+    await account_flow.google_sign_in(page, PROFILE[1])
+    for current in page.context.pages:
+        assert not await current.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("chooser", [False, True])
+async def test_google_step_rejects_handles_from_site_origin(page, chooser):
+    await page.goto(URL + "/application")
+    await page.set_content(
+        ('<h1>Choose an account</h1>' if chooser else '')
+        + '<button onclick="window.submitted=true">'
+        + (PROFILE[1] if chooser else "Continue") + '</button>'
+    )
+    assert not await account_flow._google_step(page, PROFILE[1], set())
+    assert not await page.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("scope", [
+    "Drive", "Contacts", "Calendar", "Gmail", "mail", "Google Drive", "contacts",
+    "agenda", "calendrier", "fichiers", "files", "Kalender", "Kontakte",
+    '<label><input type=checkbox checked>Name</label>',
+    '<div role=checkbox aria-checked=true>Email address</div>',
+])
+@pytest.mark.parametrize("popup", [False, True])
+async def test_google_consent_extra_scopes_hand_off(page, scope, popup):
+    await google_session(page)
+    await page.context.route("https://accounts.google.com/consent**", lambda route: route.fulfill(
+        body='<h1>Sign in to Example</h1><p>' + scope + '</p>'
+        + '<button onclick="window.approved=true">Allow</button>', content_type="text/html",
+    ))
+    await page.goto(URL + "/google?screen=consent&mode=" + ("popup" if popup else "same"))
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    assert not await page.context.pages[-1].evaluate("!!window.approved")
+
+
+async def test_google_basic_identity_consent_can_be_approved(page):
+    await google_session(page)
+    await page.context.route("https://accounts.google.com/consent**", lambda route: route.fulfill(
+        body='<p>Name, email address, language preference, profile picture</p>'
+        + (FIXTURES / "google_consent.html").read_text(), content_type="text/html",
+    ))
+    await page.goto(URL + "/google?screen=consent")
+    assert await account_flow.google_sign_in(page, PROFILE[1])
+
+
+@pytest.mark.parametrize("text", [
+    "Use another account ada@example.com", "Utiliser un autre compte ada@example.com",
+    "Anderes Konto ada@example.com", "Not ada@example.com", "Pas ada@example.com",
+])
+async def test_google_chooser_skips_other_account_rows(page, text):
+    await page.goto("https://accounts.google.com/chooser")
+    await page.set_content(
+        f'<h1>Choose an account</h1><button onclick="window.wrong=true">{text}</button>'
+    )
+    assert not await account_flow._google_step(page, PROFILE[1], set())
+    assert not await page.evaluate("!!window.wrong")
+
+
+@pytest.mark.parametrize("chooser", [False, True])
+async def test_google_navigation_after_origin_check_cannot_retarget_click(
+    page, monkeypatch, chooser
+):
+    await page.goto("https://accounts.google.com/chooser" if chooser else
+                    "https://accounts.google.com/consent")
+    await page.set_content(
+        ('<h1>Choose an account</h1>' if chooser else '')
+        + '<button>' + (PROFILE[1] if chooser else 'Continue') + '</button>'
+    )
+    checked = False
+    evaluate = ElementHandle.evaluate
+
+    async def redirect_after_check(handle, expression, arg=None):
+        nonlocal checked
+        result = await evaluate(handle, expression, arg)
+        if expression == account_flow._GOOGLE_ORIGIN_JS and result and not checked:
+            checked = True
+            await page.goto(URL + "/application")
+            await page.set_content(
+                '<button onclick="window.submitted=true">'
+                + (PROFILE[1] if chooser else 'Continue') + '</button>'
+            )
+        return result
+
+    monkeypatch.setattr(ElementHandle, "evaluate", redirect_after_check)
+    with pytest.raises(PlaywrightError):
+        await account_flow._google_step(page, PROFILE[1], set())
+    assert checked and not await page.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("operation", ["google_button", "switch_form", "terms"])
+async def test_account_controls_never_retarget_after_handle_validation(
+    page, services, monkeypatch, operation
+):
+    await page.goto(URL + "/signin")
+    await page.set_content({
+        "google_button": '<button id=target>Continue with Google</button>',
+        "switch_form": '<input type=password><button type=button id=target>Create account</button>',
+        "terms": '<label><input type=checkbox id=target>I agree to the terms</label>',
+    }[operation])
+    marker = {
+        "google_button": "googleControl(e) && accountContainer(e)",
+        "switch_form": "state.label === expected",
+        "terms": "label(e) === expected",
+    }[operation]
+    evaluate = ElementHandle.evaluate
+    replaced = False
+
+    async def replace_after_check(handle, expression, arg=None):
+        nonlocal replaced
+        result = await evaluate(handle, expression, arg)
+        if marker in expression and result and not replaced:
+            replaced = True
+            await evaluate(handle, """e => {
+                const replacement=e.cloneNode(true);
+                replacement.onclick=() => {window.uncheckedClick=true};
+                e.replaceWith(replacement);
+            }""")
+        return result
+
+    monkeypatch.setattr(ElementHandle, "evaluate", replace_after_check)
+    with pytest.raises((PlaywrightError, account_flow.AccountError)):
+        if operation == "google_button":
+            button = await account_flow._google_button(page)
+            assert button is not None
+            try:
+                await button.click(timeout=1500)
+            finally:
+                await button.dispose()
+        elif operation == "switch_form":
+            acct = await account_page(page)
+            assert acct is not None
+            current = flow(services)
+            current.mode = "signup"
+            await current._switch_form(page, acct)
+        else:
+            await account_flow.tick_required_terms(page)
+    assert replaced and not await page.evaluate("!!window.uncheckedClick")
+
+
+@pytest.mark.parametrize("scope", [
+    '<ul><li>Date of birth</li></ul>', '<p>Read your payment history</p>',
+    '<div data-scope="photos">Photos</div>', '<p>See your name and home address</p>',
+])
+async def test_google_consent_unknown_permissions_are_not_identity(page, scope):
+    await page.goto("https://accounts.google.com/consent")
+    await page.set_content(scope + '<button onclick="window.approved=true">Continue</button>')
+    assert not await account_flow._google_step(page, PROFILE[1], set())
+    assert not await page.evaluate("!!window.approved")
+
+
+async def test_google_identity_scope_list_and_gmail_address_are_allowed(page):
+    await page.goto("https://accounts.google.com/consent")
+    await page.set_content(
+        '<h1>Sign in to Example</h1><p>ada@gmail.com</p><ul>'
+        '<li>See your name and email address</li>'
+        '<li>Language preference</li><li>Profile picture</li></ul>'
+        '<button onclick="window.approved=true">Continue</button>'
+    )
+    assert await account_flow._google_step(page, "ada@gmail.com", set())
+    assert await page.evaluate("!!window.approved")

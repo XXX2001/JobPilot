@@ -1,0 +1,9 @@
+{
+  "name": "jobpilot-container-cli",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.325",
+    "@openai/codex": "0.166.0"
+  }
+}

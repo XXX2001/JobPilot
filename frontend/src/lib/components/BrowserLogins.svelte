@@ -1,10 +1,18 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { apiFetch } from '$lib/api';
 
 	// The dedicated JobPilot Chrome: opened here, logged into by hand, once per site.
-	let browser = $state<{ running: boolean; logged_in: Record<string, boolean> } | null>(null);
-	let busy = $state(false);
+	let browser = $state<{
+		running: boolean;
+		logged_in: Record<string, boolean>;
+		view_url?: string | null;
+		view_password_hint?: string;
+	} | null>(null);
+	let busy = $state(true);
 	let error = $state('');
+
+	onMount(() => { void call('GET'); });
 
 	async function call(method: 'GET' | 'POST') {
 		busy = true;
@@ -29,13 +37,23 @@
 		on job sites and to read their verification emails.
 	</p>
 	<div class="flex items-center gap-2">
-		<button
-			onclick={() => call('POST')}
-			disabled={busy}
-			class="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-		>
-			Open the JobPilot browser
-		</button>
+		{#if browser?.view_url}
+			<a
+				href={browser.view_url}
+				target="_blank"
+				rel="noopener"
+				onclick={() => { void call('POST'); }}
+				class="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+			>Open the Chrome view</a>
+		{:else}
+			<button
+				onclick={() => call('POST')}
+				disabled={busy}
+				class="text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+			>
+				Open the JobPilot browser
+			</button>
+		{/if}
 		<button
 			onclick={() => call('GET')}
 			disabled={busy}
@@ -44,6 +62,12 @@
 			Check logins
 		</button>
 	</div>
+	{#if browser?.view_url}
+		<p class="text-xs text-muted-foreground">
+			The Chrome view password is in
+			<code>{browser.view_password_hint ?? 'data/chrome-view.password'}</code> on the Docker host.
+		</p>
+	{/if}
 	{#if error}
 		<p class="text-xs text-red-400">{error}</p>
 	{/if}

@@ -18,6 +18,7 @@ from backend.browser.chrome import (
     running_endpoint,
     show_app,
 )
+from backend.config import settings
 
 router = APIRouter(prefix="/api/browser", tags=["browser"], redirect_slashes=False)
 
@@ -32,6 +33,15 @@ SESSION_COOKIES = {
     "linkedin": ("https://www.linkedin.com", "li_at"),
     "google": ("https://mail.google.com", "SID"),
 }
+
+
+def _view_details() -> dict[str, str]:
+    if settings.JOBPILOT_CHROME_VIEW_URL:
+        return {
+            "view_url": settings.JOBPILOT_CHROME_VIEW_URL,
+            "view_password_hint": "data/chrome-view.password",
+        }
+    return {}
 
 
 def _open_tab(port: int, url: str) -> None:
@@ -64,19 +74,28 @@ async def browser_status():
     """Whether the JobPilot Chrome is running and which sites hold a session in it."""
     endpoint = await asyncio.to_thread(running_endpoint)
     if endpoint is None:
-        return {"running": False, "logged_in": {}}
-    return {"running": True, "logged_in": await _logged_in(endpoint["port"])}
+        return {"running": False, "logged_in": {}, **_view_details()}
+    return {"running": True, "logged_in": await _logged_in(endpoint["port"]), **_view_details()}
 
 
 @router.post("/open")
 async def open_browser():
     """Start the JobPilot Chrome (if needed) and show the login pages not yet signed in."""
-    try:
-        endpoint = await asyncio.to_thread(ensure_chrome_running, chrome_dir())
-    except (RuntimeError, TimeoutError, OSError) as exc:
-        raise HTTPException(status_code=503, detail=f"Chrome did not start: {exc}") from exc
+    if settings.JOBPILOT_CHROME_VIEW_URL:
+        # Only the container supervisor owns Chrome's lifecycle and sandbox flags.
+        endpoint = await asyncio.to_thread(running_endpoint)
+        if endpoint is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Container Chrome is unavailable. See container logs and docker/README.md.",
+            )
+    else:
+        try:
+            endpoint = await asyncio.to_thread(ensure_chrome_running, chrome_dir())
+        except (RuntimeError, TimeoutError, OSError) as exc:
+            raise HTTPException(status_code=503, detail=f"Chrome did not start: {exc}") from exc
     logged_in = await _logged_in(endpoint["port"])
     for site, url in LOGIN_PAGES.items():
         if not logged_in.get(site):
             await asyncio.to_thread(_open_tab, endpoint["port"], url)
-    return {"running": True, "logged_in": logged_in}
+    return {"running": True, "logged_in": logged_in, **_view_details()}

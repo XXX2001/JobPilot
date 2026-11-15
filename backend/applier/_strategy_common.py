@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 # import surface for the shared helpers; this IS the captcha_handler function
 # (the old per-strategy ``_site_key`` copies were removed in T4a).
 from backend.applier.captcha_handler import site_profile_key
-from backend.browser.chrome import running_endpoint
+from backend.browser.chrome import CONTAINER_CHROME_UNAVAILABLE, running_endpoint
 from backend.config import settings
 
 if TYPE_CHECKING:
@@ -62,16 +62,12 @@ def build_browser(
     if saved_session_path is not None and saved_session_path.exists():
         browser_kwargs["storage_state"] = saved_session_path.resolve().as_posix()
         browser_kwargs["user_data_dir"] = None
-    # Containerized / headless-server launches (e.g. the Docker image) have no
-    # user namespace for Chromium's sandbox and a tiny /dev/shm; without these
-    # flags the browser process dies before its CDP port comes up and the
-    # whole apply run fails at launch. They are harmless on a desktop, so we
-    # set them unconditionally rather than trying to detect the environment.
     if apply_url:
         # W08: page text cannot send the agent elsewhere — navigation is
         # limited to the apply site (and its parent domain for SSO/ATS hops).
         host = (urlparse(apply_url).hostname or "").lower()
-        parent = ".".join(host.split(".")[-2:])  # ponytail: no public-suffix list (co.uk etc. widen to *.co.uk)
+        # ponytail: no public-suffix list (co.uk etc. widen to *.co.uk)
+        parent = ".".join(host.split(".")[-2:])
         browser_kwargs["allowed_domains"] = sorted({host, parent, f"*.{parent}"})
     # W08: a site-delivered download must never become an uploadable file.
     browser_kwargs["accept_downloads"] = False
@@ -86,6 +82,9 @@ def build_browser(
         browser_kwargs["permissions"] = []
         browser_kwargs["keep_alive"] = True
         return _Browser(**browser_kwargs)
+    if settings.JOBPILOT_CHROME_VIEW_URL:
+        raise RuntimeError(CONTAINER_CHROME_UNAVAILABLE)
+    # Preserve the existing native fallback; containers must only attach above.
     browser_kwargs.setdefault("chromium_sandbox", False)
     extra_args = ["--no-sandbox", "--disable-dev-shm-usage"]
     existing_args = list(browser_kwargs.get("args") or [])

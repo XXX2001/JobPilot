@@ -39,9 +39,8 @@ class Settings(BaseSettings):
     jobpilot_log_level: str = "info"
     jobpilot_scraper_headless: bool = True
     # Tier-2 apply uses a *visible* browser by default so the user can watch and
-    # intervene (logins, captchas). Set true for headless/server/Docker runs
-    # that have no display. (build_browser always adds the container-safe
-    # Chromium flags, so headless launches work in Docker either way.)
+    # intervene (logins, captchas). Set true for native servers without a display.
+    # Docker apply runs always attach to the supervised Chrome on its Xvfb display.
     jobpilot_apply_headless: bool = False
     # W02 containment (F02/F03/F05): automatic FINAL submission is opt-in.
     # Until destination verification and correction gating exist, `auto`
@@ -51,6 +50,9 @@ class Settings(BaseSettings):
     # hosts (comma-separated). Needed only behind a local reverse proxy.
     jobpilot_allowed_hosts: str = ""
     jobpilot_data_dir: str = "./data"
+    # Set by Docker Compose: attach only, never launch a replacement browser.
+    # Empty keeps the native Chrome controls and per-site browser fallback.
+    JOBPILOT_CHROME_VIEW_URL: str = ""
     # Comma-separated list of allowed CORS origins. Default = local dev hosts.
     jobpilot_allowed_origins: str = (
         "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000,http://127.0.0.1:8000"

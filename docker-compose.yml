@@ -32,9 +32,22 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
+    # Google's Chrome stable package supports amd64 only (see docker/README.md).
+    platform: linux/amd64
     image: jobpilot:latest
     container_name: jobpilot
     restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=docker/chrome-seccomp.json"
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,mode=1777
+      - /run:rw,nosuid,nodev,uid=1000,gid=1000,mode=0700
+      - /home/jobpilot/.cache:rw,nosuid,nodev,uid=1000,gid=1000,mode=0700
+    stop_grace_period: 30s
     # Chromium (browser-use/Playwright) crashes with the default 64 MB /dev/shm.
     shm_size: "1gb"
     # Make a model running on the Docker host reachable as host.docker.internal
@@ -45,6 +58,7 @@ services:
     # Remote access needs an authenticated front end; do not change to 0.0.0.0.
     ports:
       - "127.0.0.1:8000:8000"
+      - "127.0.0.1:6080:6080"
     env_file:
       - .env
     environment:
@@ -54,9 +68,10 @@ services:
       JOBPILOT_PORT: "8000"
       JOBPILOT_DATA_DIR: /app/data
       JOBPILOT_SCRAPER_HEADLESS: "true"
+      JOBPILOT_CHROME_VIEW_URL: "${JOBPILOT_CHROME_VIEW_URL:-http://127.0.0.1:6080/vnc.html?autoconnect=true}"
       # CORS allow-list. If you front this container with a reverse proxy on a
       # different host, add that origin (comma-separated) here or via .env.
-      JOBPILOT_ALLOWED_ORIGINS: "http://localhost:8000,http://127.0.0.1:8000"
+      JOBPILOT_ALLOWED_ORIGINS: "${JOBPILOT_ALLOWED_ORIGINS:-http://localhost:8000,http://127.0.0.1:8000}"
     volumes:
       # Persist SQLite DB, logs, CVs, browser sessions across container restarts.
       - ./data:/app/data

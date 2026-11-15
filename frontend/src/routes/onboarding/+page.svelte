@@ -59,7 +59,11 @@
 	let passwordSaving = $state(false);
 	let passwordError = $state('');
 	let showPassword = $state(false);
-	let browser = $state<BrowserStatus | null>(null);
+	type BrowserViewStatus = BrowserStatus & {
+		view_url?: string | null;
+		view_password_hint?: string;
+	};
+	let browser = $state<BrowserViewStatus | null>(null);
 	let browserBusy = $state(true);
 	let browserError = $state('');
 	const signIns = [
@@ -194,11 +198,10 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 		browserBusy = true;
 		browserError = '';
 		try {
-			browser = await apiFetch<BrowserStatus>(open ? '/api/browser/open' : '/api/browser/status', {
+			browser = await apiFetch<BrowserViewStatus>(open ? '/api/browser/open' : '/api/browser/status', {
 				method: open ? 'POST' : 'GET'
 			});
 		} catch {
-			browser = null;
 			browserError = 'Could not reach the JobPilot Chrome. Try again.';
 		} finally {
 			browserBusy = false;
@@ -597,12 +600,22 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 							{/if}
 						</div>
 						<div class="flex flex-wrap gap-2">
-							<button
-								onclick={() => refreshBrowser(true)}
-								disabled={browserBusy}
-								class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-1.5 text-xs disabled:opacity-50"
-								>Open sign-in pages</button
-							>
+							{#if browser?.view_url}
+								<a
+									href={browser.view_url}
+									target="_blank"
+									rel="noopener"
+									onclick={() => { void refreshBrowser(true); }}
+									class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-1.5 text-xs"
+								>Open the Chrome view</a>
+							{:else}
+								<button
+									onclick={() => refreshBrowser(true)}
+									disabled={browserBusy}
+									class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-4 py-1.5 text-xs disabled:opacity-50"
+									>Open sign-in pages</button
+								>
+							{/if}
 							<button
 								onclick={() => refreshBrowser()}
 								disabled={browserBusy}
@@ -611,6 +624,12 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 							>
 						</div>
 						{#if browserError}<p role="alert" class="text-xs text-red-400">{browserError}</p>{/if}
+						{#if browser?.view_url}
+							<p class="text-muted-foreground text-xs">
+								The Chrome view password is in
+								<code>{browser.view_password_hint ?? 'data/chrome-view.password'}</code> on the Docker host.
+							</p>
+						{/if}
 					</div>
 
 					<div class="border-border flex items-center justify-between gap-2 border-t pt-4">

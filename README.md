@@ -9,6 +9,115 @@ JobPilot is a single-user web app that discovers job listings from the sources y
 
 ---
 
+## Run it
+
+### Native (default)
+
+On Linux or macOS, complete the [native setup](#native-setup) once, then run from
+the repository:
+
+```bash
+./jobpilot start
+./jobpilot status
+./jobpilot logs    # Ctrl-C stops following the log
+./jobpilot stop
+```
+
+`start` checks for `uv`, Google Chrome, the built frontend, Tectonic and `curl`,
+checks the configured port is free, and warns if no writer is configured. It starts
+the backend on `127.0.0.1:8000` (or `JOBPILOT_PORT`), waits up to 60 seconds for
+`/api/health`, then opens the app in JobPilot's Chrome. Running it again reuses the
+backend and Chrome. A port conflict prints a fix; it does not stop another server.
+
+`status` reports backend health, Chrome and Google/LinkedIn login state. For a
+configured decision model at an IP address or `localhost`, it checks TCP
+reachability only, not authentication or inference; other hostnames are skipped.
+`logs` follows `data/logs/backend.out`. `stop` stops the launcher-owned backend and
+leaves Chrome open; use `./jobpilot stop --chrome` to close it too, keeping its
+profile and logins.
+
+On the welcome page (`/onboarding`), complete **You**, including your name and
+email. Choose **Open sign-in pages** and sign in to **Google and LinkedIn in
+JobPilot's Chrome**, then refresh the login status. This applications browser uses
+its own profile at `data/jobpilot-chrome`; keep Chrome Sync off.
+
+To run `jobpilot` from any directory, create this symlink from the repository
+(ensure `~/.local/bin` exists and is on your `PATH`):
+
+```bash
+ln -s "$PWD/jobpilot" ~/.local/bin/jobpilot
+```
+
+### Docker (optional)
+
+Use **Docker Engine 28.0.0 or newer**, the **Compose v2 plugin**, and an **amd64
+host**. Native arm64 images are unsupported. Older Engines can expose loopback
+ports to neighbours on the same network; see [Docker's port-publishing warning](https://docs.docker.com/engine/network/port-publishing/).
+Prepare `.env` from `.env.example` and a `data/` directory writable by uid/gid 1000
+as described in the [Docker guide](docs/docker.md), then:
+
+```bash
+docker compose up -d
+```
+
+The app is at **http://127.0.0.1:8000**. The Chrome view is at
+**http://127.0.0.1:6080** — open [noVNC](http://127.0.0.1:6080/vnc.html?autoconnect=true)
+or choose **Open the Chrome view** in the app. Its password is in
+**`data/chrome-view.password` on the Docker host**. Complete **You** and sign in to
+Google and LinkedIn inside that Chrome view. Data and browser logins persist in
+`./data` across container restarts.
+
+Choose a writer:
+
+- **API:** set `LLM_API_KEY` in `.env`, plus the provider/model settings for your
+  endpoint. The default image supports API writers.
+- **Your Claude Code / Codex logins:** select `LLM_PROVIDER=claude` or
+  `LLM_PROVIDER=codex` in `.env`. Remove mounts for unused providers and absent
+  optional files from `docker-compose.cli.yml`, then build and start the CLI image:
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.cli.yml build --pull
+  docker compose -f docker-compose.yml -f docker-compose.cli.yml up -d
+  ```
+
+  This mounts only the selected login files (and optional Codex config) read-only
+  and copies them into temporary storage. It **grants the container the powers of
+  those accounts**, including making authenticated model requests and using their
+  quota. Token refreshes in the container do not update the host files and are lost
+  on stop. See [CLI login setup](docs/docker.md#writer-options) before enabling it.
+
+Run `docker compose build --pull` **at least monthly**, and promptly for Chrome
+security fixes. Add `--no-cache` to refresh cached Chrome packages, then run
+`docker compose up -d --force-recreate`. For the CLI image, use both `-f` arguments
+on every build/up command. Chrome does not update inside the read-only image.
+
+Access remote servers **only through an SSH tunnel or private Tailscale access**;
+keep the Compose ports on loopback. For SSH, run locally and keep the session open:
+
+```bash
+ssh -L 8000:127.0.0.1:8000 -L 6080:127.0.0.1:6080 server
+```
+
+Then use the same local app and Chrome URLs. See [remote access](docs/docker.md#remote-access)
+for Tailscale and the settings needed when using a private proxy.
+
+### Security
+
+- The app has no authentication. Native listening and Docker's published ports
+  use **127.0.0.1 only**; do not expose them publicly.
+- Chrome's CDP debug port is **never published** by Compose; CDP (9222) and VNC
+  (5900) stay on container loopback.
+- noVNC requires the password in `data/chrome-view.password` (mode 600). Classic
+  VNC has an **8-character limit** for ASCII passwords (eight bytes); the generated
+  password uses eight random ASCII characters. Keep it behind loopback or a tunnel.
+- Docker runs **non-root** (uid 1000), with `cap_drop: [ALL]`,
+  `no-new-privileges:true`, and a **read-only root filesystem** with writable tmpfs.
+- Chrome's sandbox stays **on** with `docker/chrome-seccomp.json`. Startup
+  **fails closed if the sandbox cannot start**; it never retries with the sandbox
+  disabled. See [Docker security and troubleshooting](docs/docker.md#security).
+
+---
+
 ## What it does
 
 An optional [OpenJev browser harness](docs/browser.md#application-harness) fills applications
@@ -88,62 +197,37 @@ For the deep dive, see [Architecture](docs/architecture.md) and the per-subsyste
 
 ---
 
-## Quickstart
+## Native setup
 
-Two steps for everyone: **pick an AI provider** (the setup script writes your `.env`), then **start the app**. A local/self-hosted model needs no cloud keys at all. Once running, open **http://localhost:8000** and complete the in-app onboarding wizard.
-
-### Path A — Docker (recommended, incl. Windows & macOS via Docker Desktop)
-
-**Requirements:** Docker Engine 20.10+ **and the Docker Compose v2 plugin** (the `docker compose` subcommand, not the legacy `docker-compose` v1 binary). Docker Desktop bundles it. On a Linux server that only has v1, install the plugin once:
-
-```bash
-sudo apt-get install docker-compose-plugin        # Debian/Ubuntu, OR:
-mkdir -p ~/.docker/cli-plugins && curl -fsSL \
-  https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-  -o ~/.docker/cli-plugins/docker-compose && chmod +x ~/.docker/cli-plugins/docker-compose
-docker compose version    # verify
-```
-
-Then:
-
-```bash
-# Linux / macOS
-bash scripts/setup.sh
-docker compose up -d --build
-```
-
-```powershell
-# Windows (PowerShell)
-.\scripts\setup.ps1
-docker compose up -d --build
-```
-
-`setup.{sh,ps1}` asks which provider you want, writes a valid `.env`, and generates a persistent credential-encryption key. Then open **http://localhost:8000**. Your data persists in `./data` across container restarts.
-
-> **Using a model on your own machine** (Ollama, llama.cpp, LM Studio…): from inside Docker it's reachable as `http://host.docker.internal:<port>/v1`, **not** `http://localhost`. The setup script defaults to this, and `docker-compose.yml` wires `host.docker.internal` so it resolves on Linux too.
-
-### Path B — Local dev (uv)
-
-**Prerequisites:** Python 3.12, Node.js 20.
+**Prerequisites:** Linux or macOS with Google Chrome, `uv`, Python 3.12, Node.js
+20+ and `curl`. Run these once from the repository root; keep your existing `.env`
+if you already configured JobPilot.
 
 ```bash
 uv sync                                         # install Python dependencies
 uv run python scripts/download_tectonic.py      # download the Tectonic LaTeX compiler
 cd frontend && npm ci && npm run build && cd ..  # build the web interface
-bash scripts/setup.sh                           # pick a provider, writes .env
-uv run python start.py                          # launch (opens http://localhost:8000)
+cp .env.example .env                            # first install only; configure as below
+./jobpilot start                                # opens http://127.0.0.1:8000
 ```
 
-`start.py` checks that the data directory, frontend build, and Tectonic binary are present, frees the port if needed, then starts the backend on `JOBPILOT_HOST:JOBPILOT_PORT` (default `127.0.0.1:8000`) and opens your browser.
+Keep `JOBPILOT_CHROME_VIEW_URL` empty for native use. The launcher prints the fix
+for a missing prerequisite; it does not install dependencies or build the frontend.
+For Docker, follow [Docker (optional)](#docker-optional).
 
 ### Choosing an AI provider
 
-JobPilot is provider-agnostic — generation and the browser agent each pick a provider in `.env` (the setup script does this for you). On startup the app validates that the chosen provider has the credentials it needs (`Settings.validate_runtime_config`), and refuses to boot with a clear message if not.
+Generation and the browser agent each pick a provider in `.env`. The default
+`LLM_PROVIDER=auto` uses Claude Code on `PATH`, then Codex, then configured API
+credentials. Log into your chosen CLI first, or explicitly select a provider below.
+With `auto` and no writer available, the app starts with a warning and generation is
+unavailable. An explicitly selected writer must have its executable or configuration.
 
 | Provider | What you need | Notes |
 | --- | --- | --- |
 | **Local / self-hosted** (Ollama, llama.cpp, LM Studio, vLLM) | just an `LLM_BASE_URL` | No cloud key. |
-| **OpenAI** (default) | `OPENAI_API_KEY` (or `LLM_API_KEY`) | Covers both roles — generation and the browser agent. Any OpenAI-compatible endpoint works too: set `LLM_BASE_URL` (e.g. DeepSeek, or any other vendor exposing an OpenAI-compatible endpoint). |
+| **Claude Code / Codex** | An installed, logged-in CLI | Set `LLM_PROVIDER=claude` or `codex`; Docker needs the optional CLI image and login mounts. |
+| **OpenAI-compatible API** | `OPENAI_API_KEY` (or `LLM_API_KEY`) | Set `LLM_PROVIDER=openai`. Covers both roles — generation and the browser agent. Any OpenAI-compatible endpoint works too: set `LLM_BASE_URL` (e.g. DeepSeek, or any other vendor exposing an OpenAI-compatible endpoint). |
 | **Anthropic** | `ANTHROPIC_API_KEY` | Generation only — browser-use ships no Anthropic client, so the browser agent uses an OpenAI-compatible endpoint. |
 
 The **Adzuna** job-search source is optional but recommended (`ADZUNA_APP_ID` / `ADZUNA_APP_KEY`, free at the [Adzuna developer portal](https://developer.adzuna.com/)). Without it, other sources and manual entry still work. Other optional integrations (SerpAPI fallback, Gmail) have their own keys — see `.env.example` and the [Configuration reference](docs/configuration.md).
@@ -156,6 +240,7 @@ Start here for whole-system context, then dive into the subsystem you care about
 
 - **[User guide](docs/user-guide.md)** — an end-to-end walkthrough of every feature, from onboarding to Gmail.
 - **[Getting started with the monitor](docs/getting-started-monitor.md)** — from a fresh clone to your first job notification: settings, ntfy, the JobPilot Chrome, your skill file, adding sources, troubleshooting, risks.
+- **[Optional Docker setup](docs/docker.md)** — Chrome view, writer options, private remote access, security and updates.
 - **[Architecture](docs/architecture.md)** — system overview, component diagram, request lifecycles, database schema, and the [credentials & encryption](docs/architecture.md#credentials--encryption) reference.
 - **[Custom CV templates](docs/custom-templates.md)** — how to bring your own LaTeX CV template.
 - **[Contributing](CONTRIBUTING.md)** — dev setup and quality gates.
@@ -163,8 +248,8 @@ Start here for whole-system context, then dive into the subsystem you care about
 ### Subsystem & reference docs
 
 - [Multi-provider LLM](docs/llm-providers.md) — Documents JobPilot's provider-agnostic LLM layer: the LLMClient Protocol and neutral exceptions in backend/llm/base.py, the two factory functions (make_llm_client / make_browser_llm) in backend/llm/factory.py, and the OpenAI-compat/Anthropic adapters. It explains how each of the two roles (generation, browser agent) selects a provider via its *_PROVIDER env var, shows that all consumers (cv_editor, cv_modifier, job_analyzer, form_filler, both appliers, scrapling_fetcher, adaptive_scraper) inject a Protocol rather than hard-binding to a vendor, and covers provider-aware startup validation (Settings.validate_runtime_config). Includes a provider×role support matrix noting browser-use ships no ChatAnthropic.
-- [Configuration reference](docs/configuration.md) — Complete reference for every JobPilot setting in backend/config.py and .env.example: the two independent LLM roles (generation LLM_*, browser-agent BROWSER_LLM_*), all credentials (LLM_API_KEY/OPENAI/ANTHROPIC/ADZUNA/SERPAPI/CREDENTIAL_KEY/GMAIL_*), JOBPILOT_* app/server settings, model names, feature flags (SCRAPLING_ENABLED, APPLY_TIER1_ENABLED), and timeouts — each with env-var name, default, and required-vs-optional status. Explains CREDENTIAL_KEY Fernet auto-generation and the Docker non-persistence caveat, and documents the provider-aware startup rules in validate_runtime_config() that decide which credentials each chosen provider actually needs.
-- [Deployment & install](docs/deployment.md) — Self-hosting and production guide for JobPilot covering the interactive setup scripts (setup.sh/setup.ps1), the optional full installers (install.sh/install.ps1), the four-stage Docker image (uv Python deps, Node frontend build, pinned Tectonic, slim non-root Playwright runtime), docker-compose hardening (1gb shm_size for Chromium, host.docker.internal mapping, json-file log rotation, healthcheck with 40s start_period), the Docker Compose v2 plugin requirement plus v1 fallback, the local-dev path (uv + Node + Tectonic + start.py), data persistence via ./data, and the CREDENTIAL_KEY-must-persist gotcha. Build + boot verified healthy.
+- [Configuration reference](docs/configuration.md) — Provider, browser, server and integration settings. For Docker's generated credential-key persistence and current writer setup, see [Optional Docker setup](docs/docker.md).
+- [Deployment & install](docs/deployment.md) — Interactive setup scripts and guided installers. Use [Run it](#run-it) and [Optional Docker setup](docs/docker.md) for the current launcher, Compose requirements and security settings.
 - [Job scraping & sources](docs/scraping.md) — Documents JobPilot's scraping subsystem in backend/scraping/. The ScrapingOrchestrator runs a 3-phase batch pipeline (Phase 1 Adzuna API parallel, Phase 2 browser sources sequential with human-like delay, Phase 3 lab URLs parallel) then date-filters and dedupes. Phase 2 uses a cheap-first tiered strategy: Tier 1 ScraplingFetcher does an HTTP fetch (StealthyFetcher/Fetcher) plus a single LLM extraction call over cleaned-and-truncated HTML, falling back to Tier 2 AdaptiveScraper (a browser-use Agent, max_steps capped, 2 retries) for the five TIER1_SITES or any site Tier 1 can't handle. Both tiers are now provider-agnostic via backend/llm/factory.py (make_llm_client for Tier 1, make_browser_llm for Tier 2), and Tier 1 is gated by the SCRAPLING_ENABLED flag wired in main.py. Supporting pieces cover BrowserSessionManager (persistent per-site login state + manual/auto login), JobDeduplicator (md5 of normalized company|title|location), in-memory SourceHealthTracker (ok/empty/error → healthy/degraded/down pills), shared json_utils parsing/sanitization, and site_prompts (prompts, selectors, domain maps, SITE_CONFIGS).
 - [Matching & fit scoring](docs/matching.md) — Documents backend/matching/: two scoring layers in JobPilot. JobMatcher (matcher.py) produces a 0-100 heuristic relevance score from JobDetails + JobFilters (keyword/location/experience/salary/recency weights, exclusion knockouts) to rank scraped jobs. The fit layer reads the CV's skills from a curated gazetteer (cv_parser.py, context-tagged SkillEntry) and the posting's skills with a criticality each (job_skills.py), then FitEngine.assess (fit_engine.py) turns their criticality-weighted coverage into a FitAssessment (severity, simulated ATS score, should_modify, gaps) with no model call. Covers the end-to-end scheduler orchestration in batch_runner.py.
 - [Auto / assisted / manual apply](docs/applying.md) — Documents JobPilot's application engine in backend/applier/: how ApplicationEngine.apply routes requests to AUTO/ASSISTED/MANUAL strategies, drives a hand-rolled Statechart FSM through the Reserved→CaptchaCheck→Filling→AwaitingConfirm→Submitting→Recording lifecycle with four terminal/compensation states, enforces an atomic daily limit via DailyLimitGuard.reserve_slot, and pauses for a human apply_review confirm/cancel/patch step over WebSocket. Covers the two-tier auto/assisted strategies (Tier-1 PlaywrightFormFiller single-LLM-call vs Tier-2 provider-agnostic browser-use agent via make_browser_llm), captcha_handler block detection and session persistence, ApplicationRecorder placeholder-update semantics, and the lazy follow_up scanner.
@@ -202,7 +287,8 @@ tests/         pytest suite (per-worker SQLite isolation)
 docs/          Architecture, subsystem, and reference docs
 data/          Your data — SQLite DB, logs, templates, sessions (ignored by Git)
 bin/           Downloaded tools, e.g. Tectonic (ignored by Git)
-start.py       App launcher
+jobpilot       Native start / stop / status / logs launcher
+start.py       Legacy foreground launcher
 ```
 
 ---
@@ -215,13 +301,13 @@ start.py       App launcher
 - **Documents:** LaTeX compiled to PDF by Tectonic.
 - **Scraping:** monitor adapters over plain HTTP (httpx, no model); batch mode uses Scrapling (Tier 1 HTTP fetch) + browser-use agent (Tier 2), Adzuna API, optional SerpAPI.
 - **Notifications:** ntfy (optional) and the app's WebSocket.
-- **Runtime:** single process, SQLite (WAL), Docker (four-stage image) + docker-compose.
+- **Runtime:** FastAPI, SQLite (WAL), native launcher; optional multi-stage Docker image with supervised Chrome and Compose v2.
 
 ---
 
 ## Alternative install (guided installer scripts)
 
-The repository also ships convenience installer scripts that bundle the local-dev steps above (install `uv` + Python, build the frontend, download Tectonic, create `.env`, and add a desktop shortcut). They are optional; the [Quickstart](#quickstart) paths above are the canonical setup. See [Deployment & install](docs/deployment.md) for the full breakdown.
+The repository also ships convenience installer scripts that bundle dependency setup (install `uv` + Python, build the frontend, download Tectonic, create `.env`, and add a desktop shortcut). They are optional; [Run it](#run-it) describes the current launch paths. See [Deployment & install](docs/deployment.md) for the installer breakdown.
 
 <details>
 <summary><strong>Linux / macOS</strong></summary>
@@ -249,7 +335,7 @@ If PowerShell blocks the script, run `Set-ExecutionPolicy -Scope Process Bypass`
 
 ## First-time setup (inside the app)
 
-1. The onboarding wizard (`/onboarding`) will guide you through the basics
+1. Open the welcome page (`/onboarding`), complete **You**, and sign in to Google and LinkedIn in JobPilot's Chrome (through the Chrome view in Docker).
 2. Upload your CV template (a `.tex` file)
 3. Set your job search preferences (location, keywords, etc.)
 4. Click **Refresh queue** to run your first job-discovery batch
@@ -267,7 +353,7 @@ JobPilot can find jobs in two ways:
 
 To turn the monitor on, set `MONITOR_ENABLED=true` (and `NTFY_URL` for phone pushes) in `.env` and restart. Then add sources: import a list of company boards with `scripts/import_watchlist.py`, or add a LinkedIn or Indeed search through the API. You can see and pause each source in **Settings → Monitor**.
 
-For LinkedIn, the search is polled logged out. Each matched job is then opened once in a separate **JobPilot Chrome** (its own profile in `data/jobpilot-chrome`, never your everyday Chrome) to read the full description. You log into LinkedIn there by hand, once. This needs Google Chrome on Linux and a local install; the Docker image has no Chrome.
+For LinkedIn, the search is polled logged out. Each matched job is then opened once in the **JobPilot Chrome** (its own profile in `data/jobpilot-chrome`, never your everyday Chrome) to read the full description. You log into LinkedIn there by hand, once. The native launcher starts this Chrome locally; Docker supervises its own Chrome, which you use through the Chrome view.
 
 The step-by-step guide, including the risks of automated access to LinkedIn, is **[Getting started with the monitor](docs/getting-started-monitor.md)**.
 
@@ -281,7 +367,9 @@ The app validates that your chosen provider has the credentials it needs and ref
 
 ### "docker: 'compose' is not a docker command"
 
-Your Docker has only the legacy v1 binary. Either install the Compose v2 plugin (see [Path A requirements](#path-a--docker-recommended-incl-windows--macos-via-docker-desktop)), or use the v1 syntax as a fallback — the compose file is compatible: `docker-compose up -d --build` (note the hyphen).
+Install the Docker Compose v2 plugin and use Docker Engine 28.0.0 or newer, as
+required by [Docker (optional)](#docker-optional). The CLI credential mounts use
+Compose v2 features; the legacy `docker-compose` v1 binary is unsupported.
 
 ### Docker can't reach my local model (Ollama / llama.cpp / LM Studio)
 
@@ -289,7 +377,10 @@ Inside a container, `localhost` is the container itself. Point `LLM_BASE_URL` (a
 
 ### Stored credentials stop working after a Docker restart
 
-`CREDENTIAL_KEY` must be set in `.env` (the setup script generates it). In a container the app can't persist a generated key, so without it each restart gets a new key and can't decrypt previously-saved credentials.
+Keep the same `CREDENTIAL_KEY` in `.env`, or, when it is empty, preserve the
+generated `data/credential.key` alongside the database. Docker startup saves this
+key with mode 600 and stops if an existing key is invalid or unreadable. After a
+restore, check that `data/` is writable by uid 1000. See [Docker storage](docs/docker.md#storage-and-backups).
 
 ### "Node not found"
 

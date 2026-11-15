@@ -4,6 +4,20 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## Native launcher and optional Docker setup — 2026-11-15
+
+- Added `./jobpilot start`, `stop`, `status` and `logs`: prerequisite checks,
+  loopback backend startup with a health wait, reuse of JobPilot's Chrome, and
+  process identity checks before stopping the backend. `stop --chrome` also closes
+  Chrome while keeping its profile and logins.
+- Added an optional Docker setup with supervised Chrome, a password-protected
+  noVNC view, and loopback-only app/view ports. It runs non-root with dropped
+  capabilities, no new privileges, a read-only root and sandboxed Chrome under a
+  seccomp profile; sandbox failure stops startup and an unavailable Chrome never
+  triggers a fallback browser. API writers and opt-in Claude Code / Codex login
+  mounts are documented alongside Docker Engine 28+, monthly rebuilds and private
+  remote access through SSH or Tailscale.
+
 ## Job-site Google sign-in — 2026-11-15
 
 - The application harness prefers Google on isolated job-site sign-in pages when

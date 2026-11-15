@@ -23,8 +23,7 @@ from .account_flow import (
     AccountFlow,
     AccountPage,
     account_allowed,
-    account_field,
-    account_page,
+    account_control,
     google_click,
     google_host,
     opt_in_click,
@@ -271,6 +270,8 @@ class _Run:
         target = await chooser.element.evaluate(_UPLOAD_TARGET)
         # The opening control is a better fallback than a shared parent's text.
         kind = _document({**target, "nearby_text": ""}, self.documents, default=opening_document)
+        if await self.account_flow.detect(self.page) is None:
+            self.account_flow.application_started = True
         await chooser.set_files(self.documents[kind] if kind else [], timeout=1000)
         if kind is None:
             raise HarnessBlocked("No document available for the file chooser")
@@ -309,6 +310,8 @@ class _Run:
                 return changed
             candidate, kind = pending[0]
             self.check_limits()
+            if await self.account_flow.detect(self.page) is None:
+                self.account_flow.application_started = True
             await attach(self.page, snap, candidate, self.documents[kind])
             self.attached.add(_identity(snap, candidate))
             _append_once(self.result.uploads, kind)
@@ -505,7 +508,7 @@ class _Run:
             _append_once(self.result.needs_you, action["label"])
         else:
             if action.get("current_value", action.get("value", "")) != value:
-                if not await account_field(snap, action):
+                if await self.account_flow.detect(self.page) is None:
                     self.account_flow.application_started = True
                 await act(self.page, snap, action, value)
                 executed = True
@@ -656,13 +659,15 @@ class _Run:
                 if decision.operation == "CLICK":
                     # Recheck isolation immediately before relaxing the click guard.
                     self.account = (
-                        await account_page(
-                            self.page, after_signup=self.account_flow.signup_since is not None
-                        )
+                        await self.account_flow.detect(self.page)
                         if self.account and account_allowed(self.page.url)
                         and not self.account_flow.application_started and not self.result.uploads
                         else None
                     )
+                    if self.account and not await account_control(
+                        snap, action, code_only=self.account.code_only
+                    ):
+                        self.account = None
                     stop = (
                         "skip" if self.account and await opt_in_click(snap, action)
                         else self.click_stop(snap, decision)
@@ -700,6 +705,8 @@ class _Run:
                             self.chose_field = True
                         chosen = None
                         if action.get("role") in _CHOICE_ROLES | {"option", "menuitemradio"}:
+                            if self.account is None:
+                                self.account_flow.application_started = True
                             last = self.history[-1] if self.history else {}
                             # The question is the field the previous step really opened.
                             opened = (
@@ -728,6 +735,8 @@ class _Run:
                     if action["kind"] == "select":
                         if action.get("submits"):
                             return self.ready(snap, decision)
+                        if await self.account_flow.detect(self.page) is None:
+                            self.account_flow.application_started = True
                         self.chose_field = True
                     # Indirect submission through arbitrary event listeners cannot
                     # be inferred from the DOM; explicit select handlers are guarded.

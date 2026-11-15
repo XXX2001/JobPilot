@@ -1,0 +1,18 @@
+<!doctype html><meta charset="utf-8"><title>Apply</title>
+<div id="app">
+  <h1>Apply: contact details</h1>
+  <label>First Name<input name="first"></label>
+  <label>Email<input type="email" name="email"></label>
+  <label>Phone<input type="tel" name="phone"></label>
+  <fieldset><legend>Authorized to work?</legend>
+    <label><input type="radio" name="auth" value="y">Yes</label>
+    <label><input type="radio" name="auth" value="n">No</label>
+  </fieldset>
+  <button type="button" onclick="app.innerHTML = review.innerHTML">Next</button>
+</div>
+<template id="review">
+  <h1>Review</h1><p>Create a password to submit your application</p>
+  <form onsubmit="event.preventDefault(); window.submitted=true">
+    <label>Password<input type="password"></label><button>Create account</button>
+  </form>
+</template>

@@ -12,7 +12,7 @@ from urllib.parse import quote, quote_plus
 import pytest
 import pytest_asyncio
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Frame, Locator, async_playwright
+from playwright.async_api import FileChooser, Frame, Locator, async_playwright
 
 from backend.applier.harness import account_flow, accounts, agent, mailbox
 from backend.applier.harness.account_flow import AccountFlow, account_page, fill_passwords
@@ -613,7 +613,7 @@ async def test_captcha_handoff_resumes_account_path_after_owner_solves_it(
     "path,button,is_account",
     [
         ("/hidden_file", "Submit", False),
-        ("/review", "Valider", True),
+        ("/review", "Valider", False),
         ("/editable", "Submit", False),
     ],
 )
@@ -682,17 +682,24 @@ async def test_critic_german_account_and_application_prompts_are_not_errors(page
     assert services[0].record_account.await_args.kwargs["status"] == "created"
 
 
-@pytest.mark.parametrize("password", [SECRET, "secret / + é?&!"])
-async def test_critic_get_signin_url_is_redacted_in_decision_request(page, services, password):
+@pytest.mark.parametrize(
+    "password", [SECRET, "secret / + é?&!", "pass~word1", "pass*word1", "mötdepasse1"]
+)
+@pytest.mark.parametrize("charset", ["UTF-8", "ISO-8859-1"])
+async def test_critic_get_signin_url_is_redacted_in_decision_request(
+    page, services, password, charset
+):
     services[0].find_account.return_value = object()
     await page.goto(URL + "/get_signin")
+    await page.locator("form").evaluate("(f, charset) => f.acceptCharset=charset", charset)
     client = ScriptedClient(signin_steps("Sign in"))
     result = await run(page, client, account_flow=flow(services, password))
     assert "pwd=" in page.url
-    request = json.dumps(client.decisions[-1])
+    request = json.dumps(client.requests, ensure_ascii=False) + repr(result)
     assert "[redacted]" in request
     assert password not in request + repr(result)
     assert quote_plus(password) not in request
+    assert page.url.split("pwd=")[1].split("&")[0] not in request
 
 
 @pytest.mark.parametrize("encoding", [quote, quote_plus, lambda s: quote(s, safe="")])
@@ -943,17 +950,10 @@ async def test_run_remembers_application_work_before_later_account_shape(
         steps + [step("CLICK", "Connexion"), step("DONE")],
         slots={"Motivation": ("full_name", 0.9), "Email": ("email", 0.9)},
     )
-    if history == "account":
-        # The new form still requires its email, so finish the account step with DONE/hand-off.
-        with pytest.raises(agent.HarnessBlocked) as exc:
-            await run(page, client, account_flow=flow(services), documents=documents)
-        assert exc.value.result.clicked_submit
-        services[0].find_account.assert_awaited()
-    else:
-        result = await run(page, client, account_flow=flow(services), documents=documents)
-        assert result.clicked == 0 and not result.clicked_submit
-        services[0].find_account.assert_not_awaited()
-        assert await page.locator("input[type=password]").input_value() == ""
+    result = await run(page, client, account_flow=flow(services), documents=documents)
+    assert result.clicked == 0 and not result.clicked_submit
+    services[0].find_account.assert_not_awaited()
+    assert await page.locator("input[type=password]").input_value() == ""
 
 
 @pytest.mark.parametrize("attributes", ["", 'aria-labelledby="missing"'])
@@ -1603,3 +1603,321 @@ async def test_google_translated_twofactor_and_otp_fields_stop_before_any_action
     google = page.context.pages[-1]
     assert not await google.evaluate("!!window.clicked")
     assert await google.locator("input").evaluate_all("es => es.every(e => !e.value)")
+
+
+async def test_critic4b_hidden_csrf_keeps_real_signin_working(page, services):
+    services[0].find_account.return_value = object()
+    await page.goto(URL + "/signin")
+    await page.locator("form").evaluate(
+        "f => f.insertAdjacentHTML('afterbegin', '<input type=hidden name=_csrf value=x>')"
+    )
+    assert await account_page(page) is not None
+    result = await run(page, ScriptedClient(signin_steps()), account_flow=flow(services))
+    assert result.clicked == 1 and result.clicked_submit
+    assert page.url.endswith("/application")
+
+
+async def test_critic4b_contact_step_then_spa_account_never_submits(page, services):
+    await page.goto(URL + "/contact_spa")
+    acct = flow(services)
+    client = ScriptedClient([
+        step("TYPE_TEXT", "First Name"), step("TYPE_TEXT", "Email"),
+        step("TYPE_TEXT", "Phone"), step("CLICK", "Yes"), step("CLICK", "Next"),
+        step("CLICK", "Create account"), step("DONE"), step("DONE"),
+    ])
+    result = await run(page, client, account_flow=acct)
+    assert acct.application_started and await acct.detect(page) is None
+    assert result.clicked == 2 and not result.clicked_submit
+    assert not await page.evaluate("!!window.submitted")
+    assert await page.locator("input[type=password]").input_value() == ""
+    services[0].find_account.assert_not_awaited()
+
+
+@pytest.mark.parametrize("label", [
+    "Se connecter et postuler", "Register &amp; Apply", "Sign in to submit",
+    "Créer mon compte et envoyer ma candidature",
+])
+async def test_critic4b_mixed_account_application_labels_never_submit(page, services, label):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        "<form onsubmit='event.preventDefault(); window.submitted=true'>"
+        "<label>Email<input type=email></label><label>Password<input type=password></label>"
+        f"<button>{label}</button></form>"
+    )
+    try:
+        result = await run(
+            page, ScriptedClient([step("CLICK", label.replace("&amp;", "&")), step("DONE")]),
+            account_flow=flow(services),
+        )
+    except agent.HarnessBlocked as exc:
+        result = exc.result
+    assert not result.clicked_submit
+    assert not await page.evaluate("!!window.submitted")
+
+
+async def test_critic4b_account_aria_cannot_hide_submit_text(page, services):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        "<form onsubmit='event.preventDefault(); window.submitted=true'>"
+        "<label>Email<input type=email></label><label>Password<input type=password></label>"
+        "<button aria-label='Sign in'>Submit application</button></form>"
+    )
+    assert await account_page(page) is None
+    result = await run(
+        page, ScriptedClient([step("CLICK", "Sign in"), step("DONE")]),
+        account_flow=flow(services),
+    )
+    assert not result.clicked_submit and not await page.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("field", [
+    '<x-letter name=letter></x-letter>', '<output name=letter>Cover letter</output>',
+    '<object name=letter></object>', '<fieldset><legend>Application</legend></fieldset>',
+    '<input type=radio role=checkbox name=answer>',
+    '<input type=radio role=combobox name=country>',
+])
+@pytest.mark.parametrize("external", [False, True])
+async def test_critic4b_every_form_element_must_be_an_account_field(
+    page, services, field, external
+):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        "<script>customElements.define('x-letter', class extends HTMLElement {"
+        "static formAssociated = true; constructor(){super(); this.i=this.attachInternals();"
+        "this.i.setFormValue('my cover letter');}});</script>"
+        "<form id=account onsubmit='event.preventDefault(); window.submitted=true'>"
+        "<label>Email<input type=email></label><label>Password<input type=password></label>"
+        + ("" if external else field) + "<button>Sign in</button></form>"
+        + (field.replace(" name=", " form=account name=")
+           .replace("<fieldset>", "<fieldset form=account>") if external else "")
+    )
+    assert await page.evaluate("document.forms[0].elements.length") == 4
+    assert await account_page(page) is None
+    result = await run(
+        page, ScriptedClient([step("CLICK", "Sign in"), step("DONE")]),
+        account_flow=flow(services),
+    )
+    assert result.clicked == 0 and not await page.evaluate("!!window.submitted")
+
+
+async def test_critic4b_review_step_with_create_account_label_never_submits(page, services):
+    await page.goto(URL + "/review")
+    await page.locator("button").evaluate("b => b.textContent='Créer mon compte'")
+    assert await account_page(page) is None
+    result = await run(
+        page, ScriptedClient([
+            step("TYPE_TEXT", "Email"), step("CLICK", "Créer mon compte"),
+            step("DONE"), step("DONE"),
+        ]), account_flow=flow(services),
+    )
+    assert result.clicked == 0 and not result.clicked_submit
+    assert not await page.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("text", [
+    "Create a password to save your application", "Submit your application",
+    "Your application will be saved", "Send your application", "Finalize application",
+    "Créer un compte pour soumettre votre candidature", "Enregistrer ma candidature",
+    "Envoyer votre candidature", "Compléter votre candidature",
+    "Votre candidature sera enregistrée", "Bewerbung abschließen", "Bewerbung absenden",
+    "Review your application", "Récapitulatif de votre candidature",
+    "Récapitulatif de ma candidature", "Zusammenfassung Ihrer Bewerbung",
+])
+@pytest.mark.parametrize("container", ["form", "fieldset", "dialog open", "section"])
+async def test_application_text_in_account_control_container_disqualifies(page, text, container):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        f"<{container}><p>{text}</p><label>Password<input type=password></label>"
+        f"<button>Sign in</button></{container.split()[0]}>"
+    )
+    assert await account_page(page) is None
+
+
+@pytest.mark.parametrize("inside", [False, True])
+async def test_application_text_only_counts_inside_the_signin_form(page, services, inside):
+    services[0].find_account.return_value = object()
+    await page.goto(URL + "/signin")
+    # Even a surrounding section (including the sign-up link) is outside the form.
+    await page.locator("body").evaluate("e => e.innerHTML='<section>'+e.innerHTML+'</section>'")
+    await page.locator("form" if inside else "section").evaluate(
+        "e => e.insertAdjacentHTML('afterbegin',"
+        "'<p>Créer un compte pour soumettre votre candidature</p>')"
+    )
+    assert (await account_page(page) is not None) is (not inside)
+    result = await run(
+        page, ScriptedClient([
+            step("TYPE_TEXT", "Email"), step("CLICK", "Connexion"), step("DONE"),
+        ]), account_flow=flow(services),
+    )
+    assert result.clicked_submit is (not inside)
+    assert page.url.endswith("/signin" if inside else "/application")
+
+
+@pytest.mark.parametrize(
+    "kind", ["email", "phone", "select", "radio", "checkbox", "switch", "option"]
+)
+@pytest.mark.parametrize("destination", ["signin", "google"])
+async def test_all_application_inputs_latch_before_account_spa_swap(
+    page, services, kind, destination
+):
+    await google_session(page)
+    await page.goto(URL + "/application")
+    markup, action = {
+        "email": ('<label>Email<input type=email></label>', step("TYPE_TEXT", "Email")),
+        "phone": ('<label>Phone<input type=tel></label>', step("TYPE_TEXT", "Phone")),
+        "select": ('<label>Country<select><option>France</option><option>Germany</option>'
+                   '</select></label>', step("SELECT", "Country → Germany")),
+        "radio": ('<label><input type=radio>Yes</label>', step("CLICK", "Yes")),
+        "checkbox": ('<label><input type=checkbox>Yes</label>', step("CLICK", "Yes")),
+        "switch": ('<button role=switch aria-checked=false>Yes</button>', step("CLICK", "Yes")),
+        "option": ('<div role=option tabindex=0>Yes</div>', step("CLICK", "Yes")),
+    }[kind]
+    await page.set_content(markup + '<button type=button id=next>Next</button>')
+    target = (FIXTURES / f"account_{destination}.html").read_text()
+    await page.locator("#next").evaluate(
+        "(e, html) => e.onclick=() => {document.body.innerHTML=html}", target
+    )
+    acct = flow(services)
+    checks = []
+
+    async def before(_body):
+        checks.append(acct.application_started)
+
+    result = await run(
+        page, ScriptedClient([
+            action, step("CLICK", "Next"),
+            step("CLICK", "Connexion" if destination == "signin" else "Sign in with Google"),
+            step("DONE"),
+        ], before=before), account_flow=acct,
+    )
+    assert checks[:3] == [False, True, True]
+    assert acct.application_started and await acct.detect(page) is None
+    assert not acct.google_attempted and not result.clicked_submit
+    assert result.clicked == (1 if kind in {"email", "phone", "select"} else 2)
+    services[0].find_account.assert_not_awaited()
+
+
+@pytest.mark.parametrize("encoded", ["pass%7Eword1", "%70ass~word1", "pass%7eword1"])
+async def test_clean_decodes_form_urlencoded_text_before_matching(services, encoded):
+    assert flow(services, "pass~word1").clean("Echo: " + encoded) == "Echo: [redacted]"
+
+
+@pytest.mark.parametrize("encoded", ["m%C3%B6tdepasse1", "m%F6tdepasse1", "%6d%f6tdepasse1"])
+async def test_clean_decodes_utf8_and_latin1_text(services, encoded):
+    assert flow(services, "mötdepasse1").clean("Echo: " + encoded) == "Echo: [redacted]"
+
+
+async def test_runner_post_submit_classifier_receives_redacted_text(page, services, monkeypatch):
+    from backend.applier.harness import runner
+
+    password = "pass~word1"
+    await page.goto(URL + "/application")
+    await page.set_content(
+        '<button onclick="document.body.textContent=\'Echo: pass%7Eword1\'">Submit</button>'
+    )
+    snap = await agent.observe(page)
+    action = next(a for a in snap["actions"] if a["kind"] == "click")
+    result = agent.HarnessResult("ready", action, {}, [], [], [], 0)
+    confirm = asyncio.Event()
+
+    async def publish(*args, **kwargs):
+        confirm.set()
+
+    monkeypatch.setattr(runner, "_publish_review", publish)
+    monkeypatch.setattr(runner, "verify_page", AsyncMock(return_value=SimpleNamespace(
+        outcome="unknown", evidence="No receipt",
+    )))
+    monkeypatch.setattr(runner, "_DecisionClient", lambda: SimpleNamespace(aclose=AsyncMock()))
+    classify = AsyncMock(return_value=("application_received", 0.99))
+    monkeypatch.setattr(runner, "classify_page", classify)
+    status, _ = await runner._review(
+        page, result, job_id=42, documents=[], confirm_event=confirm, cancel_event=None,
+        on_review=None, on_get_patches=None, clean=flow(services, password).clean,
+    )
+    assert status == "confirmed"
+    assert classify.await_args.args[1] == "Echo: [redacted]"
+
+
+async def test_verify_code_form_allows_hidden_csrf(page, services):
+    await page.goto(URL + "/verify")
+    await page.locator("form").evaluate(
+        "f => f.insertAdjacentHTML('afterbegin', '<input type=hidden name=_csrf value=x>')"
+    )
+    acct = flow(services)
+    acct.signup_since = datetime.now(UTC)
+    services[1].wait_for_verification.return_value = mailbox.Verification(code="482913")
+    result = await run(
+        page, ScriptedClient([step("CLICK", "Vérifier"), step("CLICK", "Postuler")]),
+        account_flow=acct,
+    )
+    assert result.clicked == 1 and result.clicked_submit
+    assert not acct.application_started
+    assert page.url.endswith("/application")
+
+
+async def test_clicked_control_uses_its_form_owner_instead_of_ancestor(page, services):
+    services[0].find_account.return_value = object()
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        '<form><label>Password<input type=password></label>'
+        '<button form=review>Créer mon compte</button></form>'
+        '<form id=review onsubmit="event.preventDefault(); window.submitted=true">'
+        '<p>Save your application</p></form>'
+    )
+    assert await account_page(page) is not None
+    result = await run(
+        page, ScriptedClient([step("CLICK", "Créer mon compte"), step("DONE")]),
+        account_flow=flow(services),
+    )
+    assert result.clicked == 0 and not await page.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("container", ["fieldset", "dialog open"])
+async def test_formless_account_container_rejects_other_form_elements(page, container):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        f'<{container}><label>Password<input type=password></label>'
+        '<output>Cover letter</output><button>Sign in</button>'
+        f'</{container.split()[0]}>'
+    )
+    assert await account_page(page) is None
+
+
+@pytest.mark.parametrize("chooser", [False, True])
+async def test_upload_latches_before_dispatch_and_spa_swap(
+    page, services, tmp_path, monkeypatch, chooser
+):
+    cv = tmp_path / "cv.pdf"
+    cv.write_bytes(b"%PDF-1.4")
+    documents = {"cv": cv}
+    await page.goto(URL + "/application")
+    markup = '<input type=file name=resume onchange="location.href=\'/signin\'">'
+    if chooser:
+        await page.set_content('<button type=button>Upload CV</button>')
+        await page.locator("button").evaluate(
+            "(b, html) => b.onclick=() => {b.insertAdjacentHTML('afterend',html);"
+            "document.querySelector('input').click()}", markup,
+        )
+    else:
+        await page.set_content(markup)
+    acct = flow(services)
+    latched = []
+    original = FileChooser.set_files if chooser else agent.attach
+
+    async def upload(*args, **kwargs):
+        latched.append(acct.application_started)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        FileChooser if chooser else agent, "set_files" if chooser else "attach", upload
+    )
+    result = await run(
+        page, ScriptedClient([
+            step("CLICK", "Upload CV") if chooser else step("WAIT"),
+            step("CLICK", "Connexion"), step("DONE"),
+        ]), account_flow=acct, documents=documents,
+    )
+    assert latched == [True]
+    assert acct.application_started and await acct.detect(page) is None
+    assert result.clicked == int(chooser) and not result.clicked_submit
+    assert await page.locator("input[type=password]").input_value() == ""

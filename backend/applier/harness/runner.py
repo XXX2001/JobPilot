@@ -258,7 +258,7 @@ async def _invalid_fields(snap, *, unreadable=None):
     return invalid
 
 
-async def _submit(page, snap, action):
+async def _submit(page, snap, action, *, clean=lambda value: value):
     """Every outcome after dispatch is final, including a click that raises."""
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
@@ -277,7 +277,7 @@ async def _submit(page, snap, action):
         after = await observe(page)
         client = _DecisionClient()
         try:
-            kind, probability = await classify_page(client, after["text"])
+            kind, probability = await classify_page(client, clean(after["text"]))
         finally:
             await client.aclose()
         if kind == "application_received" and probability >= 0.8:
@@ -414,7 +414,7 @@ async def _review(
             )
         if cancel_event.is_set():
             return RESULT_CANCELLED, "Cancelled by user."
-        return await _submit(page, snap, action)
+        return await _submit(page, snap, action, clean=clean)
     return RESULT_FAILED, f"No stable approved state after {_MAX_REVIEW_ROUNDS} review rounds."
 
 
@@ -645,7 +645,7 @@ async def harness_apply(
         host = getattr(partial, "login_host", "")
         if not host and page is not None and not page.is_closed():
             try:
-                if await account_page(page, after_signup=account_flow.signup_since is not None):
+                if await account_flow.detect(page):
                     host = site_host(page.url)
             except Exception:
                 pass

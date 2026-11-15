@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from typing import Any
-from urllib.parse import quote, quote_plus, urlsplit
+from urllib.parse import quote, quote_plus, unquote_plus, urlsplit
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Frame, Locator, Page
@@ -92,11 +92,11 @@ _DOM = r"""
     };
     const accountField = e => {
         if (e.matches('textarea, [contenteditable], input[type=file]')) return false;
-        if (e.matches('input[type=password], input[type=email], ' +
-                      'input[type=checkbox], [role=checkbox]'))
+        if (e.matches('input[type=password], input[type=email], input[type=hidden], ' +
+                      'input[type=checkbox], [role=checkbox]:not(input):not(select)'))
             return true;
         if (!e.matches('input:not([type]), input[type=text], input[type=tel], ' +
-                       'select, [role=combobox]'))
+                       'select, [role=combobox]:not(input):not(select)'))
             return false;
         const normalize = s => (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
             .toLowerCase().replace(/[^a-z]/g, '');
@@ -109,9 +109,31 @@ _DOM = r"""
             [e.autocomplete, e.name, e.id, e.placeholder].some(s => allowed.test(normalize(s)));
     };
     const fields = root => query(root, 'input, select, textarea, [contenteditable], ' +
-        '[role=textbox], [role=combobox], [role=radio], [role=switch], ' +
+        '[role=textbox], [role=combobox], [role=checkbox], [role=radio], [role=switch], ' +
         '[role=slider], [role=spinbutton]')
         .filter(e => !e.matches('input[type=submit], input[type=button], input[type=reset]'));
+    const accountElement = (e, allowCode) =>
+        e.matches('button, input[type=submit], input[type=button], input[type=reset]') ||
+        (e.matches('input, select') && (accountField(e) || (allowCode && code(e))));
+    const applicationText = text => {
+        const verb = '(sav|enregistr|submit|soumettr|envoy|send|finali|complét|abschließ|absend)';
+        const noun = '(application|candidature|bewerbung)';
+        return new RegExp(verb + '.{0,60}' + noun + '|' + noun + '.{0,60}' + verb +
+            '|review your application|récapitulatif de (votre|ma) candidature|' +
+            'Zusammenfassung Ihrer Bewerbung', 'i').test(text.replace(/\s+/g, ' '));
+    };
+    const accountContainer = (e, allowCode = false) => {
+        // form= can associate controls outside the form's descendant tree.
+        const container = e.form || e.closest('form, fieldset, dialog');
+        if (container && (
+            [...(container.elements || query(container, '*').filter(c =>
+                c.matches('input, select, textarea, button, fieldset, output, object') ||
+                c.constructor.formAssociated))].some(c => !accountElement(c, allowCode)) ||
+            fields(container).some(c => !accountField(c) && !(allowCode && code(c)))
+        )) return false;
+        const textContainer = e.form || e.closest('form, fieldset, dialog, section');
+        return !textContainer || !applicationText(textContainer.textContent || '');
+    };
     const googleControl = e => {
         const names = [e.getAttribute('aria-label'), e.innerText, e.title,
             ['submit','button'].includes(e.type) ? e.value : '',
@@ -131,31 +153,35 @@ ACCOUNT_PAGE_JS = (
     const controls = query(document, 'a, button, input[type=submit], input[type=button], ' +
         '[role=button], [role=link]')
         .filter(visible);
+    const codes = query(document, 'input').filter(code);
     return {
         has_password: passwords.length > 0, password_inputs: passwords.length,
-        google_button: controls.some(googleControl) ||
-            query(document, 'iframe').some(e => visible(e) &&
+        google_button: controls.some(e => googleControl(e) && accountContainer(e)) ||
+            query(document, 'iframe').some(e => visible(e) && accountContainer(e) &&
                 /^https:\/\/accounts\.google\.com\/gsi\//i.test(e.src)),
         signup_link: controls.map(label).some(t =>
             /cr[ée]er un compte|s['’]inscrire|create (an )?account/i.test(t) ||
             /sign.?up|register|registrieren/i.test(t)),
-        code_field: query(document, 'input').some(code),
+        code_field: codes.length > 0,
         check_email_text: [
             /check (your )?(e-?mail|inbox)/i,
             /v[ée]rifiez (votre |vos )?(e-?mail|messagerie)/i,
             /consultez (votre |vos )?(e-?mail|messagerie)/i,
             /prüfen sie.*(e-mail|postfach)/i
         ].some(pattern => pattern.test(document.body?.innerText || '')),
-        input_count: fields(document).length,
-        code_count: query(document, 'input').filter(code).length,
+        input_count: fields(document).filter(e => !e.matches('input[type=hidden]')).length,
+        code_count: codes.length,
         application: query(document, 'input[type=file], textarea, [contenteditable]').length > 0 ||
-            fields(document).some(e => !accountField(e) && !code(e))
+            fields(document).some(e => !accountField(e) && !code(e)) ||
+            query(document, 'form').some(f =>
+                [...f.elements].some(e => !accountElement(e, true))) ||
+            [...passwords, ...codes].some(e => !accountContainer(e, true))
     };
 }"""
 )
 _LABEL_JS = "e => {" + _DOM + "return label(e); }"
 _CODE_JS = "e => {" + _DOM + "return code(e); }"
-_ACCOUNT_FIELD_JS = "e => {" + _DOM + "return accountField(e); }"
+_ACCOUNT_CONTROL_JS = "(e, allowCode) => {" + _DOM + "return accountContainer(e, allowCode); }"
 _GOOGLE_CONTROL_JS = "e => {" + _DOM + "return googleControl(e); }"
 
 
@@ -303,7 +329,11 @@ async def _google_button(page: Page) -> Locator | None:
         for control in await frame.locator(
             "button, a, input[type=submit], input[type=button], [role=button], [role=link]"
         ).all():
-            if await control.is_visible() and await control.evaluate(_GOOGLE_CONTROL_JS):
+            if (
+                await control.is_visible()
+                and await control.evaluate(_GOOGLE_CONTROL_JS)
+                and await control.evaluate(_ACCOUNT_CONTROL_JS, False)
+            ):
                 return control
     for frame in page.frames:
         if frame.url.startswith("https://accounts.google.com/gsi/") and await _visible_frame(frame):
@@ -482,12 +512,13 @@ async def opt_in_click(snap: dict, action: dict) -> bool:
     )
 
 
-async def account_field(snap: dict, action: dict) -> bool:
+async def account_control(snap: dict, action: dict, *, code_only: bool = False) -> bool:
+    """Validate the clicked control's actual form, including external form elements."""
     frame = snap["_frame_refs"][action["frame"]]
     return await frame.evaluate(
-        "node => { const e = window.__jobpilotHarness?.nodes.get(node); "
-        f"return !!e?.isConnected && ({_ACCOUNT_FIELD_JS})(e); }}",
-        action["node"],
+        "([node, allowCode]) => { const e = window.__jobpilotHarness?.nodes.get(node); "
+        f"return !!e?.isConnected && ({_ACCOUNT_CONTROL_JS})(e, allowCode); }}",
+        [action["node"], code_only],
     )
 
 
@@ -537,10 +568,17 @@ class AccountFlow:
         if isinstance(value, str):
             if not self.password:
                 return value
+            # GET forms may encode even unreserved characters and may use legacy charsets.
+            # Decode only when a secret is present, preserving unrelated outward data.
+            for encoding in ("utf-8", "latin-1"):
+                decoded = unquote_plus(value, encoding=encoding)
+                if self.password in decoded:
+                    value = decoded.replace(self.password, "[redacted]")
             for encoded in {
                 quote(self.password),
                 quote(self.password, safe=""),
                 quote_plus(self.password),
+                quote_plus(self.password).replace("~", "%7E"),
             }:
                 pattern = "".join(
                     "%" + "".join(f"[{c.lower()}{c.upper()}]" for c in part[1:])
@@ -600,7 +638,10 @@ class AccountFlow:
         if signup == (self.mode == "signup"):
             return False
         for control, label, submits in controls:
-            if not submits and desired.fullmatch(label):
+            if (
+                not submits and desired.fullmatch(label)
+                and await control.evaluate(_ACCOUNT_CONTROL_JS, acct.code_only)
+            ):
                 identity = (page.url, self.mode, label)
                 if identity in self.form_switches:
                     raise AccountHandoff("Account mode could not be switched")

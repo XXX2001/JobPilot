@@ -388,8 +388,8 @@ async def test_login_wall_notifies_and_waits_until_resolved(page, monkeypatch):
 
     notify = AsyncMock(side_effect=owner_signs_in)
     client = ScriptedClient(
-        # This fixture also has a hidden CSRF field, so it keeps the ordinary login guard.
-        [step("DONE", page_kind="login_wall"), step("DONE")],
+        # Hidden CSRF fields are allowed: code hands off before asking the model.
+        [step("DONE")],
         classifications=[("login_wall", 0.9), ("login_wall", 0.9), ("application_form", 0.9)],
     )
     assert (await run(page, client, notify=notify)).stop == "ready"
@@ -507,10 +507,10 @@ async def test_never_types_into_password_without_configured_account_path(page, m
     monkeypatch.setattr(agent, "HANDOFF_TIMEOUT_S", 0.03)
     body, _, _ = build_request(await observe(page), "goal", [], "scripted")
     assert "Password" not in fill_labels(body)
-    client = ScriptedClient([step("DONE", page_kind="login_wall")])
+    client = ScriptedClient([])
     with pytest.raises(agent.HarnessBlocked, match="hand-off"):
         await run(page, client)
-    assert len(client.decisions) == 1
+    assert not client.decisions
     assert await page.locator("#password").input_value() == ""
 
 

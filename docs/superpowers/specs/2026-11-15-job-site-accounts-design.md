@@ -29,13 +29,16 @@ owner wants JobPilot to get through it alone and keep a list of the accounts in 
 - `backend/api/browser.py`: `LOGIN_PAGES["google"]` = the Google sign-in page continuing to
   Gmail; `SESSION_COOKIES["google"]` = the `SID` cookie on `https://mail.google.com`.
   "Open the JobPilot Chrome" then shows the Google sign-in when it is missing.
-- Onboarding step 1 ("Tools") and the ready strip show Google and LinkedIn login state,
+- The welcome page's first step ("You") and the ready strip show Google and LinkedIn login state,
   with a button that opens the sign-in pages in the JobPilot Chrome. The owner types the
   Google password and any 2FA by hand; JobPilot never handles the Google password.
 
 ### 2. Password and account registry
-- `.env` gains `JOB_SITE_PASSWORD` (SecretStr). Unset: email/password sign-up is off and
-  such pages are handed to the owner as today (Google sign-in still works).
+- The owner enters the password on the welcome page (owner's request: everything the
+  owner provides is collected there: profile details, the password, the Google and
+  LinkedIn sign-ins). It is stored Fernet-encrypted in the app; `.env`
+  `JOB_SITE_PASSWORD` is a fallback. Unset: email/password sign-up is off and such pages
+  are handed to the owner as today (Google sign-in still works).
 - The password is typed by code into password inputs only. It never enters a model
   request, a log line, a websocket message or the review summary. Password inputs stay
   out of the snapshot, as now.

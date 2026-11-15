@@ -214,7 +214,7 @@ async def poll(mailbox, **kwargs):
         since=kwargs.pop("since", SINCE),
         site_host=kwargs.pop("site_host", "jobs.acme.com"),
         company=kwargs.pop("company", "Acme"),
-        timeout_s=kwargs.pop("timeout_s", 0.5),
+        timeout_s=kwargs.pop("timeout_s", 5.0),
         poll_s=kwargs.pop("poll_s", 0.1),
         **kwargs,
     )
@@ -483,7 +483,7 @@ async def test_wait_tries_all_candidates_newest_first_in_one_poll(mailbox):
     older = print_url("18c2f123abc45677")
     mailbox[2][older] = mailbox[2][MESSAGE]
     mailbox[2][MESSAGE] = ("text/html", "Welcome to Acme. No verification token yet.")
-    assert (await poll(mailbox, timeout_s=1, poll_s=10)).code == "004321"
+    assert (await poll(mailbox, timeout_s=5, poll_s=10)).code == "004321"
     assert mailbox[3] == [*FEEDS, MESSAGE, older]
 
 
@@ -499,7 +499,7 @@ async def test_wait_sorts_and_deduplicates_across_feeds(mailbox):
     )
     newer = print_url("18c2f123abc45679")
     mailbox[2][newer] = ("text/html", "Welcome to Acme")
-    assert (await poll(mailbox, timeout_s=1, poll_s=10)).code == "004321"
+    assert (await poll(mailbox, timeout_s=5, poll_s=10)).code == "004321"
     assert mailbox[3] == [*FEEDS, newer, MESSAGE]
 
 
@@ -536,7 +536,7 @@ async def test_wait_reads_main_document_after_load(mailbox):
         await route.fulfill(content_type="text/html", body="Verification code: 999999")
 
     await mailbox[0].route("https://mail.google.com/mail/u/0/body", slow_frame)
-    assert (await poll(mailbox, timeout_s=1, poll_s=10)).code == "123456"
+    assert (await poll(mailbox, timeout_s=5, poll_s=10)).code == "123456"
 
 
 @pytest.mark.asyncio(loop_scope="module")

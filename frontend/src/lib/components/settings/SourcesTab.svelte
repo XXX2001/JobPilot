@@ -212,7 +212,7 @@
 						
 						<div class="mt-auto pt-2">
 							<p class="text-xs text-muted-foreground/80 leading-relaxed mt-2">
-								Configure <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">LLM_API_KEY</code> (or <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">LLM_BASE_URL</code> for a local model) in your environment. Used for CV tailoring.
+								Uses your logged-in Claude Code or Codex CLI (no key), or <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">LLM_API_KEY</code> / <code class="text-[10px] bg-muted px-1 py-0.5 rounded text-foreground">LLM_BASE_URL</code> if set. Used for CV tailoring.
 							</p>
 
 							<button type="button" onclick={testConnection} disabled={testing}

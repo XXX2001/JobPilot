@@ -45,7 +45,7 @@
 		<div class="bg-card/30 border border-border/50 rounded-2xl overflow-hidden shadow-sm">
 			<div class="divide-y divide-border/40">
 				{#each [
-					['LLM API Key', setupStatus.llm_key_set, 'LLM_API_KEY (or OPENAI_API_KEY / ANTHROPIC_API_KEY, or LLM_BASE_URL for a local model) in .env required for CV tailoring', Cpu],
+					['Writing model', setupStatus.llm_key_set, 'Claude Code or Codex CLI on PATH (LLM_PROVIDER=auto), or LLM_API_KEY / LLM_BASE_URL in .env; used for CV tailoring and written answers', Cpu],
 					['Adzuna API Keys', setupStatus.adzuna_key_set, 'ADZUNA_APP_ID & ADZUNA_APP_KEY in .env for job search', Code],
 					['Tectonic Engine', setupStatus.tectonic_found, 'Local LaTeX compiler (download via script or cargo install)', Cpu],
 					['Base CV Uploaded', setupStatus.base_cv_uploaded, 'Master .tex file uploaded in CV Manager', User]

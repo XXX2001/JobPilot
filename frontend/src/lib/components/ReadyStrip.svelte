@@ -27,7 +27,7 @@
 				hint: monitor.enabled ? 'Add a source' : 'Monitor is off',
 				href: '/settings'
 			},
-			{ label: 'AI provider', ok: setup.llm_key_set, hint: 'Add an AI key', href: '/settings' },
+			{ label: 'AI provider', ok: setup.llm_key_set, hint: 'Log in to Claude Code or Codex', href: '/settings' },
 			{ label: 'CV', ok: setup.base_cv_uploaded, hint: 'Upload your CV', href: '/cv' }
 		];
 	}

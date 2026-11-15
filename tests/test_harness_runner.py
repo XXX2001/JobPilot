@@ -212,6 +212,54 @@ async def test_harness_disabled_without_url_keeps_old_path(monkeypatch, strategy
     run.assert_not_awaited()
 
 
+@pytest.mark.parametrize("strategy_cls", [AssistedApplyStrategy, AutoApplyStrategy])
+@pytest.mark.parametrize("failure", ["blocked", "password"])
+async def test_signin_block_returns_owner_outcome_without_older_filler(
+    monkeypatch, tab, strategy_cls, failure, caplog
+):
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import Locator
+
+    from backend.applier.harness import accounts
+
+    secret = "runner-account-secret-9842!"
+    monkeypatch.setattr(settings, "NTFY_URL", "https://ntfy.invalid/topic")
+    monkeypatch.setattr(accounts, "job_site_password", AsyncMock(return_value=secret))
+    monkeypatch.setattr(accounts, "find_account", AsyncMock(return_value=object()))
+    await tab.page.context.route(
+        "https://jobs.example.com/**",
+        lambda route: route.fulfill(
+            body=(FIXTURES / "account_signin.html")
+            .read_text()
+            .replace("<title>Sign in</title>", f"<title>{secret}</title>"),
+            content_type="text/html",
+        ),
+    )
+    if failure == "password":
+        monkeypatch.setattr(Locator, "fill", AsyncMock(side_effect=PlaywrightError(secret)))
+        monkeypatch.setattr(agent, "HANDOFF_TIMEOUT_S", 0.02)
+    else:
+        script(monkeypatch, [("ERROR", None)])
+    strategy = strategy_cls()
+    strategy._form_filler = SimpleNamespace(fill_only=AsyncMock(), fill_and_submit=AsyncMock())
+    result = await strategy.apply(apply_url=URL, job_id=42, email="ada@example.com")
+    assert result.status == "awaiting_user_submission"
+    assert "Sign-in needed on jobs.example.com" in result.message
+    assert "Form pre-filled" not in result.message
+    assert not tab.page.is_closed()
+    strategy._form_filler.fill_only.assert_not_awaited()
+    strategy._form_filler.fill_and_submit.assert_not_awaited()
+    from backend.api.ws import manager
+    from backend.monitor.notify import notify_text
+
+    if failure == "password":
+        manager.broadcast.assert_awaited_once()
+        notify_text.assert_awaited_once()
+    assert secret not in repr(result) + caplog.text
+    assert secret not in repr(manager.broadcast.await_args_list)
+    assert secret not in repr(notify_text.await_args_list)
+
+
 @pytest.mark.parametrize("attached", [True, False])
 async def test_assisted_leaves_tab_open_and_lists_generated_and_missing_fields(
     monkeypatch, tab, attached
@@ -821,7 +869,10 @@ async def test_applicant_linkedin_url_has_profile_length_bound():
             "https://www.linkedin.com/safety/go/?url=https%3A%2F%2Facme%2Econtactrh%2Ecom%2Fjobs%2F1&urlhash=x",
             "https://acme.contactrh.com/jobs/1",
         ),
-        ("https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fjobs.acme.io%2Fa", "https://jobs.acme.io/a"),
+        (
+            "https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fjobs.acme.io%2Fa",
+            "https://jobs.acme.io/a",
+        ),
         ("https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fwww.linkedin.com%2Ffeed", None),
         ("https://www.linkedin.com/safety/go/?url=javascript%3Aalert(1)", None),
         ("https://www.linkedin.com/safety/go/", None),
@@ -842,13 +893,16 @@ async def test_linkedin_offsite_apply_opens_company_page(browser):
 
     pages = {
         "https://jobs.acme.io/apply": (
-            '<form action="https://jobs.acme.io/search/"><input name="q" aria-label="Rechercher par mot-clé">'
+            '<form action="https://jobs.acme.io/search/">'
+            '<input name="q" aria-label="Rechercher par mot-clé">'
             '<input name="locationsearch" aria-label="Rechercher par lieu"></form>'
             '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>'
             '<a href="https://jobs.acme.io/apply/form">Postuler »</a>'
         ),
         "https://jobs.acme.io/apply/form": '<label>Email <input type="email" name="email"></label>',
-        "https://jobs.acme.io/other": '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>',
+        "https://jobs.acme.io/other": (
+            '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>'
+        ),
     }
 
     async def serve(route):
@@ -867,3 +921,142 @@ async def test_linkedin_offsite_apply_opens_company_page(browser):
     await runner._follow_offsite_apply(page)  # no apply verb link: stays put
     assert page.url == "https://jobs.acme.io/other"
     await context.close()
+
+
+@pytest.mark.parametrize(
+    "google",
+    [
+        "<button>Sign in with Google</button>",
+        '<iframe src="https://accounts.google.com/gsi/iframe/select"></iframe>',
+    ],
+)
+async def test_google_widgets_do_not_stop_offsite_posting_hops(browser, google):
+    context = await browser.new_context()
+    page = await context.new_page()
+
+    async def serve(route):
+        html = (
+            google + '<h1>Engineer</h1><a href="https://jobs.example.com/form">Apply</a>'
+            if route.request.url.endswith("/posting")
+            else "<label>Email<input type=email></label>"
+        )
+        await route.fulfill(body=html, content_type="text/html")
+
+    try:
+        await context.route("**/*", serve)
+        await page.goto("https://jobs.example.com/posting")
+        await runner._follow_offsite_apply(page)
+        assert page.url == "https://jobs.example.com/form"
+    finally:
+        await context.close()
+
+
+@pytest.mark.parametrize("strategy_cls", [AssistedApplyStrategy, AutoApplyStrategy])
+@pytest.mark.parametrize("failure", ["after_navigation", "during_click"])
+async def test_account_submit_evidence_prevents_fallback(monkeypatch, tab, strategy_cls, failure):
+    from backend.applier.harness import accounts
+
+    monkeypatch.setattr(
+        accounts, "job_site_password", AsyncMock(return_value="account-secret-987!")
+    )
+    monkeypatch.setattr(accounts, "find_account", AsyncMock(return_value=object()))
+    monkeypatch.setattr(accounts, "record_account", AsyncMock())
+
+    async def serve(route):
+        body = (
+            (FIXTURES / "account_signin.html").read_text()
+            if route.request.url == URL
+            else "<label>Motivation<textarea></textarea></label>"
+        )
+        await route.fulfill(body=body, content_type="text/html")
+
+    await tab.page.context.route("https://jobs.example.com/**", serve)
+    script(monkeypatch, [("TYPE_TEXT", "Email"), ("CLICK", "Connexion"), ("ERROR", None)])
+    if failure == "during_click":
+        act = agent.act
+
+        async def failing_act(page, snap, action, text=None):
+            await act(page, snap, action, text)
+            if action["kind"] == "click":
+                raise RuntimeError("settling failed")
+
+        monkeypatch.setattr(agent, "act", failing_act)
+    strategy = strategy_cls()
+    strategy._form_filler = SimpleNamespace(fill_only=AsyncMock(), fill_and_submit=AsyncMock())
+    result = await strategy.apply(apply_url=URL, job_id=None, email="ada@example.com")
+    assert result.status == "needs_verification"
+    strategy._form_filler.fill_only.assert_not_awaited()
+    strategy._form_filler.fill_and_submit.assert_not_awaited()
+
+
+async def test_get_signin_password_is_redacted_from_next_action_url(monkeypatch, tab):
+    from urllib.parse import quote_plus
+
+    from backend.applier.harness import accounts
+
+    password = "Secret / + é?&!"
+    monkeypatch.setattr(accounts, "job_site_password", AsyncMock(return_value=password))
+    monkeypatch.setattr(accounts, "find_account", AsyncMock(return_value=object()))
+    monkeypatch.setattr(accounts, "record_account", AsyncMock())
+
+    async def serve(route):
+        body = (
+            FIXTURES
+            / (
+                "account_probe_get_signin.html"
+                if route.request.url == URL
+                else "account_probe_after.html"
+            )
+        ).read_text()
+        await route.fulfill(body=body, content_type="text/html")
+
+    await tab.page.context.route("https://jobs.example.com/**", serve)
+    script(monkeypatch, [("TYPE_TEXT", "Email"), ("CLICK", "Sign in"), ("CLICK", "Postuler")])
+    result = await runner.harness_apply(
+        mode="assisted",
+        apply_url=URL,
+        job_id=None,
+        applicant=applicant(),
+        cv_pdf=None,
+        letter_pdf=None,
+    )
+    assert result.status == "awaiting_user_submission"
+    assert "pwd=" + quote_plus(password) in tab.page.url
+    assert "pwd=[redacted]" in result.next_action_url
+    assert password not in repr(result) and quote_plus(password) not in repr(result)
+
+
+async def test_signup_valider_stops_for_owner_even_in_auto_mode(monkeypatch, tab):
+    from backend.applier.harness import accounts
+
+    monkeypatch.setattr(
+        accounts, "job_site_password", AsyncMock(return_value="account-secret-987!")
+    )
+    monkeypatch.setattr(accounts, "find_account", AsyncMock(return_value=None))
+    monkeypatch.setattr(accounts, "new_accounts_today", AsyncMock(return_value=0))
+    monkeypatch.setattr(accounts, "record_account", AsyncMock())
+    await tab.page.context.route(
+        "https://jobs.example.com/**",
+        lambda route: route.fulfill(
+            body=(FIXTURES / "account_signup.html")
+            .read_text()
+            .replace(
+                "<button>Créer un compte</button>",
+                "<button>Valider</button>",
+            ),
+            content_type="text/html",
+        ),
+    )
+    script(monkeypatch, [("TYPE_TEXT", "Email"), ("CLICK", "Valider")])
+    outcome = await runner.harness_apply(
+        mode="auto",
+        apply_url=URL,
+        job_id=None,
+        applicant=applicant(),
+        cv_pdf=None,
+        letter_pdf=None,
+    )
+    assert outcome.status == "awaiting_user_submission"
+    assert "Sign-in needed on jobs.example.com" in outcome.message
+    assert tab.page.url == URL and not tab.page.is_closed()
+    accounts.record_account.assert_not_awaited()

@@ -1,0 +1,6 @@
+<!doctype html><meta charset="utf-8"><title>Verify email</title>
+<p>Check your email for a verification code</p>
+<form onsubmit="event.preventDefault(); if (code.value==='482913') location.href='/application'">
+  <label>Verification code<input id="code" autocomplete="one-time-code" required></label>
+  <button>Vérifier</button>
+</form>

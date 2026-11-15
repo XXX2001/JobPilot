@@ -26,6 +26,8 @@ from backend.config import settings
 from backend.latex.artifacts import resolve_base_source, sha256_file
 from backend.llm.factory import make_llm_client
 
+from . import accounts, mailbox
+from .account_flow import AccountFlow, account_page, site_host
 from .agent import HarnessBlocked, build_goal, profile_slots, run_harness
 from .decide import DecisionError, SystemOneClient, classify_page
 from .execute import act
@@ -105,7 +107,7 @@ async def _follow_offsite_apply(page) -> None:
         logger.info("LinkedIn posting applies offsite; opening %s", urlsplit(target).hostname)
         await page.goto(target, wait_until="domcontentloaded", timeout=20_000)
     for _ in range(_MAX_POSTING_HOPS):
-        if await page.evaluate(_HAS_APPLICATION_FIELDS):
+        if await page.evaluate(_HAS_APPLICATION_FIELDS) or await account_page(page):
             return  # a form is here
         href = await page.evaluate(_POSTING_APPLY_LINK)
         if not href or _is_linkedin(href):
@@ -286,7 +288,8 @@ async def _submit(page, snap, action):
 
 
 async def _review(
-    page, result, *, job_id, documents, confirm_event, cancel_event, on_review, on_get_patches
+    page, result, *, job_id, documents, confirm_event, cancel_event, on_review, on_get_patches,
+    clean=lambda value: value,
 ):
     confirm_event = confirm_event or asyncio.Event()
     cancel_event = cancel_event or asyncio.Event()
@@ -322,9 +325,9 @@ async def _review(
         note = "Some reviewed fields are no longer readable; check the open tab."
         await _publish_review(
             job_id,
-            fields,
+            clean(fields),
             await PlaywrightFormFiller._screenshot(page),
-            f"{_summary(result)} Fields: {inventory}. {note}",
+            clean(f"{_summary(result)} Fields: {inventory}. {note}"),
             on_review=on_review,
         )
         return RESULT_AWAITING_USER, note
@@ -335,9 +338,9 @@ async def _review(
         confirm_event.clear()
         await _publish_review(
             job_id,
-            fields,
+            clean(fields),
             await PlaywrightFormFiller._screenshot(page),
-            f"{_summary(result)} Fields: {inventory}. {note}".strip(),
+            clean(f"{_summary(result)} Fields: {inventory}. {note}".strip()),
             on_review=on_review,
         )
         try:
@@ -438,8 +441,22 @@ async def harness_apply(
     pw = context = page = client = None
     attached = keep_open = started = False
     result = None
+    account_flow = AccountFlow(password=None, email=applicant.email, company="")
+
+    def signin_result(host, note=""):
+        return ApplicationResult(
+            status=RESULT_AWAITING_USER,
+            method=mode,
+            next_action_url=account_flow.clean(page.url if page is not None else apply_url),
+            message=account_flow.clean(f"Sign-in needed on {host}" + (f": {note}" if note else "")),
+        )
+
     try:
         title, company, cv_text = await _job_context(job_id)
+        account_flow = AccountFlow(
+            password=await accounts.job_site_password(), email=applicant.email, company=company,
+            registry=accounts, mailbox=mailbox,
+        )
         try:
             extra = json.loads(applicant.additional_answers_json or "{}")
         except (ValueError, TypeError):
@@ -523,17 +540,22 @@ async def harness_apply(
             from backend.monitor.notify import notify_text
 
             try:
-                site = urlsplit(page.url).hostname or site_profile_key(apply_url)
+                site = account_flow.clean(
+                    urlsplit(page.url).hostname or site_profile_key(apply_url)
+                )
+                message = account_flow.clean(message)
                 if kind == "captcha":
                     frame = CaptchaDetected(site=site, job_id=job_id, message=message)
                 else:
                     frame = LoginRequired(
                         site=site,
-                        browser_window_title=await page.title(),
+                        browser_window_title=account_flow.clean(await page.title()),
                     )
                 await manager.broadcast(frame)
             except Exception as exc:
-                logger.warning("Could not broadcast harness hand-off: %s", exc)
+                logger.warning(
+                    "Could not broadcast harness hand-off: %s", account_flow.clean(str(exc))
+                )
             if settings.NTFY_URL:
                 await notify_text("Login needed" if kind == "login" else "Captcha", message)
 
@@ -555,7 +577,11 @@ async def harness_apply(
             cancel_event=cancel_event,
             max_actions=settings.HARNESS_MAX_ACTIONS,
             notify=notify,
+            account_flow=account_flow,
         )
+        if result.login_host:
+            keep_open = True
+            return signin_result(result.login_host, result.login_note)
         if result.stop == "already_received":
             evidence = (
                 "page already shows a confirmation"
@@ -581,7 +607,7 @@ async def harness_apply(
             return ApplicationResult(
                 status=RESULT_AWAITING_USER,
                 method=mode,
-                next_action_url=page.url,
+                next_action_url=account_flow.clean(page.url),
                 message=f"Review the open tab and submit manually when ready. {_summary(result)}",
             )
         status, evidence = await _review(
@@ -593,14 +619,15 @@ async def harness_apply(
             cancel_event=cancel_event,
             on_review=on_review,
             on_get_patches=on_get_patches,
+            clean=account_flow.clean,
         )
         keep_open = status == RESULT_AWAITING_USER
         return ApplicationResult(
             status=status,
             method=mode,
-            evidence=evidence,
-            message=evidence,
-            next_action_url=page.url if keep_open else "",
+            evidence=account_flow.clean(evidence),
+            message=account_flow.clean(evidence),
+            next_action_url=account_flow.clean(page.url) if keep_open else "",
         )
     except Exception as exc:
         partial = getattr(exc, "result", None) or result
@@ -608,14 +635,26 @@ async def harness_apply(
             return ApplicationResult(
                 status=RESULT_NEEDS_VERIFICATION,
                 method=mode,
-                evidence=f"Harness interrupted: {exc}"[:300],
+                evidence=account_flow.clean(f"Harness interrupted: {exc}")[:300],
                 message="Submission cannot be ruled out — check the site before applying again.",
             )
         if cancel_event is not None and cancel_event.is_set():
             return ApplicationResult(
                 status=RESULT_CANCELLED, method=mode, message="Cancelled by user."
             )
-        logger.warning("Harness stopped before a possible submit; falling back: %s", exc)
+        host = getattr(partial, "login_host", "")
+        if not host and page is not None and not page.is_closed():
+            try:
+                if await account_page(page, after_signup=account_flow.signup_since is not None):
+                    host = site_host(page.url)
+            except Exception:
+                pass
+        if host:
+            keep_open = True
+            return signin_result(host, getattr(partial, "login_note", ""))
+        logger.warning(
+            "Harness stopped before a possible submit; falling back: %s", account_flow.clean(str(exc))
+        )
         return None
     finally:
         if client is not None:

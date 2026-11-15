@@ -7,12 +7,27 @@ https://github.com/browser-use/jev-ultrafast
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from urllib.parse import urlparse
+
+from playwright.async_api import Page
 
 from backend.applier.captcha_handler import check_and_handle_captcha
 
+from .account_flow import (
+    OPT_IN_WORDS,
+    SIGNIN_WORDS,
+    SIGNUP_WORDS,
+    VERIFY_WORDS,
+    AccountError,
+    AccountFlow,
+    AccountPage,
+    account_allowed,
+    account_field,
+    account_page,
+    opt_in_click,
+    site_host,
+)
 from .decide import DecisionError, RequestTooLong, classify_page, decide, pick_slot
 from .execute import StalePage, act, attach
 from .snapshot import ADVANCE_PATTERN, SUBMIT_PATTERN, fresh, observe
@@ -139,19 +154,22 @@ class HarnessResult:
     # Answers the model picked by clicking (dropdown options, radios, checkboxes): shown to the
     # owner for review, since they can be claims ("Right to work: Yes").
     chosen: list[str] = field(default_factory=list)
+    login_host: str = ""
+    login_note: str = ""
 
 
 class _LimitedClient:
-    def __init__(self, client):
+    def __init__(self, client, clean=lambda value: value):
         self.client = client
         self.model = client.model
         self.requests = 0
+        self.clean = clean
 
     async def post(self, body):
         if self.requests >= _MAX_REQUESTS:
             raise HarnessStuck("Reached the model request limit")
         self.requests += 1
-        return await self.client.post(body)
+        return await self.client.post(self.clean(body))
 
 
 def _identity(snap, action):
@@ -206,7 +224,7 @@ def _advance_only(action):
 
 @dataclass
 class _Run:
-    page: object
+    page: Page
     goal: str
     slots: dict
     documents: dict[str, Path]
@@ -216,6 +234,8 @@ class _Run:
     cancel_event: asyncio.Event | None
     max_actions: int
     notify: Callable[[str, str], Awaitable[None]] | None
+    account_flow: AccountFlow
+    account: AccountPage | None = None
     result: HarnessResult = field(
         default_factory=lambda: HarnessResult("ready", None, {}, [], [], [], 0)
     )
@@ -297,9 +317,13 @@ class _Run:
             changed = True
             snap = await observe(self.page)
 
-    async def handoff(self, kind):
+    async def handoff(self, kind, note=""):
+        if kind == "login_wall":
+            self.result.login_host = self.account_flow.clean(site_host(self.page.url))
+            self.result.login_note = self.account_flow.clean(note)
         loop = asyncio.get_running_loop()
-        remaining = self.timeout.when() - loop.time() if self.timeout is not None else None
+        deadline = self.timeout.when() if self.timeout is not None else None
+        remaining = deadline - loop.time() if deadline is not None else None
         if self.timeout is not None:
             self.timeout.reschedule(None)
         try:
@@ -309,24 +333,32 @@ class _Run:
                 ):
                     return
                 if self.notify is not None:
-                    host = urlparse(self.page.url).hostname or self.page.url
+                    host = self.account_flow.clean(site_host(self.page.url))
                     await self.notify(
                         "login" if kind == "login_wall" else "captcha",
-                        f"{'Login needed' if kind == 'login_wall' else 'Captcha'} on {host}",
+                        f"{'Sign-in needed' if kind == 'login_wall' else 'Captcha'} on {host}"
+                        + (f": {self.account_flow.clean(note)}" if note else ""),
                     )
                 while True:
                     self.check_limits()
                     await asyncio.sleep(_POLL_SECONDS)
                     snap = await observe(self.page)
+                    if kind == "login_wall" and await account_page(
+                        self.page, after_signup=self.account_flow.signup_since is not None
+                    ) is not None:
+                        continue
                     # Owner time and page-kind-only polls are outside run budgets.
-                    current, p = await classify_page(self.client.client, snap["text"])
+                    current, p = await classify_page(
+                        self.client.client, self.account_flow.clean(snap["text"])
+                    )
                     if current != kind or p < 0.6:
+                        self.result.login_host = self.result.login_note = ""
                         return
         except TimeoutError as exc:
             raise HarnessBlocked("Owner hand-off timed out") from exc
         finally:
             if self.timeout is not None:
-                self.timeout.reschedule(loop.time() + remaining)
+                self.timeout.reschedule(loop.time() + remaining if remaining is not None else None)
 
     def form_context(self, snap, decision):
         return bool(
@@ -366,6 +398,23 @@ class _Run:
     def click_stop(self, snap, decision):
         action = decision.action
         label = action["full_label"].strip()
+        if self.account is not None:
+            # Check both the accessible name and the full visible text. Labels with
+            # application verbs cannot borrow an account control's allowed name.
+            labels = [label for label in _click_labels(action) if label]
+            if any(OPT_IN_WORDS.search(label) for label in labels):
+                return "skip"
+            if action.get("role") in {"checkbox", "switch"} and action.get("checked") == "true":
+                return "skip"
+            if labels and all(
+                SIGNIN_WORDS.fullmatch(s) or SIGNUP_WORDS.fullmatch(s) for s in labels
+            ):
+                return None
+            # Verification verbs are safe only with one code input on the whole page.
+            if self.account.code_only and labels and all(
+                VERIFY_WORDS.fullmatch(s) for s in labels
+            ):
+                return None
         on_form = self.form_context(snap, decision)
         identity = _identity(snap, action)
         strict = _matches(action, _STRICT_SUBMIT)
@@ -436,9 +485,9 @@ class _Run:
             start = max(0, frame_text.find(action["label"]) - 500)
             value = await self.writer(
                 {
-                    "label": action["label"],
-                    "page_text": frame_text[start : start + 1500],
-                    "page_title": snap["title"],
+                    "label": self.account_flow.clean(action["label"]),
+                    "page_text": self.account_flow.clean(frame_text[start : start + 1500]),
+                    "page_title": self.account_flow.clean(snap["title"]),
                     "goal": self.goal,
                     "job_id": self.job_id,
                     "profile": {key: value for key, (_, value) in self.slots.items() if value},
@@ -451,6 +500,8 @@ class _Run:
             _append_once(self.result.needs_you, action["label"])
         else:
             if action.get("current_value", action.get("value", "")) != value:
+                if not await account_field(snap, action):
+                    self.account_flow.application_started = True
                 await act(self.page, snap, action, value)
                 executed = True
             self.result.typed[f"{action['frame']}:{action['node']}"] = {
@@ -470,6 +521,21 @@ class _Run:
         while True:
             self.check_limits()
             try:
+                if self.result.uploads:
+                    self.account_flow.application_started = True
+                self.account, terms, changed = await self.account_flow.prepare(self.page)
+                self.result.login_host = (
+                    self.account_flow.clean(site_host(self.page.url)) if self.account else ""
+                )
+                if not self.account:
+                    self.result.login_note = ""
+                for term in terms:
+                    _append_once(self.result.chosen, term)
+                if changed:
+                    self.result.steps += 1
+                    stale, unchanged = 0, 0
+                    previous = None
+                    continue
                 snap = await observe(self.page)
                 # A site's job search box is never part of the application (live: FANUC's
                 # "Rechercher par lieu" got the owner's city).
@@ -496,8 +562,10 @@ class _Run:
                     )
                     previous = None
                     if unchanged >= 3:
-                        if self.form_context(snap, last_decision) and await self.form_complete(
-                            snap
+                        if (
+                            not self.account
+                            and self.form_context(snap, last_decision)
+                            and await self.form_complete(snap)
                         ):
                             if await self.scroll_for_more(snap):
                                 unchanged = 0
@@ -519,7 +587,17 @@ class _Run:
                         )
                     ],
                 }
-                decision = await decide(self.client, offered, self.goal, self.history)
+                decision_goal = self.goal
+                if self.account:
+                    mode = "sign in" if self.account_flow.mode == "signin" else "sign up"
+                    decision_goal = (
+                        f"Complete this isolated account form to {mode}. "
+                        "Password and verification inputs are handled by code. Fill the other "
+                        "profile fields, then click the sign-in, create-account or verify-code "
+                        "control. Leave marketing, newsletter and job alert opt-ins unticked. "
+                        "After leaving this account form, resume the application goal: " + self.goal
+                    )
+                decision = await decide(self.client, offered, decision_goal, self.history)
                 action = decision.action
                 await self.require_fresh(snap, action)
                 last_decision = decision
@@ -530,7 +608,7 @@ class _Run:
                     a["kind"] in ("fill", "select") for a in offered["actions"]
                 )
                 if (
-                    decision.page_kind == "login_wall"
+                    (decision.page_kind == "login_wall" and self.account is None)
                     or (decision.page_kind == "captcha" and not fillable)
                 ) and decision.page_kind_p >= 0.6:
                     await self.handoff(decision.page_kind)
@@ -544,12 +622,18 @@ class _Run:
                     stale, unchanged = 0, 0
                     continue  # Upload events may have changed fields or navigated; decide again.
                 if decision.operation == "DONE":
+                    if self.account:
+                        await self.handoff("login_wall", "Complete sign-in in the open tab")
+                        continue
                     if not on_form:
                         raise HarnessBlocked("DONE outside an application form")
                     if await self.scroll_for_more(snap):
                         continue
                     return self.ready(snap, decision)
-                if decision.operation == "WAIT" and on_form and await self.form_complete(snap):
+                if (
+                    decision.operation == "WAIT" and not self.account
+                    and on_form and await self.form_complete(snap)
+                ):
                     if await self.scroll_for_more(snap):
                         continue
                     await self.require_fresh(snap)
@@ -561,9 +645,24 @@ class _Run:
                 text = None
                 skipped = False
                 if decision.operation == "CLICK":
-                    stop = self.click_stop(snap, decision)
+                    # Recheck isolation immediately before relaxing the click guard.
+                    self.account = (
+                        await account_page(
+                            self.page, after_signup=self.account_flow.signup_since is not None
+                        )
+                        if self.account and account_allowed(self.page.url)
+                        and not self.account_flow.application_started and not self.result.uploads
+                        else None
+                    )
+                    stop = (
+                        "skip" if self.account and await opt_in_click(snap, action)
+                        else self.click_stop(snap, decision)
+                    )
                     if stop == "skip":
-                        if await self.form_complete(snap) and not await self.scroll_for_more(snap):
+                        if (
+                            not self.account and await self.form_complete(snap)
+                            and not await self.scroll_for_more(snap)
+                        ):
                             await self.require_fresh(snap, action)
                             return self.ready(snap, decision)
                         self.skipped_clicks.add(_identity(snap, action))
@@ -581,6 +680,8 @@ class _Run:
                         self.skipped_clicks.add(_identity(snap, action))
                         skipped = True
                     else:
+                        if self.account:
+                            await self.account_flow.before_click(self.page, action, self.account)
                         # Input may succeed even when navigation/settling raises.
                         self.result.clicked += 1
                         # Preserve evidence for the runner's no-fallback-after-submit rule.
@@ -642,6 +743,10 @@ class _Run:
                 stale += 1
                 if stale >= 3:
                     raise HarnessStuck("Three consecutive stale decisions") from exc
+            except AccountError as exc:
+                await self.handoff("login_wall", str(exc))
+                stale, unchanged = 0, 0
+                previous = None
 
 
 async def run_harness(
@@ -657,19 +762,24 @@ async def run_harness(
     max_actions: int = 60,
     notify: Callable[[str, str], Awaitable[None]] | None = None,
     wall_clock_s: float = 300,
+    account_flow: AccountFlow | None = None,
 ) -> HarnessResult:
     """Consume and close the decision client; leave the caller's page and context open."""
+    account_flow = account_flow or AccountFlow(
+        password=None, email=slots.get("email", ("", ""))[1], company=""
+    )
     run = _Run(
         page,
         goal,
         slots,
         documents,
         writer,
-        _LimitedClient(client),
+        _LimitedClient(client, account_flow.clean),
         job_id,
         cancel_event,
         max_actions,
         notify,
+        account_flow,
     )
     tasks = []
 
@@ -706,10 +816,18 @@ async def run_harness(
     except TimeoutError as exc:
         raise HarnessStuck("Harness wall-clock time limit reached", result=run.result) from exc
     except HarnessBlocked as exc:
+        if account_flow.clean(str(exc)) != str(exc):
+            raise HarnessBlocked(account_flow.clean(str(exc)), result=run.result) from None
         exc.result = run.result
         raise
     except asyncio.CancelledError as exc:
         exc.result = run.result
         raise
     except Exception as exc:
-        raise HarnessBlocked(str(exc), result=run.result) from exc
+        safe = account_flow.clean(str(exc))
+        if safe != str(exc):
+            raise HarnessBlocked(safe, result=run.result) from None
+        raise HarnessBlocked(safe, result=run.result) from exc
+    finally:
+        for item in fields(run.result):
+            setattr(run.result, item.name, account_flow.clean(getattr(run.result, item.name)))

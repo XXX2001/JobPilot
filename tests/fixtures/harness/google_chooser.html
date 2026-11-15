@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>Choose an account</title>
+<h1>Choose an account</h1>
+<div role="button" id="broad" onclick="window.broadClicked=true">
+  <div role="link" id="other">Other account <span>other@example.com</span></div>
+  <div role="link" id="profile">Ada Lovelace <span>ADA@EXAMPLE.COM</span></div>
+</div>
+<button>Use another account</button>
+<script>
+const options = new URLSearchParams(location.search);
+if (options.has('profile')) document.querySelector('#profile span').textContent=options.get('profile');
+for (const row of document.querySelectorAll('[role=link]')) row.onclick=event => {
+  event.stopPropagation();
+  options.set('selected',row.querySelector('span').textContent);
+  location.href='/consent?' + options;
+};
+</script>

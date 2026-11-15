@@ -1,0 +1,13 @@
+<!doctype html><meta charset="utf-8"><title>Continue to Example</title>
+<h1>Sign in to Example</h1>
+<button onclick="window.wrongConsent=true">Continue with another account</button>
+<button onclick="window.wrongConsent=true">Allow and apply</button>
+<button id="continue">Continue</button>
+<script>
+const options=new URLSearchParams(location.search);
+document.querySelector('#continue').textContent=options.get('consent') || 'Continue';
+document.querySelector('#continue').onclick=() => {
+  options.set('selected', options.get('selected') || 'ada@example.com');
+  location.href='https://careers.example.com/google_callback?' + options;
+};
+</script>

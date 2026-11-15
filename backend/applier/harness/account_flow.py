@@ -1,5 +1,6 @@
-"""Code-owned password account preparation; no secret enters the decision model."""
+"""Code-owned account preparation; no secret enters the decision model."""
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,6 +26,23 @@ _SIGNUP = (
 SIGNIN_WORDS = re.compile(rf"^(?:{_SIGNIN})$", re.I)
 SIGNUP_WORDS = re.compile(rf"^(?:{_SIGNUP})$", re.I)
 VERIFY_WORDS = re.compile(r"^(?:vérifier|verify|confirm|bestätigen)$", re.I)
+GOOGLE_BUTTON_WORDS = re.compile(
+    r"^(?:sign in with Google|continue with Google|continuer avec Google|"
+    r"se connecter avec Google|mit Google anmelden|weiter mit Google)$",
+    re.I,
+)
+_GOOGLE_CONSENT_WORDS = re.compile(
+    r"^(?:Continue|Continuer|Autoriser|Allow|Weiter|Zulassen)$", re.I
+)
+_GOOGLE_CHALLENGE = re.compile(
+    r"2[- ]?(?:step|factor)|two[- ](?:step|factor)|verify it['’]s you|"
+    r"validez votre identit[eé]|validation en deux [eé]tapes|"
+    r"best[aä]tigung in zwei schritten|captcha|not a robot|je ne suis pas un robot",
+    re.I,
+)
+_EMAIL_IN_TEXT = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]+@[\w.-]+", re.I)
+_GOOGLE_START_TIMEOUT_S = 15
+_GOOGLE_FINISH_TIMEOUT_S = 30
 _SIGNIN_ONLY = SIGNIN_WORDS
 _SIGNUP_ONLY = SIGNUP_WORDS
 OPT_IN_WORDS = re.compile(
@@ -94,21 +112,31 @@ _DOM = r"""
         '[role=textbox], [role=combobox], [role=radio], [role=switch], ' +
         '[role=slider], [role=spinbutton]')
         .filter(e => !e.matches('input[type=submit], input[type=button], input[type=reset]'));
-"""
+    const googleControl = e => {
+        const names = [e.getAttribute('aria-label'), e.innerText, e.title,
+            ['submit','button'].includes(e.type) ? e.value : '',
+            (e.getAttribute('aria-labelledby') || '').split(/\s+/).map(id =>
+                e.getRootNode().getElementById?.(id)?.textContent || '').join(' ')]
+            .filter(Boolean).map(s => s.replace(/\s+/g, ' ').trim());
+        return names.some(s =>
+            /__GOOGLE_BUTTON_WORDS__/i.test(s)) &&
+            !names.some(s => /\bapply\b|postul|candidat|bewerben|submit/i.test(s));
+    };
+""".replace("__GOOGLE_BUTTON_WORDS__", GOOGLE_BUTTON_WORDS.pattern)
 ACCOUNT_PAGE_JS = (
     "() => {"
     + _DOM
     + r"""
     const passwords = query(document, 'input[type=password]').filter(visible);
-    const controls = query(document, 'a, button, input[type=submit], [role=button]')
-        .filter(visible).map(label);
+    const controls = query(document, 'a, button, input[type=submit], input[type=button], ' +
+        '[role=button], [role=link]')
+        .filter(visible);
     return {
         has_password: passwords.length > 0, password_inputs: passwords.length,
-        google_button: controls.some(t => /google/i.test(t) &&
-            /sign.?in|continue|connect|connexion|anmelden|weiter/i.test(t)) ||
+        google_button: controls.some(googleControl) ||
             query(document, 'iframe').some(e => visible(e) &&
                 /^https:\/\/accounts\.google\.com\/gsi\//i.test(e.src)),
-        signup_link: controls.some(t =>
+        signup_link: controls.map(label).some(t =>
             /cr[ée]er un compte|s['’]inscrire|create (an )?account/i.test(t) ||
             /sign.?up|register|registrieren/i.test(t)),
         code_field: query(document, 'input').some(code),
@@ -128,6 +156,7 @@ ACCOUNT_PAGE_JS = (
 _LABEL_JS = "e => {" + _DOM + "return label(e); }"
 _CODE_JS = "e => {" + _DOM + "return code(e); }"
 _ACCOUNT_FIELD_JS = "e => {" + _DOM + "return accountField(e); }"
+_GOOGLE_CONTROL_JS = "e => {" + _DOM + "return googleControl(e); }"
 
 
 class AccountError(RuntimeError):
@@ -212,7 +241,9 @@ async def _writable_frames(page: Page) -> list[Frame]:
     ]
 
 
-async def account_page(page: Page, *, after_signup: bool = False) -> AccountPage | None:
+async def _account_page(
+    page: Page, *, after_signup: bool = False, google: bool = False, strict: bool = False
+) -> AccountPage | None:
     """Reject non-account fields in every frame, including hidden frames and shadow roots."""
     states = []
     input_count = code_count = 0
@@ -226,6 +257,8 @@ async def account_page(page: Page, *, after_signup: bool = False) -> AccountPage
             if _origin(frame) == _origin(page.main_frame) and await _visible_frame(frame):
                 states.append(state)
     except PlaywrightError:
+        if strict:
+            raise
         return None  # An unreadable frame cannot justify relaxing the submit guard.
     if not states:
         return None
@@ -237,9 +270,163 @@ async def account_page(page: Page, *, after_signup: bool = False) -> AccountPage
     acct = AccountPage(**merged)
     return (
         acct
-        if (acct.has_password or (after_signup and (acct.code_field or acct.check_email_text)))
+        if (
+            acct.has_password
+            or (google and acct.google_button)
+            or (after_signup and (acct.code_field or acct.check_email_text))
+        )
         else None
     )
+
+
+def google_host(url: str) -> bool:
+    return bool(re.search(r"(?:^|\.)google\.[^.]+(?:\.[^.]+)?$", site_host(url)))
+
+
+async def _google_session(page: Page, email: str) -> bool:
+    return bool(email.strip()) and any(
+        cookie.get("name") == "SID" and cookie.get("value")
+        for cookie in await page.context.cookies("https://mail.google.com")
+    )
+
+
+async def account_page(
+    page: Page, *, after_signup: bool = False, email: str = ""
+) -> AccountPage | None:
+    return await _account_page(
+        page, after_signup=after_signup, google=await _google_session(page, email)
+    )
+
+
+async def _google_button(page: Page) -> Locator | None:
+    for frame in await _writable_frames(page):
+        for control in await frame.locator(
+            "button, a, input[type=submit], input[type=button], [role=button], [role=link]"
+        ).all():
+            if await control.is_visible() and await control.evaluate(_GOOGLE_CONTROL_JS):
+                return control
+    for frame in page.frames:
+        if frame.url.startswith("https://accounts.google.com/gsi/") and await _visible_frame(frame):
+            for control in await frame.get_by_role("button").all():
+                if await control.is_visible():
+                    return control
+    return None
+
+
+async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) -> bool:
+    """False means human input is required; never enter text on Google's pages."""
+    text = ""
+    for frame in page.frames:
+        if await frame.locator(
+            'input[type=password], input[autocomplete~="one-time-code" i]'
+        ).count():
+            return False
+        if await frame.locator("iframe[src*=captcha], [class*=captcha], [id*=captcha]").count():
+            return False
+        text += await frame.locator("body").inner_text(timeout=1000)
+    if _GOOGLE_CHALLENGE.search(text):
+        return False
+    identity = (page.url, text)
+    if identity in clicked:
+        return True
+    chooser = bool(
+        re.search(
+            r"choose (?:an? )?account|choisir un compte|s[ée]lectionnez un compte|konto auswählen",
+            text,
+            re.I,
+        )
+    )
+    if not chooser:
+        for control in await page.get_by_role("button", name=_GOOGLE_CONSENT_WORDS).all():
+            if await control.is_visible():
+                await control.click(timeout=1500)
+                clicked.add(identity)
+                return True
+        return True
+    controls = await page.locator(
+        "button, a, [role=button], [role=link], [data-identifier], [data-email], li"
+    ).all()
+    # Innermost controls first; a chooser container with multiple emails is never eligible.
+    for control in reversed(controls):
+        if not await control.is_visible():
+            continue
+        emails = _EMAIL_IN_TEXT.findall(await control.inner_text())
+        if len(emails) == 1 and emails[0].casefold() == email.strip().casefold():
+            await control.click(timeout=1500)
+            clicked.add(identity)
+            return True
+    return False
+
+
+async def google_sign_in(page: Page, email: str) -> bool:
+    """Complete an existing Google session using only exact account and consent clicks."""
+    if not account_allowed(page.url) or not await _google_session(page, email):
+        return False
+    acct = await _account_page(page, google=True)
+    if acct is None or not acct.google_button:
+        return False
+    original_host = site_host(page.url)
+    opened: list[Page] = []
+    context = page.context
+
+    def track_popup(other: Page) -> None:
+        opened.append(other)
+
+    context.on("page", track_popup)
+    loop = asyncio.get_running_loop()
+    start_deadline = loop.time() + _GOOGLE_START_TIMEOUT_S
+    auth: Page | None = None
+    clicked: set[tuple[str, str]] = set()
+    try:
+        async with asyncio.timeout(_GOOGLE_FINISH_TIMEOUT_S):
+            button = await _google_button(page)
+            if button is None:
+                return False
+            await button.click(timeout=1500)
+            while not page.is_closed():
+                if auth is None:
+                    candidates = [page] + [
+                        other
+                        for other in opened
+                        if not other.is_closed() and await other.opener() == page
+                    ]
+                    auth = next(
+                        (
+                            other
+                            for other in candidates
+                            if other.url.startswith("https://accounts.google.com/")
+                        ),
+                        None,
+                    )
+                    if auth is None and loop.time() >= start_deadline:
+                        return False
+                try:
+                    if auth is not None:
+                        if not auth.is_closed() and auth.url.startswith(
+                            "https://accounts.google.com/"
+                        ):
+                            if not await _google_step(auth, email, clicked):
+                                return False
+                        # Sites may replace their form with a loading panel before OAuth ends.
+                        if (
+                            (auth.is_closed() or site_host(auth.url) == original_host)
+                            and site_host(page.url) == original_host
+                            and await page.evaluate(
+                                "() => document.readyState !== 'loading' && "
+                                "!!document.body?.innerText.trim()"
+                            )
+                            and await _account_page(page, google=True, strict=True) is None
+                        ):
+                            return True
+                except PlaywrightError:
+                    # A chooser/consent navigation may invalidate its former document.
+                    pass
+                await asyncio.sleep(0.05)
+    except (PlaywrightError, TimeoutError):
+        return False
+    finally:
+        context.remove_listener("page", track_popup)
+    return False
 
 
 async def fill_passwords(page: Page, password: str) -> int:
@@ -304,6 +491,18 @@ async def account_field(snap: dict, action: dict) -> bool:
     )
 
 
+async def google_click(snap: dict, action: dict) -> bool:
+    """Recognize the same control after failure so the model cannot reopen OAuth."""
+    frame = snap["_frame_refs"][action["frame"]]
+    if frame.url.startswith("https://accounts.google.com/gsi/"):
+        return True
+    return await frame.evaluate(
+        "node => { const e = window.__jobpilotHarness?.nodes.get(node); "
+        f"return !!e?.isConnected && ({_GOOGLE_CONTROL_JS})(e); }}",
+        action["node"],
+    )
+
+
 async def _page_text(page: Page) -> str:
     return "\n".join(
         [await frame.locator("body").inner_text() for frame in await _writable_frames(page)]
@@ -328,6 +527,8 @@ class AccountFlow:
     verified: bool = field(default=False, init=False)
     failed: bool = field(default=False, init=False)
     application_started: bool = field(default=False, init=False)
+    google_attempted: bool = field(default=False, init=False)
+    google_failed: bool = field(default=False, init=False)
     before_text: str = field(default="", init=False, repr=False)
     form_switches: set[tuple[str, str, str]] = field(default_factory=set, init=False, repr=False)
 
@@ -417,13 +618,22 @@ class AccountFlow:
             raise AccountHandoff("No sign-up control is available")
         return False
 
-    async def prepare(self, page: Page) -> tuple[AccountPage | None, list[str], bool]:
-        """Return account detection, chosen terms, and whether to observe a new page."""
-        acct = (
+    async def detect(self, page: Page) -> AccountPage | None:
+        return (
             None
             if self.application_started
-            else await account_page(page, after_signup=self.signup_since is not None)
+            else await _account_page(
+                page,
+                after_signup=self.signup_since is not None,
+                google=self.google_failed or await _google_session(page, self.email),
+            )
         )
+
+    async def prepare(self, page: Page) -> tuple[AccountPage | None, list[str], bool]:
+        """Return account detection, chosen terms, and whether to observe a new page."""
+        if google_host(page.url):
+            raise AccountHandoff("Use your existing browser sign-in")
+        acct = await self.detect(page)
         if (acct is not None or self.attempted) and not account_allowed(page.url):
             raise AccountHandoff("Use your existing browser sign-in")
         if self.pending:
@@ -456,6 +666,40 @@ class AccountFlow:
                 self.attempted = self.pending = False
                 self.signup_since = None
             return None, [], False
+        if (
+            acct.google_button
+            and not self.google_attempted
+            and await _google_session(page, self.email)
+        ):
+            try:
+                self.key = self.registry.site_key(page.url)
+            except ValueError:
+                raise AccountHandoff("The account site could not be identified") from None
+            self.login_url = page.url
+            self.mode = "signin" if await self.registry.find_account(self.key) else "signup"
+            await self._cap()
+            self.google_attempted = True
+            if await google_sign_in(page, self.email):
+                await self.registry.record_account(
+                    self.key,
+                    method="google",
+                    email=self.email,
+                    status="signed_in",
+                    login_url=self.clean(self.login_url),
+                )
+                self.attempted = self.pending = False
+                self.signup_since = None
+                return None, [], True
+            self.google_failed = True
+            if acct.has_password and site_host(page.url) != site_host(self.login_url):
+                await page.goto(self.login_url, wait_until="domcontentloaded")
+            acct = (
+                await account_page(page)
+                if site_host(page.url) == site_host(self.login_url)
+                else None
+            )
+            if acct is None or not acct.has_password:
+                raise AccountHandoff("Complete sign-in in the open tab")
         if (
             not self.password
             or not self.email

@@ -25,6 +25,8 @@ from .account_flow import (
     account_allowed,
     account_field,
     account_page,
+    google_click,
+    google_host,
     opt_in_click,
     site_host,
 )
@@ -318,8 +320,9 @@ class _Run:
             snap = await observe(self.page)
 
     async def handoff(self, kind, note=""):
+        host = self.account_flow.clean(site_host(self.account_flow.login_url or self.page.url))
         if kind == "login_wall":
-            self.result.login_host = self.account_flow.clean(site_host(self.page.url))
+            self.result.login_host = host
             self.result.login_note = self.account_flow.clean(note)
         loop = asyncio.get_running_loop()
         deadline = self.timeout.when() if self.timeout is not None else None
@@ -333,7 +336,6 @@ class _Run:
                 ):
                     return
                 if self.notify is not None:
-                    host = self.account_flow.clean(site_host(self.page.url))
                     await self.notify(
                         "login" if kind == "login_wall" else "captcha",
                         f"{'Sign-in needed' if kind == 'login_wall' else 'Captcha'} on {host}"
@@ -342,11 +344,14 @@ class _Run:
                 while True:
                     self.check_limits()
                     await asyncio.sleep(_POLL_SECONDS)
-                    snap = await observe(self.page)
-                    if kind == "login_wall" and await account_page(
-                        self.page, after_signup=self.account_flow.signup_since is not None
-                    ) is not None:
+                    if google_host(self.page.url):
                         continue
+                    if (
+                        kind == "login_wall"
+                        and await self.account_flow.detect(self.page) is not None
+                    ):
+                        continue
+                    snap = await observe(self.page)
                     # Owner time and page-kind-only polls are outside run budgets.
                     current, p = await classify_page(
                         self.client.client, self.account_flow.clean(snap["text"])
@@ -573,6 +578,10 @@ class _Run:
                             await self.require_fresh(snap)
                             return self.ready(snap, last_decision)
                         raise HarnessStuck("Three unchanged steps made no progress")
+                if self.account_flow.google_failed:
+                    for candidate in snap["actions"]:
+                        if candidate["kind"] == "click" and await google_click(snap, candidate):
+                            self.skipped_clicks.add(_identity(snap, candidate))
                 offered = {
                     **snap,
                     "actions": [

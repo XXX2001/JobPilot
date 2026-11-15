@@ -1,5 +1,6 @@
 """Account preparation uses routed Chromium pages and captures every model request."""
 
+import asyncio
 import json
 import logging
 import traceback
@@ -11,7 +12,7 @@ from urllib.parse import quote, quote_plus
 import pytest
 import pytest_asyncio
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Locator, async_playwright
+from playwright.async_api import Frame, Locator, async_playwright
 
 from backend.applier.harness import account_flow, accounts, agent, mailbox
 from backend.applier.harness.account_flow import AccountFlow, account_page, fill_passwords
@@ -41,6 +42,8 @@ async def page(browser):
         "/signup": "account_signup.html",
         "/verify": "account_verify_code.html",
         "/combined": "account_and_apply.html",
+        "/google": "account_google.html",
+        "/google_callback": "account_google_callback.html",
     }
 
     pages.update(
@@ -54,7 +57,17 @@ async def page(browser):
         from urllib.parse import urlsplit
 
         url = urlsplit(request.request.url)
-        name = pages.get(url.path)
+        name = (
+            {
+                "/chooser": "google_chooser.html",
+                "/consent": "google_consent.html",
+                "/password": "google_password.html",
+                "/twofactor": "google_twofactor.html",
+                "/captcha": "google_captcha.html",
+            }.get(url.path, pages.get(url.path))
+            if url.hostname == "accounts.google.com"
+            else pages.get(url.path)
+        )
         await request.fulfill(
             body=(FIXTURES / name).read_text()
             if name
@@ -858,8 +871,11 @@ async def test_verify_words_relaxed_only_for_a_sole_code_input(page, services, l
     ],
 )
 @pytest.mark.parametrize("container", ["main", "shadow", "hidden_frame", "cross_origin_frame"])
-async def test_any_non_account_field_disqualifies_everywhere(page, field, container):
-    await page.goto(URL + "/signin")
+@pytest.mark.parametrize("google", [False, True])
+async def test_any_non_account_field_disqualifies_everywhere(page, field, container, google):
+    if google:
+        await google_session(page)
+    await page.goto(URL + ("/google" if google else "/signin"))
     if container == "main":
         await page.locator("body").evaluate("(e,s) => e.insertAdjacentHTML('beforeend',s)", field)
     elif container == "shadow":
@@ -882,7 +898,7 @@ async def test_any_non_account_field_disqualifies_everywhere(page, field, contai
             container == "hidden_frame",
         )
         await page.frames[1].wait_for_load_state()
-    assert await account_page(page) is None
+    assert await account_page(page, email=PROFILE[1] if google else "") is None
 
 
 async def test_allowed_profile_fields_do_not_disqualify_account_page(page):
@@ -1002,3 +1018,588 @@ async def test_unchanged_error_words_elsewhere_do_not_fail_signin(page, services
     result = await run(page, ScriptedClient(signin_steps()), account_flow=flow(services))
     assert result.stop == "submit_point"
     assert services[0].record_account.await_args.kwargs["status"] == "signed_in"
+
+
+async def google_session(page, *, cookie="SID", url="https://mail.google.com"):
+    await page.context.add_cookies([{"name": cookie, "value": "local-session", "url": url}])
+
+
+@pytest.mark.parametrize(
+    "label", ["Sign in with Google", "Continuer avec Google", "Se connecter avec Google"]
+)
+async def test_google_session_makes_isolated_google_only_page_an_account(
+    page, services, label, monkeypatch
+):
+    monkeypatch.setattr(account_flow, "_GOOGLE_START_TIMEOUT_S", 0.15)
+    await google_session(page)
+    await page.goto(URL + "/google?noop&label=" + quote(label))
+    acct = flow(services)
+    # No-op click makes the new account classification observable without authenticating.
+    with pytest.raises(account_flow.AccountHandoff):
+        await acct.prepare(page)
+    assert await page.evaluate("window.googleClicks") == 1
+
+
+@pytest.mark.parametrize("mode", ["popup", "same"])
+async def test_google_chooser_selects_only_exact_profile_and_finishes_site(page, mode):
+    await google_session(page)
+    await page.goto(URL + "/google?mode=" + mode)
+    assert callable(getattr(account_flow, "google_sign_in", None))
+    assert await account_flow.google_sign_in(page, PROFILE[1])
+    assert page.url == URL + "/application?selected=ADA%40EXAMPLE.COM"
+    assert len(page.context.pages) == 1
+
+
+@pytest.mark.parametrize(
+    "profile",
+    ["missing@example.com", "xada@example.com", "ada@example.com.evil", "ada+other@example.com"],
+)
+async def test_google_chooser_never_selects_different_or_substring_account(page, profile):
+    await google_session(page)
+    await page.goto(URL + "/google?profile=" + quote(profile))
+    assert callable(getattr(account_flow, "google_sign_in", None))
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    google = page.context.pages[-1]
+    assert google.url.startswith("https://accounts.google.com/chooser")
+    assert not await google.evaluate("!!window.broadClicked")
+    assert page.url.startswith(URL + "/google")
+
+
+@pytest.mark.parametrize("screen", ["password", "twofactor", "captcha"])
+async def test_google_challenges_return_false_without_typing_or_clicking(page, screen):
+    await google_session(page)
+    await page.goto(URL + "/google?screen=" + screen)
+    assert callable(getattr(account_flow, "google_sign_in", None))
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    google = page.context.pages[-1]
+    assert not await google.evaluate("!!window.clicked")
+    assert await google.locator("input").evaluate_all("es => es.every(e => !e.value)")
+
+
+async def test_google_popup_close_without_site_change_is_failure(page, monkeypatch):
+    await google_session(page)
+    await page.goto(URL + "/google?nochange")
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.8, raising=False)
+    assert callable(getattr(account_flow, "google_sign_in", None))
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    assert len(page.context.pages) == 1
+    assert page.url == URL + "/google?nochange"
+
+
+@pytest.mark.parametrize(
+    "session,email",
+    [
+        ("none", PROFILE[1]),
+        ("other_cookie", PROFILE[1]),
+        ("other_origin", PROFILE[1]),
+        ("SID", ""),
+        ("SID", "   "),
+    ],
+)
+async def test_google_requires_profile_email_and_sid_from_its_own_context(
+    page, services, session, email
+):
+    if session != "none":
+        await google_session(
+            page,
+            cookie="HSID" if session == "other_cookie" else "SID",
+            url="https://careers.example.com"
+            if session == "other_origin"
+            else "https://mail.google.com",
+        )
+    await page.goto(URL + "/google")
+    acct = flow(services)
+    acct.email = email
+    assert await acct.prepare(page) == (None, [], False)
+    assert await account_page(page) is None
+    assert not await page.evaluate("!!window.googleClicks")
+    services[0].find_account.assert_not_awaited()
+
+
+async def test_google_session_in_another_context_is_not_used(page, browser, services):
+    other = await browser.new_context()
+    try:
+        await other.add_cookies(
+            [{"name": "SID", "value": "other-session", "url": "https://mail.google.com"}]
+        )
+        await page.goto(URL + "/google")
+        assert await flow(services).prepare(page) == (None, [], False)
+        assert not await page.evaluate("!!window.googleClicks")
+    finally:
+        await other.close()
+
+
+@pytest.mark.parametrize("password", [None, SECRET])
+@pytest.mark.parametrize("mode", ["popup", "same"])
+async def test_google_is_preferred_and_records_only_google_before_application(
+    page, services, caplog, mode, password
+):
+    await google_session(page)
+    start = URL + "/google?password&mode=" + mode
+    await page.goto(start)
+    client = ScriptedClient([step("CLICK", "Postuler")])
+    result = await run(page, client, account_flow=flow(services, password))
+    assert result.stop == "submit_point" and not result.clicked_submit
+    assert len(client.decisions) == 1
+    assert "accounts.google.com" not in json.dumps(client.requests)
+    services[0].record_account.assert_awaited_once_with(
+        HOST, method="google", email=PROFILE[1], status="signed_in", login_url=start
+    )
+    assert_private(client, result, caplog)
+
+
+@pytest.mark.parametrize("mode", ["popup", "same"])
+async def test_google_failure_falls_back_to_site_password_once(page, services, caplog, mode):
+    services[0].find_account.return_value = object()
+    await google_session(page)
+    start = URL + "/google?password&screen=password&mode=" + mode
+    await page.goto(start)
+    client = ScriptedClient(signin_steps())
+    result = await run(page, client, account_flow=flow(services))
+    assert result.stop == "submit_point" and result.clicked_submit
+    assert len(client.decisions) == 3
+    services[0].record_account.assert_awaited_once_with(
+        HOST, method="password", email=PROFILE[1], status="signed_in", login_url=start
+    )
+    for other in page.context.pages:
+        if other.url.startswith("https://accounts.google.com"):
+            assert await other.locator("input[type=password]").input_value() == ""
+    assert_private(client, result, caplog)
+
+
+@pytest.mark.parametrize("mode", ["popup", "same"])
+async def test_google_failure_hands_off_original_host_without_model_polling_google(
+    page, services, monkeypatch, caplog, mode
+):
+    await google_session(page)
+    await page.goto(URL + "/google?screen=twofactor&mode=" + mode)
+    monkeypatch.setattr(agent, "_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(agent, "HANDOFF_TIMEOUT_S", 0.12)
+    client, notify = ScriptedClient([]), AsyncMock()
+    with pytest.raises(agent.HarnessBlocked) as exc:
+        await run(page, client, account_flow=flow(services), notify=notify)
+    assert "timed out" in str(exc.value)
+    assert exc.value.result.login_host == HOST
+    assert notify.await_count == 1
+    assert notify.await_args.args[1].startswith("Sign-in needed on " + HOST)
+    assert client.requests == []
+    services[0].record_account.assert_not_awaited()
+    assert_private(client, exc.value.result, caplog, notify.await_args)
+
+
+@pytest.mark.parametrize("host", ["accounts.google.com", "mail.google.com", "google.fr"])
+async def test_google_own_pages_never_reach_decide_or_handoff_classifier(
+    page, services, monkeypatch, host
+):
+    await page.goto("https://" + host + "/consent")
+    monkeypatch.setattr(agent, "_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(agent, "HANDOFF_TIMEOUT_S", 0.08)
+    client = ScriptedClient([])
+    with pytest.raises(agent.HarnessBlocked):
+        await run(page, client, account_flow=flow(services))
+    assert client.requests == []
+
+
+@pytest.mark.parametrize(
+    "label", ["Continue", "Continuer", "Autoriser", "Allow", "Weiter", "Zulassen"]
+)
+async def test_google_consent_clicks_only_approved_whole_labels(page, label):
+    await google_session(page)
+    await page.goto(URL + "/google?screen=consent&consent=" + label)
+    assert await account_flow.google_sign_in(page, PROFILE[1])
+    assert page.url.startswith(URL + "/application")
+
+
+async def test_google_consent_with_profile_menu_does_not_click_the_account_menu(page, monkeypatch):
+    await google_session(page)
+    html = (
+        FIXTURES / "google_consent.html"
+    ).read_text() + '<button onclick="window.accountMenuClicked=true">ada@example.com</button>'
+    await page.context.route(
+        "https://accounts.google.com/consent**",
+        lambda route: route.fulfill(body=html, content_type="text/html"),
+    )
+    await page.goto(URL + "/google?screen=consent")
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.8)
+    assert await account_flow.google_sign_in(page, PROFILE[1])
+
+
+@pytest.mark.parametrize("label", ["Continue with another account", "Allow and apply"])
+async def test_google_rejects_consent_label_suffixes(page, monkeypatch, label):
+    await google_session(page)
+    await page.goto(URL + "/google?screen=consent&consent=" + quote(label))
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.3)
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    assert not await page.context.pages[-1].evaluate("!!window.wrongConsent")
+
+
+async def test_google_gsi_iframe_button_can_authenticate(page, services):
+    await google_session(page)
+    await page.context.route(
+        "https://accounts.google.com/gsi/**",
+        lambda route: route.fulfill(
+            body="<button onclick=\"window.open('https://accounts.google.com/chooser')\">"
+            "Sign in with Google</button>",
+            content_type="text/html",
+        ),
+    )
+    await page.goto(URL + "/google")
+    await page.locator("#google").evaluate(
+        "e => e.outerHTML='<iframe src=\"https://accounts.google.com/gsi/button\"></iframe>'"
+    )
+    await page.frames[1].wait_for_load_state()
+    detected = await account_page(page, email=PROFILE[1])
+    assert detected is not None and detected.google_button
+    assert (await flow(services).prepare(page))[2]
+    assert page.url.startswith(URL + "/application")
+
+
+@pytest.mark.parametrize("existing", [True, False])
+async def test_google_respects_new_account_cap(page, services, existing):
+    await google_session(page)
+    services[0].find_account.return_value = object() if existing else None
+    services[0].new_accounts_today.return_value = 10
+    await page.goto(URL + "/google")
+    if existing:
+        assert (await flow(services).prepare(page))[2]
+    else:
+        with pytest.raises(account_flow.AccountHandoff, match="10"):
+            await flow(services).prepare(page)
+        assert not await page.evaluate("!!window.googleClicks")
+        services[0].record_account.assert_not_awaited()
+
+
+async def test_google_timeouts_have_specified_bounds_and_remove_popup_listener(page, monkeypatch):
+    assert account_flow._GOOGLE_START_TIMEOUT_S == 15
+    assert account_flow._GOOGLE_FINISH_TIMEOUT_S == 30
+    await google_session(page)
+    await page.goto(URL + "/google?noop")
+    before = list(page.context._impl_obj.listeners("page"))
+    monkeypatch.setattr(account_flow, "_GOOGLE_START_TIMEOUT_S", 0.1)
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    assert list(page.context._impl_obj.listeners("page")) == before
+
+
+async def test_google_cancellation_removes_popup_listener(page):
+    await google_session(page)
+    await page.goto(URL + "/google?noop")
+    before = list(page.context._impl_obj.listeners("page"))
+    task = asyncio.create_task(account_flow.google_sign_in(page, PROFILE[1]))
+    await page.wait_for_function("window.googleClicks === 1")
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert list(page.context._impl_obj.listeners("page")) == before
+
+
+@pytest.mark.parametrize(
+    "markup",
+    [
+        '<button title="Sign in with Google">Google</button>',
+        '<button aria-label="Sign in with Google">Google</button>',
+        "<button>Sign in with Google</button>",
+        '<input type=button value="Sign in with Google">',
+        '<a role=link title="Sign in with Google">Google</a>',
+    ],
+)
+async def test_google_control_text_aria_and_title_share_detection_and_clicking(
+    page, services, markup
+):
+    await google_session(page)
+    await page.goto(URL + "/google")
+    await page.locator("#google").evaluate(
+        "(e, html) => {const click=e.onclick; e.outerHTML=html; "
+        "document.body.firstElementChild.onclick=click}",
+        markup,
+    )
+    assert await account_page(page, email=PROFILE[1]) is not None
+    assert (await flow(services).prepare(page))[2]
+    assert page.url.startswith(URL + "/application")
+
+
+async def test_google_control_cannot_hide_an_application_action_in_aria_label(page, services):
+    await google_session(page)
+    await page.goto(URL + "/google")
+    await page.locator("#google").evaluate(
+        "e => e.setAttribute('aria-label', 'Sign in with Google and apply')"
+    )
+    assert await flow(services).prepare(page) == (None, [], False)
+    assert not await page.evaluate("!!window.googleClicks")
+
+
+@pytest.mark.parametrize(
+    "challenge",
+    [
+        "<input type=password hidden>",
+        "<h1>2-step</h1>",
+        "<h1>Verify it's you</h1>",
+        "<h1>Validez votre identité</h1>",
+        '<iframe src="https://accounts.google.com/recaptcha"></iframe>',
+    ],
+)
+async def test_google_each_challenge_independently_blocks_all_input(page, challenge):
+    await google_session(page)
+    await page.context.route(
+        "https://accounts.google.com/challenge**",
+        lambda route: route.fulfill(
+            body='<meta charset="utf-8">'
+            + challenge
+            + '<button onclick="window.clicked=true">Continue</button>',
+            content_type="text/html",
+        ),
+    )
+    await page.goto(URL + "/google?screen=challenge")
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    google = page.context.pages[-1]
+    assert not await google.evaluate("!!window.clicked")
+    assert await google.locator("input").evaluate_all("es => es.every(e => !e.value)")
+
+
+@pytest.mark.parametrize("email", [PROFILE[1], ""])
+async def test_google_without_session_keeps_existing_password_behaviour(page, services, email):
+    services[0].find_account.return_value = object()
+    await page.goto(URL + "/google?password")
+    acct = flow(services)
+    acct.email = email
+    if email:
+        detected, _, _ = await acct.prepare(page)
+        assert detected is not None and detected.has_password
+        assert await page.locator("input[type=password]").input_value() == SECRET
+    else:
+        with pytest.raises(account_flow.AccountHandoff):
+            await acct.prepare(page)
+        assert await page.locator("input[type=password]").input_value() == ""
+    assert not await page.evaluate("!!window.googleClicks")
+
+
+async def test_google_success_after_password_attempt_keeps_google_record(page, services):
+    await google_session(page)
+    await page.goto(URL + "/google?password")
+    acct = flow(services)
+    acct.attempted = acct.pending = True
+    acct.signup_since = datetime.now(UTC)
+    assert (await acct.prepare(page))[2]
+    assert await acct.prepare(page) == (None, [], False)
+    services[0].record_account.assert_awaited_once()
+    assert services[0].record_account.await_args.kwargs["method"] == "google"
+
+
+@pytest.mark.parametrize("password_before,application_after", [(False, False), (True, True)])
+async def test_google_failure_uses_current_isolation_for_password_fallback(
+    page, services, monkeypatch, password_before, application_after
+):
+    services[0].find_account.return_value = object()
+    await google_session(page)
+    await page.goto(URL + "/google" + ("?password" if password_before else ""))
+
+    async def google_failure(_page, _email):
+        await page.set_content(
+            (FIXTURES / "account_signin.html").read_text()
+            + (APPLICATION if application_after else "")
+        )
+        return False
+
+    monkeypatch.setattr(account_flow, "google_sign_in", google_failure)
+    if application_after:
+        with pytest.raises(account_flow.AccountHandoff):
+            await flow(services).prepare(page)
+        assert await page.locator("input[type=password]").input_value() == ""
+    else:
+        assert (await flow(services).prepare(page))[0] is not None
+        assert await page.locator("input[type=password]").input_value() == SECRET
+
+
+async def test_google_popup_waits_through_blank_navigation_and_ignores_unrelated_pages(
+    page, monkeypatch
+):
+    await google_session(page)
+    await page.goto(URL + "/google")
+    await page.locator("#google").evaluate("""e => e.onclick=() => {
+        const popup=window.open('about:blank');
+        setTimeout(()=>popup.location.href='https://accounts.google.com/chooser',120);
+    }""")
+    task = asyncio.create_task(account_flow.google_sign_in(page, PROFILE[1]))
+    other = await page.context.new_page()
+    try:
+        await other.goto("https://accounts.google.com/password")
+        assert await task
+        assert await other.locator("input[type=password]").input_value() == ""
+    finally:
+        await other.close()
+
+
+async def test_google_does_not_infer_success_from_sid_disappearing(page, monkeypatch):
+    await google_session(page)
+    await page.goto(URL + "/google?nochange")
+
+    async def clear_session(route):
+        await page.context.clear_cookies()
+        await route.fulfill(
+            body=(FIXTURES / "account_google_callback.html").read_text(), content_type="text/html"
+        )
+
+    await page.context.route("**/google_callback**", clear_session)
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.8)
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    assert page.url == URL + "/google?nochange"
+
+
+async def test_google_unapproved_consent_does_not_click_a_profile_menu(page, monkeypatch):
+    await google_session(page)
+    html = (
+        FIXTURES / "google_consent.html"
+    ).read_text() + '<button onclick="window.accountMenuClicked=true">ada@example.com</button>'
+    await page.context.route(
+        "https://accounts.google.com/consent**",
+        lambda route: route.fulfill(body=html, content_type="text/html"),
+    )
+    await page.goto(URL + "/google?screen=consent&consent=Proceed")
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.4)
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    assert not await page.context.pages[-1].evaluate("!!window.accountMenuClicked")
+
+
+async def test_google_unreadable_site_frame_cannot_imply_success(page, monkeypatch):
+    await google_session(page)
+    await page.goto(URL + "/google?nochange")
+    await page.context.route(
+        "**/google_callback**",
+        lambda route: route.fulfill(
+            body="<p>Google returned to the site</p>", content_type="text/html"
+        ),
+    )
+    original = Frame.evaluate
+
+    async def unreadable(frame, expression, arg=None):
+        if (
+            frame.page == page
+            and expression == account_flow.ACCOUNT_PAGE_JS
+            and len(page.context.pages) > 1
+        ):
+            raise PlaywrightError("frame inspection failed")
+        return await original(frame, expression, arg)
+
+    monkeypatch.setattr(Frame, "evaluate", unreadable)
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.5)
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+
+
+@pytest.mark.parametrize("history", ["upload", "typing"])
+async def test_google_does_not_reclassify_an_application_after_prior_work(
+    page, services, tmp_path, history
+):
+    await google_session(page)
+    await page.goto(URL + "/application")
+    documents = {}
+    if history == "upload":
+        cv = tmp_path / "cv.pdf"
+        cv.write_bytes(b"%PDF-1.4")
+        documents = {"cv": cv}
+        markup = "<input type=file name=resume onchange=\"location.href='/google'\">"
+        steps = [step("WAIT")]
+    else:
+        markup = "<label>Motivation<input oninput=\"location.href='/google'\"></label>"
+        steps = [step("TYPE_TEXT", "Motivation")]
+    await page.set_content(markup)
+    client = ScriptedClient(steps + [step("DONE")], slots={"Motivation": ("full_name", 0.9)})
+    notify = AsyncMock()
+    result = await run(
+        page, client, account_flow=flow(services), documents=documents, notify=notify
+    )
+    assert result.stop == "ready"
+    assert not await page.evaluate("!!window.googleClicks")
+    services[0].find_account.assert_not_awaited()
+    notify.assert_not_awaited()
+
+
+@pytest.mark.parametrize("control", ["button", "title", "gsi"])
+async def test_google_failed_control_is_not_offered_to_model_again(page, services, control):
+    services[0].find_account.return_value = object()
+    await google_session(page)
+    await page.goto(URL + "/google?password&screen=password")
+    if control == "title":
+        await page.locator("#google").evaluate(
+            "e => {e.title=e.textContent; e.textContent='Google'}"
+        )
+    elif control == "gsi":
+        await page.context.route(
+            "https://accounts.google.com/gsi/**",
+            lambda route: route.fulfill(
+                body="<button onclick=\"window.open('https://accounts.google.com/password')\">"
+                "Sign in with Google</button>",
+                content_type="text/html",
+            ),
+        )
+        await page.locator("#google").evaluate(
+            "e => e.outerHTML='<iframe src=\"https://accounts.google.com/gsi/button\"></iframe>'"
+        )
+        await page.frames[1].wait_for_load_state()
+
+    async def before(body):
+        labels = [
+            value["element"]
+            for value in body["questions"]["click_target"]["criteria"].values()
+            if isinstance(value, dict)
+        ]
+        assert all("google" not in label.lower() for label in labels)
+
+    result = await run(
+        page, ScriptedClient(signin_steps(), before=before), account_flow=flow(services)
+    )
+    assert result.stop == "submit_point" and result.clicked_submit
+
+
+@pytest.mark.parametrize("screen", ["password", "twofactor", "captcha", "consent"])
+async def test_google_loading_site_does_not_hide_an_unfinished_popup(page, monkeypatch, screen):
+    await google_session(page)
+    if screen == "consent":
+        await page.context.route(
+            "https://accounts.google.com/consent**",
+            lambda route: route.fulfill(
+                body='<h1>Sign in to Example</h1><button onclick="window.clicked=true">'
+                "Continue</button>",
+                content_type="text/html",
+            ),
+        )
+    await page.goto(URL + "/google?screen=" + screen)
+    await page.locator("#google").evaluate("""e => {
+        const click=e.onclick;
+        e.onclick=() => {click(); document.body.innerHTML='<p>Signing in...</p>'};
+    }""")
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.8)
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    google = page.context.pages[-1]
+    assert google.url.startswith("https://accounts.google.com/")
+    assert await google.locator("input").evaluate_all("es => es.every(e => !e.value)")
+    assert await google.evaluate("!!window.clicked") is (screen == "consent")
+
+
+@pytest.mark.parametrize(
+    "challenge,button",
+    [
+        ("<h1>Validation en deux étapes</h1>", "Continuer"),
+        ("<h1>Bestätigung in zwei Schritten</h1>", "Weiter"),
+        ('<input autocomplete="one-time-code">', "Continue"),
+    ],
+)
+async def test_google_translated_twofactor_and_otp_fields_stop_before_any_action(
+    page, monkeypatch, challenge, button
+):
+    await google_session(page)
+    await page.context.route(
+        "https://accounts.google.com/verification**",
+        lambda route: route.fulfill(
+            body='<meta charset="utf-8">'
+            + challenge
+            + '<button onclick="window.clicked=true">'
+            + button
+            + "</button>",
+            content_type="text/html",
+        ),
+    )
+    await page.goto(URL + "/google?screen=verification")
+    monkeypatch.setattr(account_flow, "_GOOGLE_FINISH_TIMEOUT_S", 0.5)
+    assert not await account_flow.google_sign_in(page, PROFILE[1])
+    google = page.context.pages[-1]
+    assert not await google.evaluate("!!window.clicked")
+    assert await google.locator("input").evaluate_all("es => es.every(e => !e.value)")

@@ -109,7 +109,7 @@ The harness fills stored profile values, including LinkedIn and additional answe
 and attaches the selected PDFs. An optional writer answers free-text questions from
 the base CV and profile; unavailable facts or an unavailable writer leave the field
 for the owner. Login walls and captchas prompt an in-app hand-off and an ntfy notice
-when configured. Password fields are never filled.
+when configured. Isolated job-site account forms use the account flow below.
 
 AUTO remains disabled by default (`JOBPILOT_AUTO_SUBMIT_ENABLED=false`). When enabled,
 it requires owner approval; corrections trigger another review. Review keys identify
@@ -123,6 +123,47 @@ Fallback to the existing tiers is allowed only when no `submits=True` control wa
 clicked after typing. A failure without a usable click history also stops for
 verification. See [configuration](configuration.md#browser-decision-harness) for
 local and hosted endpoints and which data they receive.
+
+## Job-site accounts
+
+Set your profile email and sign in to Google (Gmail) in the JobPilot Chrome from the
+welcome page's **You** step. When an isolated job-site account page offers **Sign in
+with Google**, **Continuer avec Google**, **Se connecter avec Google**, or Google's
+embedded sign-in button, the harness prefers Google if that browser context has a
+`SID` cookie for `https://mail.google.com` and the profile email is set. Without
+those prerequisites, it keeps the password flow; a Google-only control does not
+by itself trigger an account hand-off.
+
+Code handles both Google popups and same-tab navigation. It selects only the account
+whose whole email address matches the profile email, ignoring case. On consent
+screens it clicks only **Continue**, **Continuer**, **Autoriser**, **Allow**,
+**Weiter**, or **Zulassen**. It never types on Google pages. A missing matching
+account, password prompt, identity/2-step verification, or captcha stops this path.
+The harness waits up to 15 seconds for the Google window and up to 30 seconds for
+the site to leave its account page. A closed popup alone is not success.
+
+Successful Google sign-in appears in **Settings → Job-site accounts** with method
+`google`, the profile email, and status `signed_in`. If Google cannot finish, the
+harness uses the site's password form when available; otherwise it reports
+**Sign-in needed on &lt;host&gt;** and leaves sign-in to the owner. Google account pages
+are never handled by the decision model.
+
+For the password flow, set the shared job-site password on the welcome page
+(`JOB_SITE_PASSWORD` is the environment fallback). Code fills password
+inputs, required terms are listed in the review, and marketing opt-ins stay
+unticked. Email verification uses Gmail in the same browser. Passwords never enter
+model requests or review summaries. New accounts are capped at 10 per local day.
+
+Both paths require an isolated account page: any file input, textarea,
+contenteditable element, or non-account field disqualifies it, including hidden
+fields and fields in frames. Prior application typing or an upload also prevents
+account automation. The application submit guard remains in place. LinkedIn,
+Indeed, other sites requiring the owner's login, and Google's own hosts are
+excluded from this account flow; only the dedicated Google helper handles Google's
+sign-in screens.
+
+The Google fixtures cover local popup and same-tab flows. The owner-run live check
+against the FANUC/SuccessFactors posting is still pending.
 
 ## Not built
 

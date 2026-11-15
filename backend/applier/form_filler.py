@@ -68,6 +68,47 @@ _FIELDS_JS = """() => JSON.stringify(
   .filter(f => f.selector))"""
 
 
+async def _publish_review(
+    job_id: int, fields: dict, screenshot_b64: str | None, note: str, *, on_review=None
+) -> None:
+    """Record the snapshot (engine assigns review_id/revision), then broadcast it."""
+    snapshot = (
+        on_review(job_id, filled_fields=fields, screenshot_b64=screenshot_b64)
+        if on_review is not None
+        else None
+    ) or {}
+    try:
+        from backend.api.ws import manager as ws_manager  # type: ignore
+        from backend.api.ws_models import ApplyReview  # type: ignore
+
+        await ws_manager.broadcast(
+            ApplyReview(
+                type="apply_review",
+                job_id=job_id,
+                filled_fields=fields,
+                screenshot_base64=screenshot_b64,
+                review_id=snapshot.get("review_id"),
+                revision=snapshot.get("revision"),
+                note=note or None,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not broadcast apply_review: %s", exc)
+
+
+async def _wait_decision(confirm_event: asyncio.Event, cancel_event: asyncio.Event) -> bool:
+    """True on approval, False on cancel; raises after the review timeout."""
+    waiters = [asyncio.ensure_future(confirm_event.wait()), asyncio.ensure_future(cancel_event.wait())]
+    try:
+        done, _ = await asyncio.wait(waiters, timeout=1800, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for w in waiters:
+            w.cancel()
+    if not done:
+        raise RuntimeError("Confirmation timed out after 30 minutes")
+    return confirm_event.is_set() and not cancel_event.is_set()
+
+
 class PlaywrightFormFiller:
     """Tier 1 apply: direct Playwright DOM manipulation + single LLM call.
 
@@ -384,42 +425,9 @@ class PlaywrightFormFiller:
             return None
 
     async def _publish_review(self, job_id: int, fields: dict, screenshot_b64: str | None, note: str) -> None:
-        """Record the snapshot (engine assigns review_id/revision), then broadcast it."""
-        snapshot = (
-            self._on_review(job_id, filled_fields=fields, screenshot_b64=screenshot_b64)
-            if self._on_review is not None
-            else None
-        ) or {}
-        try:
-            from backend.api.ws import manager as ws_manager  # type: ignore
-            from backend.api.ws_models import ApplyReview  # type: ignore
+        await _publish_review(job_id, fields, screenshot_b64, note, on_review=self._on_review)
 
-            await ws_manager.broadcast(
-                ApplyReview(
-                    type="apply_review",
-                    job_id=job_id,
-                    filled_fields=fields,
-                    screenshot_base64=screenshot_b64,
-                    review_id=snapshot.get("review_id"),
-                    revision=snapshot.get("revision"),
-                    note=note or None,
-                )
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not broadcast apply_review: %s", exc)
-
-    @staticmethod
-    async def _wait_decision(confirm_event: asyncio.Event, cancel_event: asyncio.Event) -> bool:
-        """True on approval, False on cancel; raises after the review timeout."""
-        waiters = [asyncio.ensure_future(confirm_event.wait()), asyncio.ensure_future(cancel_event.wait())]
-        try:
-            done, _ = await asyncio.wait(waiters, timeout=1800, return_when=asyncio.FIRST_COMPLETED)
-        finally:
-            for w in waiters:
-                w.cancel()
-        if not done:
-            raise RuntimeError("Confirmation timed out after 30 minutes")
-        return confirm_event.is_set() and not cancel_event.is_set()
+    _wait_decision = staticmethod(_wait_decision)
 
     async def fill_only(
         self,

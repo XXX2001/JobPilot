@@ -4,6 +4,18 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## OpenJev harness integration — 2026-11-15
+
+- Optional System One harness runs first for ASSISTED and AUTO, including multi-step
+  sites, in the JobPilot Chrome. ASSISTED leaves its tab open for the owner.
+- Stored LinkedIn/additional answers and the base CV feed profile filling and optional
+  writing. Generated and unanswered fields are listed; login/CAPTCHA hand-offs use
+  WebSocket and optional ntfy notices.
+- AUTO shares Tier 1's review publishing and waiting, corrects harness node keys,
+  rechecks approved values and documents, and clicks the recorded submit once.
+  Cross-origin review fields are read-only; uncertain submissions never retry.
+  The existing AUTO feature flag stays off by default.
+
 ## monitor-discovery (discovery monitor + gazetteer scoring) 2026-11-14
 
 Not yet merged to `main` (branch `feat/monitor-discovery`). Spec: `docs/superpowers/specs/2026-11-14-monitor-redesign.md`, phases 1 and 2.

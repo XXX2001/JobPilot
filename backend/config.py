@@ -1,3 +1,4 @@
+import shutil
 import sys
 from pathlib import Path
 
@@ -57,8 +58,9 @@ class Settings(BaseSettings):
     # Generation. "openai" means ANY OpenAI-compatible endpoint — hosted
     # OpenAI, a local server (Ollama, LM Studio, vLLM, llama.cpp), or any other
     # vendor exposing an OpenAI-compatible endpoint, selected with LLM_BASE_URL.
-    LLM_PROVIDER: str = "openai"        # openai | anthropic
+    LLM_PROVIDER: str = "auto"          # auto | claude | codex | openai | anthropic
     LLM_MODEL: str = ""                 # provider default if empty
+    LLM_CLI_MODEL: str = ""             # Claude: sonnet; Codex: its configured default
     LLM_BASE_URL: str = ""              # openai-compatible/local, e.g. http://localhost:11434/v1
     LLM_API_KEY: SecretStr = SecretStr("")
     # Reasoning models (Qwen3, DeepSeek-R1, …) emit a long chain-of-thought
@@ -73,6 +75,11 @@ class Settings(BaseSettings):
     BROWSER_LLM_MODEL: str = ""
     BROWSER_LLM_BASE_URL: str = ""
     BROWSER_LLM_API_KEY: SecretStr = SecretStr("")
+    # System One browser harness (disabled until an endpoint is configured).
+    DECISION_MODEL_URL: str = ""
+    DECISION_MODEL_API_KEY: SecretStr = SecretStr("")
+    DECISION_MODEL_NAME: str = "jev-latest"
+    HARNESS_MAX_ACTIONS: int = 60
     # Per-provider keys (used when the generic *_API_KEY is empty)
     OPENAI_API_KEY: SecretStr = SecretStr("")
     ANTHROPIC_API_KEY: SecretStr = SecretStr("")
@@ -134,32 +141,45 @@ class Settings(BaseSettings):
             return bool(raw)
         return raw not in ("", "placeholder")
 
-    def llm_configured(self) -> bool:
-        """Whether the configured generation provider has usable credentials.
+    def resolve_llm_provider(self) -> str:
+        """Resolve auto without starting a CLI or contacting a provider."""
+        provider = (self.LLM_PROVIDER or "auto").lower()
+        if provider != "auto":
+            return provider
+        for cli in ("claude", "codex"):
+            if shutil.which(cli):
+                return cli
+        if any(self.is_configured(name) for name in ("LLM_BASE_URL", "LLM_API_KEY", "OPENAI_API_KEY")):
+            return "openai"
+        if self.is_configured("ANTHROPIC_API_KEY"):
+            return "anthropic"
+        return "none"
 
-        Provider-agnostic: an LLM is considered "set up" if any LLM key is
-        present, or a base_url points at a local/self-hosted endpoint (which
-        usually needs no key). Surfaced as the ``llm_key_set`` flag in the
-        health/onboarding APIs.
-        """
-        return (
-            self.is_configured("LLM_API_KEY")
-            or self.is_configured("OPENAI_API_KEY")
-            or self.is_configured("ANTHROPIC_API_KEY")
-            or bool((self.LLM_BASE_URL or "").strip())
-        )
+    def writing_model_available(self) -> bool:
+        """Whether the selected writer has an executable or API configuration."""
+        provider = self.resolve_llm_provider()
+        if provider in ("claude", "codex"):
+            return shutil.which(provider) is not None
+        if provider == "openai":
+            return any(
+                self.is_configured(name) for name in ("LLM_BASE_URL", "LLM_API_KEY", "OPENAI_API_KEY")
+            )
+        if provider == "anthropic":
+            return self.is_configured("LLM_API_KEY") or self.is_configured("ANTHROPIC_API_KEY")
+        return False
+
+    def llm_configured(self) -> bool:
+        """Writer availability surfaced as ``llm_key_set`` in health/onboarding."""
+        return self.writing_model_available()
 
     def validate_runtime_config(self) -> list[str]:
         """Return human-readable problems with the selected LLM providers.
 
-        Empty list == ready to run. Generation and the browser agent each
-        pick a provider; this checks only the credentials *that* provider
-        needs, so a local-model user is never asked for a hosted key. Called
-        at startup (fail-fast) by the app lifespan.
+        Explicit generation providers must be usable; auto may find none.
+        Browser configuration is checked separately and only warns at startup.
         """
         problems: list[str] = []
-        _VALID_GEN = ("openai", "anthropic")
-        _VALID_BROWSER = ("openai",)
+        _VALID_GEN = ("auto", "claude", "codex", "openai", "anthropic")
 
         def _openai_compatible_ok(base_url_attr: str, key_attr: str) -> bool:
             # A base_url means a local/self-hosted server (key is usually
@@ -170,9 +190,11 @@ class Settings(BaseSettings):
                 or self.is_configured("OPENAI_API_KEY")
             )
 
-        gen = (self.LLM_PROVIDER or "openai").lower()
+        gen = (self.LLM_PROVIDER or "auto").lower()
         if gen not in _VALID_GEN:
-            problems.append(f"LLM_PROVIDER={gen!r} must be one of openai|anthropic.")
+            problems.append(f"LLM_PROVIDER={gen!r} must be one of auto|claude|codex|openai|anthropic.")
+        elif gen in ("claude", "codex") and not shutil.which(gen):
+            problems.append(f"LLM_PROVIDER={gen} requires {gen} on PATH.")
         elif gen == "openai" and not _openai_compatible_ok("LLM_BASE_URL", "LLM_API_KEY"):
             problems.append(
                 "LLM_PROVIDER=openai requires LLM_BASE_URL (local/self-hosted) "
@@ -183,17 +205,23 @@ class Settings(BaseSettings):
         ):
             problems.append("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY (or LLM_API_KEY).")
 
+        return problems
+
+    def validate_browser_llm_config(self) -> list[str]:
+        """Problems that disable Tier 2 without preventing startup."""
         br = (self.BROWSER_LLM_PROVIDER or "openai").lower()
-        if br not in _VALID_BROWSER:
-            problems.append(f"BROWSER_LLM_PROVIDER={br!r} must be openai.")
-        elif br == "openai" and not (
+        if br not in ("openai", "anthropic"):
+            return [f"BROWSER_LLM_PROVIDER={br!r} must be openai (or anthropic with a base_url)."]
+        if br == "anthropic" and not self.is_configured("BROWSER_LLM_BASE_URL"):
+            return ["BROWSER_LLM_PROVIDER=anthropic needs a base_url (set BROWSER_LLM_BASE_URL)."]
+        if not (
             self.is_configured("BROWSER_LLM_BASE_URL")
             or self.is_configured("BROWSER_LLM_API_KEY")
             or self.is_configured("OPENAI_API_KEY")
         ):
-            problems.append("BROWSER_LLM_PROVIDER=openai requires BROWSER_LLM_BASE_URL or an OpenAI key.")
-
-        return problems
+            # An Anthropic key is only usable through an OpenAI-compatible base_url (checked above).
+            return ["BROWSER_LLM_PROVIDER=openai requires BROWSER_LLM_BASE_URL or an OpenAI key."]
+        return []
 
 
 def _load_settings() -> "Settings":

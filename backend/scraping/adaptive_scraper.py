@@ -37,8 +37,8 @@ class AdaptiveScraper:
             from backend.llm.factory import make_browser_llm
 
             return make_browser_llm()
-        except ImportError:
-            logger.warning("browser_use not installed; AdaptiveScraper will be a no-op")
+        except (ImportError, ValueError) as exc:
+            logger.warning("Browser LLM unavailable; AdaptiveScraper will be a no-op: %s", exc)
             return None
 
     async def scrape_job_listings(

@@ -40,6 +40,20 @@ class HealthOut(BaseModel):
 logger = logging.getLogger("jobpilot")
 
 
+class _UnavailableWritingClient:
+    """Keep services wired at startup; generation reports the missing writer."""
+
+    async def generate_text(self, prompt, *, response_mime_type=None, response_schema=None):
+        from backend.llm.base import LLMCallFailed
+
+        raise LLMCallFailed("no writing model")
+
+    async def generate_json(self, prompt, schema):
+        from backend.llm.base import LLMCallFailed
+
+        raise LLMCallFailed("no writing model")
+
+
 async def _run_gmail_poll() -> None:
     """Cron entrypoint — iterate enabled credentials, run sync for each."""
     from sqlalchemy import select
@@ -126,6 +140,8 @@ async def lifespan(app: FastAPI):
             "Run the setup script (scripts/setup.sh or scripts/setup.ps1) "
             "or edit .env — defaults and examples are in .env.example."
         )
+    for _p in settings.validate_browser_llm_config():
+        logger.warning("%s — Tier 2 disabled", _p)
     if not (settings.is_configured("ADZUNA_APP_ID") and settings.is_configured("ADZUNA_APP_KEY")):
         logger.warning(
             "ADZUNA_APP_ID/ADZUNA_APP_KEY not set — the Adzuna job source is disabled. "
@@ -155,8 +171,12 @@ async def lifespan(app: FastAPI):
         from backend.scraping.scrapling_fetcher import ScraplingFetcher
         from backend.scraping.session_manager import BrowserSessionManager
 
-        from backend.llm.factory import make_llm_client
-        gen_client = make_llm_client()
+        from backend.llm.factory import make_llm_client, resolve_llm_provider
+        if resolve_llm_provider() == "none":
+            logger.warning("no writing model — generation is unavailable")
+            gen_client = _UnavailableWritingClient()
+        else:
+            gen_client = make_llm_client()
         cv_editor = CVEditor(client=gen_client)
         cv_pipeline = CVPipeline(
             job_analyzer=JobAnalyzer(client=gen_client),

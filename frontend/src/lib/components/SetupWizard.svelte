@@ -32,8 +32,9 @@
 	let cvDone = $derived(status.base_cv_uploaded);
 	let error = $state('');
 
-	const envSnippet = `# .env file (project root)
-LLM_API_KEY=your_llm_api_key_here
+	const envSnippet = `# .env file (project root). No AI key needed when Claude Code or Codex is installed.
+# Optional: a local decision model for applying (see docs/browser.md)
+DECISION_MODEL_URL=http://<your-gpu-box>:8009/v1/systemone
 ADZUNA_APP_ID=your_adzuna_app_id
 ADZUNA_APP_KEY=your_adzuna_app_key`;
 
@@ -83,7 +84,7 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 	}
 
 	const steps = [
-		{ n: 1, label: 'API Keys' },
+		{ n: 1, label: 'AI & keys' },
 		{ n: 2, label: 'CV Template' },
 		{ n: 3, label: 'Keywords' },
 		{ n: 4, label: 'Accounts' }
@@ -161,17 +162,17 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 				<!-- Step 1: API Keys -->
 				<div class="space-y-4">
 					<p class="text-sm text-muted-foreground">
-						JobPilot needs API keys to scrape jobs and tailor your CV. Set them in a <code class="bg-muted px-1 rounded">.env</code> file at the project root.
+						JobPilot writes with your logged-in Claude Code or Codex CLI, so no AI key is needed. Optional keys go in a <code class="bg-muted px-1 rounded">.env</code> file at the project root.
 					</p>
 
 					<div class="space-y-2">
 						<div class="flex items-center gap-2 text-xs">
 							{#if status.llm_key_set}
 								<CheckCircle2 size={13} class="text-green-500" />
-								<span>LLM API key set</span>
+								<span>Writing model found (Claude Code, Codex or an AI key)</span>
 							{:else}
 								<AlertCircle size={13} class="text-yellow-500" />
-								<span class="text-muted-foreground">LLM API key missing</span>
+								<span class="text-muted-foreground">No writing model: install and log in to Claude Code or Codex</span>
 							{/if}
 						</div>
 						<div class="flex items-center gap-2 text-xs">

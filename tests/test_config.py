@@ -125,7 +125,7 @@ def test_defaults_are_preserved_when_env_unset(monkeypatch):
     assert settings.jobpilot_log_level == "info"
     assert settings.jobpilot_scraper_headless is True
     assert settings.jobpilot_data_dir == "./data"
-    assert settings.LLM_PROVIDER == "openai"
+    assert settings.LLM_PROVIDER == "auto"
     assert settings.LLM_MODEL == ""
     assert settings.SCRAPLING_ENABLED is True
     assert settings.APPLY_TIER1_ENABLED is True

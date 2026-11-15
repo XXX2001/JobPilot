@@ -58,6 +58,16 @@ def test_extract_json_malformed():
 # ── AdaptiveScraper._parse_agent_result ──────────────────────────────────────
 
 
+def test_adaptive_scraper_without_browser_model_is_noop(monkeypatch):
+    from backend.llm import factory
+
+    def unavailable():
+        raise ValueError("no browser model")
+
+    monkeypatch.setattr(factory, "make_browser_llm", unavailable)
+    assert AdaptiveScraper()._make_llm() is None
+
+
 class FakeResult:
     def __init__(self, text: str) -> None:
         self._text = text

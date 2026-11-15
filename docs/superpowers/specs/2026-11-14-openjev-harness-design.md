@@ -301,3 +301,32 @@ buttons ("Je postule", "Bewerbung einreichen", "Confirm", icon-only) through the
 18. **Clicks are recorded.** `HarnessResult.clicked` counts executed clicks; every `HarnessBlocked` /
     `HarnessStuck` carries `.result`. The runner falls through to other tiers only when no click on a
     submits=True control happened after anything was typed.
+
+## Status and measured results (2026-11-15)
+
+Built on branch `feat/openjev-harness`. Implementation by Codex (GPT-6 Astra) task by task; every
+task reviewed by an Opus critic, findings fixed test-first; the click guard got three review passes.
+
+Live runs, OpenJev-4B (8-bit, RTX 5060 on mouad-ba), headless Chromium, test identity
+(`Test Candidate`, `test.candidate@example.com`), nothing submitted. On real sites every
+non-read request was aborted unless it was page loading or telemetry (scratchpad `live/live_real.py`).
+
+| Page | Result | Time |
+|---|---|---|
+| Fixture: Greenhouse-like single page | all 5 fields, CV attached, stopped before Submit (0 submit clicks) | 17 s |
+| Fixture: Easy-Apply-like two steps | 3 fields, "Next", select, written answer, stopped before "Submit application" | 9.5 s |
+| Fixture: form in iframe / in shadow root | fields filled, CV attached, stopped | 5 s each |
+| Fixture: ARIA combobox | typed city, picked "Paris" | 4 s |
+| Fixture: cookie banner + form | banner accepted, form filled, stopped | 18 s |
+| Fixture: confirmation page | `already_received` | 0.6 s |
+| Real Greenhouse (Mirakl) | 6 text fields, CV, 3 yes/no dropdowns, LinkedIn; left salary, AI-experience question, privacy, country, hybrid policy for the owner; stopped at "Submit application" | 71 s |
+| Real Ashby (Pennylane, French) | names, email, phone, LinkedIn, 2 written answers, CV; left salary and region; stopped at "Submit Application" | 33 s |
+| Real SmartRecruiters (Dataiku) | site's bot wall ("Access is temporarily restricted") for headless Chromium → BLOCKED → falls back; not bypassed | 6 s |
+
+Writing model through the CLIs, no API key: Claude 2–3 s, Codex 3–5 s per answer; both answer
+"NONE" for salary questions, which leaves the field for the owner.
+
+Known limits: a `<select>` whose change event submits the form is not detected; dropdown/radio answers
+the model picks are listed for review ("Chosen") but can be claims (e.g. right to work); headless
+browsers meet bot walls on some ATS (the production path is the owner's real JobPilot Chrome);
+`DECISION_MODEL_URL` pointing at hosted Jev sends the goal's personal data to TypeSafe.

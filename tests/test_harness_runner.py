@@ -842,10 +842,12 @@ async def test_linkedin_offsite_apply_opens_company_page(browser):
 
     pages = {
         "https://jobs.acme.io/apply": (
+            '<form action="https://jobs.acme.io/search/"><input name="q" aria-label="Rechercher par mot-clé">'
+            '<input name="locationsearch" aria-label="Rechercher par lieu"></form>'
             '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>'
             '<a href="https://jobs.acme.io/apply/form">Postuler »</a>'
         ),
-        "https://jobs.acme.io/apply/form": '<label>Email <input name="email"></label>',
+        "https://jobs.acme.io/apply/form": '<label>Email <input type="email" name="email"></label>',
         "https://jobs.acme.io/other": '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>',
     }
 

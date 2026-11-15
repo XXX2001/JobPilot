@@ -62,6 +62,17 @@ _POSTING_APPLY_LINK = """() => {
     return a ? a.href : null;
 }"""
 _MAX_POSTING_HOPS = 3
+# Whether the page holds an application form, not just a job-search box or alert widget
+# (live: career.fanuc.eu's "Rechercher par mot-clé / lieu" and a job-alert number field).
+_HAS_APPLICATION_FIELDS = """() => {
+    const searchy = e => !!e.closest('form[role=search], [role=search], form[action*="search" i]') ||
+        /search|recherch|suche|keyword|^q$|location/i.test(
+            [e.name, e.id, e.placeholder, e.getAttribute('aria-label')].join(' '));
+    const fields = [...document.querySelectorAll('input, textarea, select')]
+        .filter(e => (e.type === 'file' || e.getClientRects().length) && !e.disabled && !searchy(e));
+    if (fields.some(e => ['email', 'tel', 'file'].includes(e.type) || e.tagName === 'TEXTAREA')) return true;
+    return fields.filter(e => e.tagName === 'SELECT' || e.type === 'text').length >= 2;
+}"""
 
 
 def _is_linkedin(url: str) -> bool:
@@ -90,8 +101,7 @@ async def _follow_offsite_apply(page) -> None:
         logger.info("LinkedIn posting applies offsite; opening %s", urlsplit(target).hostname)
         await page.goto(target, wait_until="domcontentloaded", timeout=20_000)
     for _ in range(_MAX_POSTING_HOPS):
-        snap = await observe(page)
-        if any(a["kind"] in ("fill", "select") for a in snap["actions"]):
+        if await page.evaluate(_HAS_APPLICATION_FIELDS):
             return  # a form is here
         href = await page.evaluate(_POSTING_APPLY_LINK)
         if not href or _is_linkedin(href):

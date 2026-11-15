@@ -78,9 +78,7 @@ async def tab(browser, monkeypatch):
 
     async def open_context(pw, profile_dir, args):
         state.launches.append((profile_dir, args))
-        state.context = SimpleNamespace(
-            new_page=AsyncMock(return_value=page), close=state.closed
-        )
+        state.context = SimpleNamespace(new_page=AsyncMock(return_value=page), close=state.closed)
         return state.context, state.attached
 
     monkeypatch.setattr("backend.browser.chrome.open_context", open_context)
@@ -538,6 +536,8 @@ async def test_writer_without_cv_uses_empty_cv_text(monkeypatch, tab):
     llm = AsyncMock()
     llm.generate_text.return_value = ""
     monkeypatch.setattr(runner, "make_llm_client", lambda: llm)
+    # Other tests may leave a profile with a CV in the shared test DB.
+    monkeypatch.setattr(runner, "_job_context", AsyncMock(return_value=("", "", "")))
 
     async def run(page, **kwargs):
         assert await kwargs["writer"]({"label": "Visa?"}) == ""
@@ -749,7 +749,7 @@ async def test_auto_verification_reads_page_text_immediately_before_click(monkey
     [
         ('<input required><form><input value="Ada" required></form>', False),
         ('<div aria-invalid="true"></div><form><input value="Ada" required></form>', False),
-        ('<form><input required></form>', True),
+        ("<form><input required></form>", True),
         ('<form><input type="email" value="invalid"></form>', True),
     ],
 )

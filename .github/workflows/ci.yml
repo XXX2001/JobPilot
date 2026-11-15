@@ -14,7 +14,7 @@ on:
 jobs:
   backend:
     name: Backend (pytest + pyright)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # Playwright 1.58 has no browser build for 26.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4

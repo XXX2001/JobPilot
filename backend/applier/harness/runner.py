@@ -96,6 +96,7 @@ def _summary(result):
         for label, values in (
             ("Filled", [item["label"] for item in result.typed.values()]),
             ("Generated answers", result.written),
+            ("Chosen", getattr(result, "chosen", [])),
             ("Left for you", result.needs_you),
         )
     )

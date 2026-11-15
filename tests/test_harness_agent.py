@@ -1320,3 +1320,48 @@ async def test_guard_select_change_autosubmits(page):
     )
     await run(page, ScriptedClient([step("SELECT", "Country → b"), step("DONE")]))
     assert not await page.evaluate("!!window.submitted")
+
+
+async def test_done_scrolls_to_fields_below_the_fold_before_ready(page):
+    """Live Greenhouse: DONE came while screening questions were still below the fold."""
+    await page.set_content(
+        '<form><label>Email<input name="email"></label>'
+        '<div style="height:900px"></div>'
+        '<label>LinkedIn<input name="linkedin"></label>'
+        '<button type="submit">Submit application</button></form>'
+    )
+    client = ScriptedClient(
+        [step("TYPE_TEXT", "Email"), step("DONE"), step("TYPE_TEXT", "LinkedIn"), step("DONE")],
+        slots={"Email": ("email", 0.9), "LinkedIn": ("linkedin_url", 0.9)},
+    )
+    result = await run(page, client)
+    assert result.stop == "ready"
+    assert await page.locator("input[name=linkedin]").input_value() != ""
+
+
+async def test_captcha_badge_on_fillable_form_does_not_hand_off(page):
+    await page.set_content('<form><label>Email<input name="email"></label>'
+                           '<p>protected by reCAPTCHA</p><button type="submit">Submit</button></form>')
+    notified = []
+
+    async def notify(kind, message):
+        notified.append(kind)
+
+    client = ScriptedClient(
+        [step("TYPE_TEXT", "Email", page_kind="captcha", page_kind_p=0.7), step("DONE")]
+    )
+    result = await run(page, client, notify=notify)
+    assert notified == []
+    assert result.stop == "ready"
+
+
+async def test_chosen_options_are_listed_with_their_question(page):
+    await page.set_content(
+        '<form><label for="q">Right to work</label><input id="q" role="combobox" '
+        'onclick="document.getElementById(\'l\').hidden=false">'
+        '<div id="l" role="listbox" hidden><div role="option">Yes</div><div role="option">No</div></div>'
+        '<button type="submit">Submit application</button></form>'
+    )
+    client = ScriptedClient([step("CLICK", "Open Right to work"), step("CLICK", "Yes"), step("DONE")])
+    result = await run(page, client)
+    assert result.chosen == ["Right to work: Yes"]

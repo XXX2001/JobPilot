@@ -19,6 +19,7 @@ from .snapshot import ADVANCE_PATTERN, SUBMIT_PATTERN, fresh, observe
 
 _POLL_SECONDS = 5
 _MAX_REQUESTS = 120
+MAX_COMPLETION_SCROLLS = 20
 HANDOFF_TIMEOUT_S = 600
 _STRICT_SUBMIT = re.compile(
     r"submit|send|envoyer|soumettre|finish|complete|terminer|bewerben|absenden|"
@@ -132,6 +133,9 @@ class HarnessResult:
     steps: int
     clicked_submit: bool = False
     clicked: int = 0
+    # Answers the model picked by clicking (dropdown options, radios, checkboxes): shown to the
+    # owner for review, since they can be claims ("Right to work: Yes").
+    chosen: list[str] = field(default_factory=list)
 
 
 class _LimitedClient:
@@ -215,6 +219,7 @@ class _Run:
     history: list = field(default_factory=list)
     excluded: set = field(default_factory=set)
     skipped_clicks: set = field(default_factory=set)
+    completion_scrolls: int = 0
     attached: set = field(default_factory=set)
     choosers: list = field(default_factory=list)
     clicked_toggles: set = field(default_factory=set)
@@ -339,6 +344,22 @@ class _Run:
             a["kind"] == "fill" and _identity(snap, a) not in self.excluded for a in snap["actions"]
         ) and not await self.pending_uploads(snap)
 
+    async def scroll_for_more(self, snap) -> bool:
+        """Only on-screen fields are observed, so a form is never complete while it can scroll.
+
+        Live Greenhouse: the model chose DONE with the screening questions still below the fold.
+        """
+        if self.completion_scrolls >= MAX_COMPLETION_SCROLLS:
+            return False
+        scroll = next(
+            (a for a in snap["actions"] if a["kind"] == "scroll" and a.get("delta", 0) > 0), None
+        )
+        if scroll is None:
+            return False
+        await act(self.page, snap, scroll)
+        self.completion_scrolls += 1
+        return True
+
     def click_stop(self, snap, decision):
         action = decision.action
         label = action["full_label"].strip()
@@ -357,7 +378,7 @@ class _Run:
         # Open-field actions share their node with a fill action. Check these
         # before strict words: opening "Confirm email" does not submit a form.
         if any(a["kind"] == "fill" and _identity(snap, a) == identity for a in snap["actions"]):
-            return "ready" if identity in self.excluded or action.get("value") else None
+            return "skip" if identity in self.excluded or action.get("value") else None
         if strict:
             return "submit_point"
         if not on_form:
@@ -465,6 +486,9 @@ class _Run:
                         if self.form_context(snap, last_decision) and await self.form_complete(
                             snap
                         ):
+                            if await self.scroll_for_more(snap):
+                                unchanged = 0
+                                continue
                             await self.require_fresh(snap)
                             return self.ready(snap, last_decision)
                         raise HarnessStuck("Three unchanged steps made no progress")
@@ -486,7 +510,14 @@ class _Run:
                 action = decision.action
                 await self.require_fresh(snap, action)
                 last_decision = decision
-                if decision.page_kind in {"login_wall", "captcha"} and decision.page_kind_p >= 0.6:
+                # A reCAPTCHA badge on a usable form is not a blocking captcha (live Greenhouse
+                # was classed "captcha" while its fields were fillable): hand off only when the
+                # page offers nothing to fill or choose.
+                fillable = any(a["kind"] in ("fill", "select") for a in offered["actions"])
+                if (
+                    decision.page_kind == "login_wall"
+                    or (decision.page_kind == "captcha" and not fillable)
+                ) and decision.page_kind_p >= 0.6:
                     await self.handoff(decision.page_kind)
                     stale, unchanged = 0, 0
                     continue
@@ -500,8 +531,12 @@ class _Run:
                 if decision.operation == "DONE":
                     if not on_form:
                         raise HarnessBlocked("DONE outside an application form")
+                    if await self.scroll_for_more(snap):
+                        continue
                     return self.ready(snap, decision)
                 if decision.operation == "WAIT" and on_form and await self.form_complete(snap):
+                    if await self.scroll_for_more(snap):
+                        continue
                     await self.require_fresh(snap)
                     return self.ready(snap, decision)
                 if decision.operation == "BLOCKED":
@@ -513,7 +548,7 @@ class _Run:
                 if decision.operation == "CLICK":
                     stop = self.click_stop(snap, decision)
                     if stop == "skip":
-                        if await self.form_complete(snap):
+                        if await self.form_complete(snap) and not await self.scroll_for_more(snap):
                             await self.require_fresh(snap, action)
                             return self.ready(snap, decision)
                         self.skipped_clicks.add(_identity(snap, action))
@@ -538,6 +573,12 @@ class _Run:
                             self.result.clicked_submit = True
                         if action.get("role") in _CHOICE_ROLES:
                             self.chose_field = True
+                        if action.get("role") in _CHOICE_ROLES | {"option", "menuitemradio"}:
+                            question = self.history[-1]["action"] if self.history else ""
+                            question = question.removeprefix("Open ") if question.startswith("Open ") else ""
+                            self.result.chosen.append(
+                                f"{question}: {action['label']}" if question else action["label"]
+                            )
                         self.chooser_document = kind
                         try:
                             await act(self.page, snap, action)

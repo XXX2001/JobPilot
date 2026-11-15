@@ -169,11 +169,13 @@ async def get_today(db: DBSession) -> TodayOut:
     # ── 3. Blocked actions ──────────────────────────────────────────────────
     blocked: list[BlockedAction] = []
 
-    # Signal 1: sites with credentials but no valid session
+    # Signal 1: legacy logins with credentials but no valid scraping session.
     try:
         from backend.scraping.session_manager import BrowserSessionManager
 
-        cred_result = await db.execute(select(SiteCredential.site_name))
+        cred_result = await db.execute(
+            select(SiteCredential.site_name).where(SiteCredential.method.is_(None))
+        )
         credentialed_sites = set(cred_result.scalars().all())
 
         # BrowserSessionManager is not async — safe to call synchronously

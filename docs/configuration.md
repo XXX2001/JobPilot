@@ -141,6 +141,29 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 
 ---
 
+## Job-site accounts
+
+The shared job-site password saved in the app is encrypted with `CREDENTIAL_KEY`
+on the profile row. `JOB_SITE_PASSWORD` is an optional environment fallback;
+the app value takes precedence. Clearing the app value restores the environment
+fallback. If both are empty, email/password sign-up is disabled; Google sign-in
+remains available. The password endpoint accepts 8–128 characters, or an empty
+string to clear it, and returns only whether a password is set and its source.
+
+Settings → Sites → **Job-site accounts** lists accounts recorded by the harness,
+including their sign-in method, email, status, creation time, last use, and login
+link. The registry stores encrypted email, with the shared password kept only on
+the profile. Existing legacy credentials stay unchanged and are excluded from
+the registry. Deleting a registry entry removes JobPilot's record, not the
+account on the external site or its browser session.
+
+The daily limit counts registry entries created during the computer's current
+local calendar day, including failed and signed-in entries as a conservative
+quota measure. Updating an older entry does not count it again. Local midnight
+boundaries account for daylight-saving changes; stored timestamps remain UTC.
+
+---
+
 ## App & server settings (`JOBPILOT_*`)
 
 | Env var | Field | Default | Notes |

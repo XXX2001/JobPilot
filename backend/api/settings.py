@@ -11,12 +11,16 @@ from pathlib import Path
 from typing import Any, Literal, Optional, Type, TypeVar
 
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import DBSession
+from backend.applier.harness import accounts
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
 from backend.matching.gazetteer import SKILLS_PATH, check_skill_lines
 from backend.matching.matcher import skill_files
@@ -785,6 +789,84 @@ class CustomSiteCreate(BaseModel):
 
 
 # ─── Sites routes ─────────────────────────────────────────────────────────────
+
+
+class JobSitePasswordUpdate(BaseModel):
+    model_config = ConfigDict(hide_input_in_errors=True)
+    password: SecretStr
+
+    @field_validator("password")
+    @classmethod
+    def valid_length(cls, value: SecretStr) -> SecretStr:
+        if len(value) != 0 and not 8 <= len(value) <= 128:
+            raise ValueError("Password must be empty or contain 8–128 characters")
+        return value
+
+
+class JobSitePasswordStatus(BaseModel):
+    set: bool
+    source: Literal["app", "env"] | None
+
+
+class _PasswordRoute(APIRoute):
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def redacted(request: Request) -> Response:
+            try:
+                return await handler(request)
+            except RequestValidationError:
+                # FastAPI otherwise includes raw input (even malformed JSON or
+                # a wrong body shape). Keep this local to the password routes.
+                return JSONResponse(status_code=422, content={
+                    "detail": "Provide a password of 8–128 characters, or an empty string to clear it."
+                })
+            except HTTPException:
+                raise
+            except Exception:
+                logger.error("Job-site password operation failed")
+                return JSONResponse(status_code=500, content={"detail": "Job-site password operation failed"})
+
+        return redacted
+
+
+_password_router = APIRouter(route_class=_PasswordRoute)
+
+
+@_password_router.get("/job-site-password", response_model=JobSitePasswordStatus)
+async def get_job_site_password_status(db: DBSession) -> JobSitePasswordStatus:
+    profile = await db.get(UserProfile, 1)
+    if profile is not None and profile.encrypted_job_site_password:
+        return JobSitePasswordStatus(set=True, source="app")
+    if settings.JOB_SITE_PASSWORD.get_secret_value():
+        return JobSitePasswordStatus(set=True, source="env")
+    return JobSitePasswordStatus(set=False, source=None)
+
+
+@_password_router.put("/job-site-password", response_model=JobSitePasswordStatus)
+async def update_job_site_password(body: JobSitePasswordUpdate, db: DBSession) -> JobSitePasswordStatus:
+    await accounts.set_job_site_password(body.password.get_secret_value())
+    return await get_job_site_password_status(db)
+
+
+router.include_router(_password_router)
+
+
+@router.get("/job-site-accounts", response_model=list[accounts.AccountRow])
+async def get_job_site_accounts() -> list[accounts.AccountRow]:
+    return await accounts.list_accounts()
+
+
+@router.delete("/job-site-accounts/{key}", status_code=204)
+async def delete_job_site_account(key: str, db: DBSession) -> Response:
+    row = (await db.execute(select(SiteCredential).where(
+        SiteCredential.site_name == key, SiteCredential.method.is_not(None)
+    ))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Job-site account not found")
+    await db.delete(row)
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/sites", response_model=list[SiteOut])

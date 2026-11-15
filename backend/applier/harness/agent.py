@@ -513,7 +513,10 @@ class _Run:
                 # A reCAPTCHA badge on a usable form is not a blocking captcha (live Greenhouse
                 # was classed "captcha" while its fields were fillable): hand off only when the
                 # page offers nothing to fill or choose.
-                fillable = any(a["kind"] in ("fill", "select") for a in offered["actions"])
+                fillable = (
+                    bool(self.result.typed or self.result.uploads)
+                    or any(a["kind"] in ("fill", "select") for a in offered["actions"])
+                )
                 if (
                     decision.page_kind == "login_wall"
                     or (decision.page_kind == "captcha" and not fillable)
@@ -573,18 +576,25 @@ class _Run:
                             self.result.clicked_submit = True
                         if action.get("role") in _CHOICE_ROLES:
                             self.chose_field = True
+                        chosen = None
                         if action.get("role") in _CHOICE_ROLES | {"option", "menuitemradio"}:
-                            question = self.history[-1]["action"] if self.history else ""
-                            question = question.removeprefix("Open ") if question.startswith("Open ") else ""
-                            self.result.chosen.append(
-                                f"{question}: {action['label']}" if question else action["label"]
+                            last = self.history[-1] if self.history else {}
+                            # The question is the field the previous step really opened.
+                            opened = (
+                                last.get("action", "").startswith("Open ")
+                                and last.get("page_changed")
+                                and not last.get("skipped")
                             )
+                            question = last["action"].removeprefix("Open ") if opened else ""
+                            chosen = f"{question}: {action['label']}" if question else action["label"]
                         self.chooser_document = kind
                         try:
                             await act(self.page, snap, action)
                             await self.drain_choosers()
                         finally:
                             self.chooser_document = "cv"
+                        if chosen:
+                            self.result.chosen.append(chosen)
                         if action.get("role") in {"checkbox", "switch"}:
                             self.clicked_toggles.add(_identity(snap, action))
                 elif decision.operation == "TYPE_TEXT":

@@ -3,6 +3,7 @@
 import asyncio
 import html
 import re
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -257,6 +258,14 @@ _GOOGLE_CONTROL_JS = "e => {" + _DOM + "return googleControl(e); }"
 _GOOGLE_ORIGIN_JS = (
     'e => e.isConnected && e.ownerDocument.location.origin === "https://accounts.google.com"'
 )
+# The document a Google step checked is stamped; a click goes only to a node of that same
+# document, which must still hold no password/OTP field (CI 2026-11-15: the popup moved
+# from consent to the password page between the checks and the click).
+_GOOGLE_STAMP_JS = "t => { document.__jobpilotGoogleStep = t; }"
+_GOOGLE_SAME_STEP_JS = """(e, t) => e.isConnected &&
+    e.ownerDocument.location.origin === "https://accounts.google.com" &&
+    e.ownerDocument.__jobpilotGoogleStep === t &&
+    !e.ownerDocument.querySelector('input[type=password], input[autocomplete~="one-time-code" i]')"""
 _SWITCH_STATE_JS = r"""e => {
     return {label: (e.getAttribute('aria-label') || e.innerText || e.value || '').trim(),
         submits: !!e.form && e.type === 'submit'};
@@ -457,6 +466,11 @@ async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) ->
     text = ""
     scope_checkboxes = False
     scope_rows: list[str] = []
+    stamp = secrets.token_hex(8)
+    try:
+        await page.evaluate(_GOOGLE_STAMP_JS, stamp)
+    except PlaywrightError:
+        return True  # navigating: look again on the next step
     for frame in page.frames:
         if await frame.locator(
             'input[type=password], input[autocomplete~="one-time-code" i]'
@@ -504,6 +518,8 @@ async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) ->
                     # checked node; a locator could resolve to the site's Continue.
                     if not await control.evaluate(_GOOGLE_ORIGIN_JS):
                         return False
+                    if not await control.evaluate(_GOOGLE_SAME_STEP_JS, stamp):
+                        return True  # the page changed after the checks: check again
                     await control.click(timeout=1500)
                     clicked.add(identity)
                     return True
@@ -525,6 +541,8 @@ async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) ->
             if len(emails) == 1 and emails[0].casefold() == email.strip().casefold():
                 if not await control.evaluate(_GOOGLE_ORIGIN_JS):
                     return False
+                if not await control.evaluate(_GOOGLE_SAME_STEP_JS, stamp):
+                    return True  # the page changed after the checks: check again
                 await control.click(timeout=1500)
                 clicked.add(identity)
                 return True

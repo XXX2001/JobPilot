@@ -2504,3 +2504,22 @@ async def test_account_checks_sibling_text_inside_shadow_root(page, container):
             </${container}><p>Confirm your application</p>`;
     }""", container)
     assert await account_page(page) is None
+
+
+async def test_google_click_needs_the_same_checked_document_without_password(page):
+    await page.context.route(
+        "https://accounts.google.com/**",
+        lambda route: route.fulfill(
+            body="<h1>Sign in to Example</h1><button>Continue</button>", content_type="text/html"
+        ),
+    )
+    await page.goto("https://accounts.google.com/consent")
+    button = await page.locator("button").element_handle()
+    await page.evaluate(account_flow._GOOGLE_STAMP_JS, "a1")
+    assert await button.evaluate(account_flow._GOOGLE_SAME_STEP_JS, "a1")
+    assert not await button.evaluate(account_flow._GOOGLE_SAME_STEP_JS, "b2")  # other check
+    await page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input type=password>')")
+    assert not await button.evaluate(account_flow._GOOGLE_SAME_STEP_JS, "a1")
+    await page.goto("https://accounts.google.com/password")  # a new document: no stamp
+    fresh = await page.locator("button").element_handle()
+    assert not await fresh.evaluate(account_flow._GOOGLE_SAME_STEP_JS, "a1")

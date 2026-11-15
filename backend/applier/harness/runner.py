@@ -59,7 +59,11 @@ _POSTING_APPLY_LINK = """() => {
     const a = [...document.querySelectorAll('a[href]')].find(e =>
         /^https?:/.test(e.href) && e.href.split('#')[0] !== location.href.split('#')[0] &&
         e.getClientRects().length && verb.test(e.innerText.trim()));
-    return a ? a.href : null;
+    if (!a) return null;
+    document.querySelectorAll('[data-jobpilot-apply]').forEach(e => e.removeAttribute('data-jobpilot-apply'));
+    a.setAttribute('data-jobpilot-apply', '');
+    a.removeAttribute('target');  // stay in the harness's tab
+    return a.href;
 }"""
 _MAX_POSTING_HOPS = 3
 # Whether the page holds an application form, not just a job-search box or alert widget
@@ -106,8 +110,19 @@ async def _follow_offsite_apply(page) -> None:
         href = await page.evaluate(_POSTING_APPLY_LINK)
         if not href or _is_linkedin(href):
             return
-        logger.info("Posting page; following its apply link to %s", urlsplit(href).path)
-        await page.goto(href, wait_until="domcontentloaded", timeout=20_000)
+        # Click, not goto: ATS apply buttons often open their sign-in/apply dialog by script
+        # (live: SuccessFactors "dialogApplyBtn"; a direct GET bounced to the home page).
+        # The page has no application fields, so a click here cannot send an application.
+        logger.info("Posting page; opening its apply link %s", urlsplit(href).path)
+        before = page.url
+        await page.locator("[data-jobpilot-apply]").first.click(timeout=5_000)
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:  # noqa: BLE001 - a dialog opens without any navigation
+            pass
+        await page.wait_for_timeout(1500)
+        if page.url == before:
+            return  # a dialog opened in place: the harness takes it from here
 
 
 # Launched browsers handed to the owner need their Playwright connection to stay alive.

@@ -23,10 +23,15 @@ router = APIRouter(prefix="/api/browser", tags=["browser"], redirect_slashes=Fal
 
 # Login pages shown by "open". Only sites whose login the app can check and use: a tab
 # for a site nothing uses would reopen on every click.
-LOGIN_PAGES = {"linkedin": "https://www.linkedin.com/login"}
-# The cookie whose presence means "logged in". ponytail: LinkedIn only; add a site
-# when its apply flow lands and its session cookie has been checked.
-SESSION_COOKIES = {"linkedin": ("https://www.linkedin.com", "li_at")}
+LOGIN_PAGES = {
+    "linkedin": "https://www.linkedin.com/login",
+    "google": "https://accounts.google.com/ServiceLogin?continue=https://mail.google.com/mail/",
+}
+# Session cookies for the job source and the Gmail / Google account flow.
+SESSION_COOKIES = {
+    "linkedin": ("https://www.linkedin.com", "li_at"),
+    "google": ("https://mail.google.com", "SID"),
+}
 
 
 def _open_tab(port: int, url: str) -> None:

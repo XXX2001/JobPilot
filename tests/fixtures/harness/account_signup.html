@@ -1,0 +1,10 @@
+<!doctype html><meta charset="utf-8"><title>Create account</title>
+<form onsubmit="event.preventDefault(); location.href='/application'">
+  <label>Email<input type="email" name="email" required></label>
+  <label>Password<input type="password" autocomplete="new-password" required></label>
+  <label>Confirm password<input type="password" required></label>
+  <label><input id="terms" type="checkbox" required>J'accepte les conditions et la confidentialité</label>
+  <label><input id="newsletter" type="checkbox">Newsletter et offres partenaires</label>
+  <button>Créer un compte</button>
+</form>
+<a href="/signin">Se connecter</a>

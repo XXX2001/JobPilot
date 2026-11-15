@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://purl.org/atom/ns#">
+  <title>Gmail - Inbox for fixture@example.com</title>
+  <fullcount>6</fullcount>
+  <entry>
+    <title>Acme old verification</title><summary>Previous sign-up</summary>
+    <issued>2026-11-15T09:58:59Z</issued><modified>2026-11-15T10:06:00Z</modified>
+    <link rel="alternate" href="http://mail.google.com/mail?account_id=ME%40gmail.com&amp;message_id=18c2f123abc45670&amp;view=conv&amp;extsrc=atom"/>
+    <id>tag:gmail.google.com,2004:1784253537900058224</id>
+    <author><name>Acme</name><email>accounts@acme.com</email></author>
+  </entry>
+  <entry>
+    <title>Acme verification</title><summary>Confirm your account</summary>
+    <issued>2026-11-15T10:02:00Z</issued>
+    <link rel="alternate" href="http://mail.google.com/mail?account_id=ME%40gmail.com&amp;message_id=18c2f123abc45678&amp;view=conv&amp;extsrc=atom"/>
+    <id>tag:gmail.google.com,2004:1784253537900058232</id>
+    <author><name>Acme Accounts</name><email>accounts@acme.com</email></author>
+  </entry>
+  <entry>
+    <title>Other Company verification</title><summary>A code for Other Company</summary>
+    <issued>2026-11-15T10:05:00Z</issued>
+    <link rel="alternate" href="http://mail.google.com/mail?account_id=ME%40gmail.com&amp;message_id=18c2f123abc45679&amp;view=conv&amp;extsrc=atom"/>
+    <id>tag:gmail.google.com,2004:1784253537900058233</id>
+    <author><name>Other Company</name><email>accounts@other.example</email></author>
+  </entry>
+  <entry>
+    <title>Acme verification</title><summary>An earlier matching message</summary>
+    <issued>2026-11-15T10:01:00Z</issued>
+    <link rel="alternate" href="http://mail.google.com/mail?account_id=ME%40gmail.com&amp;message_id=18c2f123abc45677&amp;view=conv&amp;extsrc=atom"/>
+    <id>tag:gmail.google.com,2004:1784253537900058231</id>
+  </entry>
+  <entry><title/><summary/><author><name/><email/></author></entry>
+  <entry><title>Acme</title><issued>invalid</issued><link href="https://evil.example"/></entry>
+</feed>

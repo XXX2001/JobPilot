@@ -96,13 +96,13 @@ When you start JobPilot with `start.py`, the app itself opens in this Chrome win
 **How to open it**
 
 1. Open **Settings → Monitor**. The **JobPilot browser** card is at the top. (The setup wizard shows the same buttons in its step 4, **Accounts**.)
-2. Click **Open the JobPilot browser**. A Chrome window opens with the LinkedIn login page.
-3. Log into LinkedIn by hand in that window. You only need to do this once; the login is kept in `data/jobpilot-chrome`.
-4. Click **Check logins**. It should show `linkedin: logged in`.
+2. Click **Open the JobPilot browser**. A Chrome window opens with the Google (Gmail) and LinkedIn login pages for any site not already signed in.
+3. Sign in to Google and LinkedIn by hand in that window, entering your passwords and any two-factor codes there. You only need to do this once; the logins are kept in `data/jobpilot-chrome`.
+4. Click **Check logins**. It should show `google: logged in` and `linkedin: logged in`.
 
-Do **not** sign that Chrome window into your Google account. The app can control this window, so keep your Google account and its synced data out of it. Log in only to job sites.
+This is your applications browser: sign in to Google for job-site Google sign-in and Gmail verification mail, and to LinkedIn for job pages. Keep **Chrome Sync off**. See [The JobPilot Chrome](browser.md) for the browser and account setup decision.
 
-Only the LinkedIn login page opens, and only while you are not logged in: it is the one login JobPilot checks and uses today.
+JobPilot checks both Google and LinkedIn sessions and opens only the sign-in pages still needed.
 
 The same thing from a terminal:
 
@@ -329,7 +329,7 @@ If the JobPilot Chrome is closed, logged out, or LinkedIn shows a login or secur
 
 - **Site terms.** LinkedIn's User Agreement prohibits automated access to its site, including scraping. Indeed and other sites have similar terms. JobPilot reduces how much it does: discovery is logged out, only matched jobs are opened in your logged-in Chrome, and at a slow pace with daily limits. It does not remove the risk. **If LinkedIn restricts or closes your account, that risk is yours.** If that matters to you, do not log the JobPilot Chrome into LinkedIn, and remove LinkedIn sources.
 - **The LinkedIn guest search is not an official API.** It can change or stop working at any time. JobPilot then backs off, and the source shows failures.
-- **The JobPilot Chrome can be controlled by any program on your computer** while it runs, through its local remote-control port. Log into job sites only, never into your Google account, email or bank.
+- **The JobPilot Chrome can be controlled by any program on your computer** while it runs, through its local remote-control port. Use it for job sites and the Google (Gmail) account used for applications, keep Chrome Sync off, and leave unrelated personal browsing and banking in your everyday browser. See [The JobPilot Chrome](browser.md).
 - **ntfy topics are public by name.** Anyone who knows yours can read your job notifications and send to your phone.
 - **Scores are a filter, not a judgement.** They come from a skill list, not from reading the posting the way a person does. Title-only scores are rough.
 

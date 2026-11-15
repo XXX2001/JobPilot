@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     # Optional
     SERPAPI_KEY: SecretStr = SecretStr("")
     CREDENTIAL_KEY: SecretStr = SecretStr("")  # Fernet key for encrypting stored credentials
+    JOB_SITE_PASSWORD: SecretStr = SecretStr("")  # Fallback for the app-stored password
 
     # App settings with sensible defaults.
     # With ``case_sensitive=False`` (see model_config) pydantic-settings resolves

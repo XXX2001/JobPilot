@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><title>Sign in</title>
+<form onsubmit="event.preventDefault(); window.signinClicks=(window.signinClicks||0)+1; location.href='/application'">
+  <label>Email<input type="email" name="email" required></label>
+  <label>Password<input type="password" autocomplete="current-password" required></label>
+  <button>Connexion</button>
+</form>
+<a href="/signup">Créer un compte</a>

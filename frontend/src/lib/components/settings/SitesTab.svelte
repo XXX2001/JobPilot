@@ -12,6 +12,17 @@
 		has_session: boolean;
 	}
 
+	interface JobSiteAccount {
+		key: string;
+		method: string;
+		email: string;
+		status: string;
+		created_at: string;
+		last_used_at: string | null;
+		login_url: string;
+		note: string;
+	}
+
 	// `refreshKey` is bumped by the shell after a credential session is cleared,
 	// so the session badges here stay in sync even while this tab is mounted-but-hidden.
 	let { error = $bindable(''), refreshKey = 0 }: { error: string; refreshKey?: number } = $props();
@@ -19,6 +30,49 @@
 	let sitesList = $state<SiteItem[]>([]);
 	let sitesLoading = $state(true);
 	let siteTogglingMap = $state<Record<string, boolean>>({});
+	let accounts = $state<JobSiteAccount[]>([]);
+	let accountsLoading = $state(true);
+	let accountDeleting = $state<Record<string, boolean>>({});
+
+	async function loadAccounts() {
+		accountsLoading = true;
+		try {
+			accounts = await apiFetch<JobSiteAccount[]>('/api/settings/job-site-accounts');
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not load job-site accounts';
+		} finally {
+			accountsLoading = false;
+		}
+	}
+
+	async function deleteAccount(key: string) {
+		if (!confirm(`Remove ${key} from the list? The account on the site itself is not deleted.`)) return;
+		accountDeleting = { ...accountDeleting, [key]: true };
+		try {
+			await apiFetch<void>(`/api/settings/job-site-accounts/${encodeURIComponent(key)}`, { method: 'DELETE' });
+			accounts = accounts.filter((account) => account.key !== key);
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Could not delete job-site account';
+		} finally {
+			accountDeleting = { ...accountDeleting, [key]: false };
+		}
+	}
+
+	function loginHref(value: string): string | null {
+		try {
+			const url = new URL(value);
+			return ['https:', 'http:'].includes(url.protocol) ? url.href : null;
+		} catch {
+			return null;
+		}
+	}
+
+	function accountDate(value: string | null): string {
+		if (!value) return '—';
+		// Registry timestamps are stored in UTC without a timezone suffix.
+		const utc = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`;
+		return new Date(utc).toLocaleString();
+	}
 
 	async function loadSites() {
 		sitesLoading = true;
@@ -50,6 +104,7 @@
 	$effect(() => {
 		void refreshKey;
 		loadSites();
+		loadAccounts();
 	});
 </script>
 
@@ -103,3 +158,45 @@
 		</div>
 	</div>
 {/if}
+
+<section class="mt-8 rounded-xl border border-border/50 bg-card/40 p-5">
+	<h2 class="mb-4 text-xl font-semibold font-heading">Job-site accounts</h2>
+	{#if accountsLoading}
+		<p class="text-sm text-muted-foreground">Loading accounts…</p>
+	{:else if accounts.length === 0}
+		<p class="text-sm text-muted-foreground">JobPilot lists accounts here when it signs up or signs in on a job site.</p>
+	{:else}
+		<div class="overflow-x-auto">
+			<table class="w-full text-left text-sm">
+				<thead class="text-xs text-muted-foreground">
+					<tr>
+						{#each ['Site', 'Method', 'Email', 'Status', 'Created', 'Last used', 'Login', 'Actions'] as heading}
+							<th scope="col" class="px-3 pb-3 font-medium">{heading}</th>
+						{/each}
+					</tr>
+				</thead>
+				<tbody>
+					{#each accounts as account (account.key)}
+						{@const href = loginHref(account.login_url)}
+						<tr class="border-t border-border/40">
+							<td class="px-3 py-3 font-medium">{account.key}</td>
+							<td class="px-3 py-3 capitalize">{account.method}</td>
+							<td class="px-3 py-3">{account.email}</td>
+							<td class="px-3 py-3">{account.status}</td>
+							<td class="whitespace-nowrap px-3 py-3">{accountDate(account.created_at)}</td>
+							<td class="whitespace-nowrap px-3 py-3">{accountDate(account.last_used_at)}</td>
+							<td class="px-3 py-3">
+								{#if href}<a href={href} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline">Sign in</a>{:else}—{/if}
+							</td>
+							<td class="px-3 py-3">
+								<button type="button" class="text-destructive hover:underline disabled:opacity-50" aria-label="Delete account for {account.key}" disabled={accountDeleting[account.key]} onclick={() => deleteAccount(account.key)}>
+									{accountDeleting[account.key] ? 'Deleting…' : 'Delete'}
+								</button>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+	{/if}
+</section>

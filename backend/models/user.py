@@ -25,6 +25,7 @@ class UserProfile(Base):
     base_letter_path: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     additional_info: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     last_dashboard_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    encrypted_job_site_password: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
 
@@ -74,5 +75,10 @@ class SiteCredential(Base):
     site_name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     encrypted_email: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     encrypted_password: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    method: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    login_url: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    note: Mapped[Optional[str]] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

@@ -4,6 +4,19 @@ All notable changes to JobPilot are documented here. Format loosely follows [Kee
 
 ---
 
+## Job-site Google sign-in — 2026-11-15
+
+- The application harness prefers Google on isolated job-site sign-in pages when
+  the JobPilot Chrome has a Google session and the profile email is set. Code
+  handles popup and same-tab flows, selects the exact profile email, and records
+  successful sign-ins in Settings with method `google`.
+- Google password, identity/2-step verification and captcha screens stop automatic
+  sign-in without typing. A failed Google attempt falls back to the site's password
+  form when available, otherwise the owner sees **Sign-in needed on &lt;host&gt;**.
+  Application fields and prior application work keep the existing submit guard.
+- Routed browser fixtures cover Google account choice, consent and challenges.
+  The FANUC/SuccessFactors live check remains for the owner to run.
+
 ## OpenJev harness integration — 2026-11-15
 
 - Optional System One harness runs first for ASSISTED and AUTO, including multi-step

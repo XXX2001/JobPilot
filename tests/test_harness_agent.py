@@ -383,9 +383,13 @@ async def test_writer_replacing_field_reobserves_without_typing(page):
 async def test_login_wall_notifies_and_waits_until_resolved(page, monkeypatch):
     await load(page, "login.html")
     monkeypatch.setattr(agent, "_POLL_SECONDS", 0)
-    notify = AsyncMock()
+    async def owner_signs_in(*_args):
+        await page.locator("#password").evaluate("e => e.remove()")
+
+    notify = AsyncMock(side_effect=owner_signs_in)
     client = ScriptedClient(
-        [step("TYPE_TEXT", "Email", page_kind="login_wall"), step("DONE")],
+        # Hidden CSRF fields are allowed: code hands off before asking the model.
+        [step("DONE")],
         classifications=[("login_wall", 0.9), ("login_wall", 0.9), ("application_form", 0.9)],
     )
     assert (await run(page, client, notify=notify)).stop == "ready"
@@ -498,11 +502,15 @@ async def test_three_consecutive_stale_decisions_raise_stuck(page):
     assert len(client.decisions) == 3
 
 
-async def test_never_types_into_password(page):
+async def test_never_types_into_password_without_configured_account_path(page, monkeypatch):
     await load(page, "login.html")
-    client = ScriptedClient([step("TYPE_TEXT", "Email"), step("DONE")])
-    await run(page, client)
-    assert all("Password" not in fill_labels(body) for body in client.decisions)
+    monkeypatch.setattr(agent, "HANDOFF_TIMEOUT_S", 0.03)
+    body, _, _ = build_request(await observe(page), "goal", [], "scripted")
+    assert "Password" not in fill_labels(body)
+    client = ScriptedClient([])
+    with pytest.raises(agent.HarnessBlocked, match="hand-off"):
+        await run(page, client)
+    assert not client.decisions
     assert await page.locator("#password").input_value() == ""
 
 

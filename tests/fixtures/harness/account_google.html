@@ -1,0 +1,23 @@
+<!doctype html><meta charset="utf-8"><title>Sign in</title>
+<button id="google">Sign in with Google</button>
+<script>
+const options = new URLSearchParams(location.search);
+const button = document.querySelector('#google');
+button.textContent = options.get('label') || 'Sign in with Google';
+button.onclick = () => {
+  window.googleClicks = (window.googleClicks || 0) + 1;
+  if (options.has('noop')) return;
+  const auth = 'https://accounts.google.com/' + (options.get('screen') || 'chooser') + '?' + options;
+  if (options.get('mode') === 'same') location.href = auth;
+  else window.open(auth, '_blank');
+};
+addEventListener('message', event => {
+  if (event.origin === location.origin && event.data.selected && !options.has('nochange'))
+    location.href = '/application?selected=' + encodeURIComponent(event.data.selected);
+});
+if (options.has('password')) document.body.insertAdjacentHTML('beforeend', `
+  <form onsubmit="event.preventDefault(); location.href='/application'">
+    <label>Email<input type=email required></label>
+    <label>Password<input type=password required></label><button>Connexion</button>
+  </form><a href='/signup'>Créer un compte</a>`);
+</script>

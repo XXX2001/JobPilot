@@ -156,7 +156,7 @@ def _page_kind_question() -> dict:
 
 
 def build_request(
-    snap: dict, goal: str, history: list[dict], model: str
+    snap: dict, goal: str, history: list[dict], model: str, *, clean=lambda value: value
 ) -> tuple[dict, dict, dict]:
     elements, targets, controls = _action_space(snap["actions"])
     operations = {key: OPERATION_LABELS[key] for key in targets}
@@ -174,7 +174,7 @@ def build_request(
             "type": "choice",
             "criteria": {
                 index: {
-                    "element": f"[{index}] {a['label']}",
+                    "element": f"[{index}] {clean(a['label'])}",
                     "current_value": a.get("current_value", a.get("value", "")),
                     **{k: a[k] for k in ("role", "checked", "selected", "expanded") if k in a},
                 }
@@ -197,7 +197,10 @@ def build_request(
         "model": model,
         "state": {
             # jev-ultrafast and OpenJev's training data never exceed 6,000 characters of page text.
-            "page": {"url": snap["url"], "title": snap["title"], "text": snap["text"][:PAGE_TEXT_CHARS]},
+            "page": {
+                "url": snap["url"], "title": snap["title"],
+                "text": clean(snap["text"])[:PAGE_TEXT_CHARS],
+            },
             "elements": elements,
             "recent_actions": [
                 {k: h.get(k) for k in ("action", "kind", "text", "page_changed")}
@@ -223,7 +226,8 @@ class Decision:
 
 
 async def decide(client, snap: dict, goal: str, history: list[dict]) -> Decision:
-    body, targets, controls = build_request(snap, goal, history, client.model)
+    clean = getattr(client, "clean", lambda value: value)
+    body, targets, controls = build_request(snap, goal, history, client.model, clean=clean)
     started = time.perf_counter()
     try:
         result = await client.post(body)
@@ -238,7 +242,7 @@ async def decide(client, snap: dict, goal: str, history: list[dict]) -> Decision
         }
         smaller = {
             **snap,
-            "text": snap["text"][:3000],
+            "text": clean(snap["text"])[:3000],
             "actions": [
                 action
                 for action in snap["actions"]
@@ -246,7 +250,7 @@ async def decide(client, snap: dict, goal: str, history: list[dict]) -> Decision
                 or (action.get("frame", 0), action.get("node")) in nodes
             ],
         }
-        body, targets, controls = build_request(smaller, goal, history, client.model)
+        body, targets, controls = build_request(smaller, goal, history, client.model, clean=clean)
         result = await client.post(body)
     page_kind, page_kind_p = _answer(result, body, "page_kind")
     submit, submit_p = _answer(result, body, "submit_target")
@@ -272,14 +276,17 @@ async def decide(client, snap: dict, goal: str, history: list[dict]) -> Decision
 async def pick_slot(
     client, field: dict, page_title: str, slots: dict[str, str]
 ) -> tuple[str, float]:
+    # A label can already end with a password fragment after snapshot clipping.
+    # Redact before embedding it in a longer instruction, where it is no longer trailing.
+    label = getattr(client, "clean", lambda value: value)(field["label"])
     body = {
         "model": client.model,
-        "state": {"page": page_title, "field_label": field["label"]},
+        "state": {"page": page_title, "field_label": label},
         "questions": {
             "slot": {
                 "type": "choice",
                 "instructions": (
-                    f'Which profile value should be typed into the form field labelled "{field["label"]}"?'
+                    f'Which profile value should be typed into the form field labelled "{label}"?'
                 ),
                 "criteria": slots,
             }
@@ -289,6 +296,7 @@ async def pick_slot(
 
 
 async def classify_page(client, text: str) -> tuple[str, float]:
+    text = getattr(client, "clean", lambda value: value)(text)
     body = {
         "model": client.model,
         "state": {"text": text[:PAGE_TEXT_CHARS]},

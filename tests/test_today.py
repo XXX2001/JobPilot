@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+from cryptography.fernet import Fernet
+from pydantic import SecretStr
 from starlette.testclient import TestClient
 
 
@@ -42,6 +47,46 @@ def test_today_blocked_actions_empty_state(test_app: TestClient) -> None:
     ba = resp.json()["blocked_actions"]
     assert "actions" in ba
     assert isinstance(ba["actions"], list)
+
+
+@pytest.mark.parametrize("legacy_count", [0, 1, 2])
+def test_today_only_counts_legacy_credentials_as_expired_logins(
+    test_app: TestClient, monkeypatch, legacy_count: int,
+) -> None:
+    from backend.applier.harness.accounts import record_account
+    from backend.config import settings
+    from backend.database import db_session
+    from backend.models.user import SiteCredential
+    from backend.scraping.session_manager import BrowserSessionManager
+
+    monkeypatch.setattr(settings, "CREDENTIAL_KEY", SecretStr(Fernet.generate_key().decode()))
+    monkeypatch.setattr(BrowserSessionManager, "list_sessions", lambda self: [])
+
+    async def seed():
+        await record_account(
+            "career.sapsf.eu?company=fanuc", method="password", email="ada@example.com",
+            status="signed_in", login_url="https://career.sapsf.eu/?company=fanuc",
+        )
+        await record_account(
+            "acme.myworkdayjobs.com", method="google", email="ada@example.com",
+            status="verified", login_url="https://acme.myworkdayjobs.com/login",
+        )
+        async with db_session() as db:
+            for index in range(legacy_count):
+                db.add(SiteCredential(site_name=f"legacy-{index}", method=None))
+
+    asyncio.run(seed())
+    response = test_app.get("/api/today")
+    assert response.status_code == 200
+    broken = [
+        action for action in response.json()["blocked_actions"]["actions"]
+        if action["kind"] == "broken_session"
+    ]
+    if legacy_count:
+        assert len(broken) == 1
+        assert broken[0]["count"] == legacy_count
+    else:
+        assert broken == []
 
 
 def test_today_week_stats_shape(test_app: TestClient) -> None:

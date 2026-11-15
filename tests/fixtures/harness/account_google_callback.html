@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Signed in</title>
+<script>
+const options=new URLSearchParams(location.search);
+if (window.opener) {
+  opener.top.postMessage({selected: options.get('selected')}, location.origin);
+  window.close();
+} else location.href='/application?selected=' + encodeURIComponent(options.get('selected'));
+</script>

@@ -15,7 +15,7 @@ JobPilot drives one long-lived genuine Chrome on a profile of its own, `$DATA/jo
 
 - Chrome 136 and later refuse `--remote-debugging-port` on the default user data dir. `ensure_chrome_running` refuses `~/.config/google-chrome` before Chrome gets the chance (`chrome.py:50`). The spec measured it on Chrome 157.
 - The owner's everyday profile and any managed work profile must never be automated (D11). `chrome_dir()` (`chrome.py:123`) always returns `$DATA/jobpilot-chrome`.
-- The profile is not signed into Google or Chrome Sync (D14). Google blocks sign-in under a debug port, according to community reports. The setup wizard says so.
+- The profile is the owner's applications browser and is signed into Google (Gmail), reversing D14 on the owner's decision of 2026-11-15: JobPilot uses that session for "Sign in with Google" on job sites and to read verification mail (`harness/mailbox.py`). Chrome Sync stays off. Community reports say Google can refuse sign-in in a browser started with a debug port; if it does, start the same `--user-data-dir` once without `--remote-debugging-port`, sign in, close it, and let JobPilot restart it: the session cookies carry over.
 
 ## Launch
 
@@ -54,12 +54,12 @@ The CDP port listens on 127.0.0.1 without authentication. Any local process can 
 
 | Route | Behaviour |
 |---|---|
-| `GET /status` (`:45`) | `{"running": false, "logged_in": {}}` when the Chrome is not running. It never starts it. Otherwise `{"running": true, "logged_in": {"linkedin": bool}}` |
-| `POST /open` (`:54`) | `ensure_chrome_running(chrome_dir())` in a thread (503 if Chrome does not start). Then opens a tab (`PUT /json/new?<url>`) on each login page in `LOGIN_PAGES` (LinkedIn, Indeed) whose site is not logged in. Needs the local session, like every POST under `/api` |
+| `GET /status` (`browser_status`) | `{"running": false, "logged_in": {}}` when the Chrome is not running. It never starts it. Otherwise `{"running": true, "logged_in": {"linkedin": bool, "google": bool}}` |
+| `POST /open` (`open_browser`) | `ensure_chrome_running(chrome_dir())` in a thread (503 if Chrome does not start). Then opens a tab (`PUT /json/new?<url>`) on each login page in `LOGIN_PAGES` (LinkedIn, Google/Gmail) whose site is not logged in. Needs the local session, like every POST under `/api` |
 
-Login detection (`_logged_in`, `:33`) attaches with Playwright and looks for a session cookie by name (`SESSION_COOKIES`, LinkedIn only). Indeed has no entry, so `/open` opens its login page on every call and `/status` never reports it.
+Login detection (`_logged_in` in `backend/api/browser.py`) attaches with Playwright and looks for a session cookie by name: `SESSION_COOKIES` checks LinkedIn's `li_at` at `https://www.linkedin.com` and Google's `SID` at `https://mail.google.com`. Indeed has no entry in either `LOGIN_PAGES` or `SESSION_COOKIES`, so `/open` does not open it and `/status` does not report it.
 
-Setup wizard step 4 "Accounts" has two buttons: "Open the JobPilot browser" (`POST /open`) and "Check logins" (`GET /status`). It tells the owner to log in once and not to sign the window into Google.
+The welcome page's first step ("You") and the setup wizard show Google and LinkedIn login state with "Open sign-in pages" (`POST /open`) and a refresh (`GET /status`). They tell the owner to sign in to Google and LinkedIn there once.
 
 ## Reading LinkedIn job pages
 
@@ -109,7 +109,7 @@ The harness fills stored profile values, including LinkedIn and additional answe
 and attaches the selected PDFs. An optional writer answers free-text questions from
 the base CV and profile; unavailable facts or an unavailable writer leave the field
 for the owner. Login walls and captchas prompt an in-app hand-off and an ntfy notice
-when configured. Password fields are never filled.
+when configured. Isolated job-site account forms use the account flow below.
 
 AUTO remains disabled by default (`JOBPILOT_AUTO_SUBMIT_ENABLED=false`). When enabled,
 it requires owner approval; corrections trigger another review. Review keys identify
@@ -124,10 +124,51 @@ clicked after typing. A failure without a usable click history also stops for
 verification. See [configuration](configuration.md#browser-decision-harness) for
 local and hosted endpoints and which data they receive.
 
+## Job-site accounts
+
+Set your profile email and sign in to Google (Gmail) in the JobPilot Chrome from the
+welcome page's **You** step. When an isolated job-site account page offers **Sign in
+with Google**, **Continuer avec Google**, **Se connecter avec Google**, or Google's
+embedded sign-in button, the harness prefers Google if that browser context has a
+`SID` cookie for `https://mail.google.com` and the profile email is set. Without
+those prerequisites, it keeps the password flow; a Google-only control does not
+by itself trigger an account hand-off.
+
+Code handles both Google popups and same-tab navigation. It selects only the account
+whose whole email address matches the profile email, ignoring case. On consent
+screens it clicks only **Continue**, **Continuer**, **Autoriser**, **Allow**,
+**Weiter**, or **Zulassen**. It never types on Google pages. A missing matching
+account, password prompt, identity/2-step verification, or captcha stops this path.
+The harness waits up to 15 seconds for the Google window and up to 30 seconds for
+the site to leave its account page. A closed popup alone is not success.
+
+Successful Google sign-in appears in **Settings → Job-site accounts** with method
+`google`, the profile email, and status `signed_in`. If Google cannot finish, the
+harness uses the site's password form when available; otherwise it reports
+**Sign-in needed on &lt;host&gt;** and leaves sign-in to the owner. Google account pages
+are never handled by the decision model.
+
+For the password flow, set the shared job-site password on the welcome page
+(`JOB_SITE_PASSWORD` is the environment fallback). Code fills password
+inputs, required terms are listed in the review, and marketing opt-ins stay
+unticked. Email verification uses Gmail in the same browser. Passwords never enter
+model requests or review summaries. New accounts are capped at 10 per local day.
+
+Both paths require an isolated account page: any file input, textarea,
+contenteditable element, or non-account field disqualifies it, including hidden
+fields and fields in frames. Prior application typing or an upload also prevents
+account automation. The application submit guard remains in place. LinkedIn,
+Indeed, other sites requiring the owner's login, and Google's own hosts are
+excluded from this account flow; only the dedicated Google helper handles Google's
+sign-in screens.
+
+The Google fixtures cover local popup and same-tab flows. The owner-run live check
+against the FANUC/SuccessFactors posting is still pending.
+
 ## Not built
 
 - **Apply through the attached Chrome, Tier 2.** The Tier 1 Playwright form filler attaches since `ad687bd`. The browser-use strategies (`_strategy_common.build_browser`, `assisted_apply.py`, `auto_apply.py`) still launch their own browser at that commit. Uncommitted work towards a CDP attach was in the working tree when this page was written. Check `git log` before relying on either state.
 - **Challenge pause and resume (D13).** The proofs (`proofs/chrome/challenge.py`: Cloudflare, Turnstile, hCaptcha, reCAPTCHA and login-wall detection; `t5_challenge.py`: pause, then resume once a second client clears it; `pacing.py`: log-normal delays, per-site gap and cap, backoff after a challenge) are not wired into the app. The existing `backend/applier/captcha_handler.py` (WebSocket notice, then poll until cleared or 300 s) predates this design. The LinkedIn reader stops at a wall and does not pause.
 - **Removing stored passwords and auto-login (D14).** `SiteCredential` and `BrowserSessionManager._attempt_auto_login` (`backend/scraping/session_manager.py:88`) are still there.
 - **Closing Chrome when idle.** `close_chrome` exists and is not called.
-- **Session check for sites other than LinkedIn.**
+- **Session check for sites other than LinkedIn and Google (Gmail).**

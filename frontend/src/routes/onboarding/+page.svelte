@@ -51,13 +51,15 @@
 	let launching = $state(false);
 	let batchLaunched = $state(false);
 
-	const envSnippet = `# .env file (project root)
-LLM_API_KEY=your_llm_api_key_here
+	const envSnippet = `# .env file (project root). No AI key needed when Claude Code or Codex is installed.
+# Optional: a local decision model for applying (see docs/browser.md)
+DECISION_MODEL_URL=http://<your-gpu-box>:8009/v1/systemone
+# Optional: Adzuna as an extra job source
 ADZUNA_APP_ID=your_adzuna_app_id
 ADZUNA_APP_KEY=your_adzuna_app_key`;
 
 	const steps = [
-		{ n: 1, label: 'API Keys' },
+		{ n: 1, label: 'Tools' },
 		{ n: 2, label: 'CV Template' },
 		{ n: 3, label: 'Keywords' },
 		{ n: 4, label: 'First Batch' }
@@ -261,20 +263,23 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 			{#if step === 1}
 				<!-- Step 1: API keys (instructional) -->
 				<div class="space-y-4">
-					<h2 class="text-lg font-medium">1. API keys</h2>
+					<h2 class="text-lg font-medium">1. Tools</h2>
 					<p class="text-muted-foreground text-sm">
-						JobPilot reads its API keys from a <code class="bg-muted rounded px-1">.env</code> file at
-						the project root — they cannot be set from this UI. Add them, then restart the backend.
+						JobPilot writes with your logged-in Claude Code or Codex CLI, so no AI key is needed.
+						Optional keys go in a <code class="bg-muted rounded px-1">.env</code> file at the project
+						root; restart the backend after changing it.
 					</p>
 
 					<div class="space-y-2">
 						<div class="flex items-center gap-2 text-sm">
 							{#if status?.llm_key_set}
 								<CheckCircle2 size={15} class="text-green-500" />
-								<span>LLM API key set</span>
+								<span>Writing model found (Claude Code, Codex or an AI key)</span>
 							{:else}
 								<XCircle size={15} class="text-red-400" />
-								<span class="text-muted-foreground">LLM API key missing</span>
+								<span class="text-muted-foreground"
+									>No writing model: install and log in to Claude Code or Codex</span
+								>
 							{/if}
 						</div>
 						<div class="flex items-center gap-2 text-sm">
@@ -282,8 +287,8 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 								<CheckCircle2 size={15} class="text-green-500" />
 								<span>Adzuna keys set</span>
 							{:else}
-								<XCircle size={15} class="text-red-400" />
-								<span class="text-muted-foreground">Adzuna keys missing</span>
+								<CheckCircle2 size={15} class="text-muted-foreground" />
+								<span class="text-muted-foreground">Adzuna not set (optional extra job source)</span>
 							{/if}
 						</div>
 						<div class="flex items-center gap-2 text-sm">
@@ -292,7 +297,11 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 								<span>Tectonic (LaTeX) found</span>
 							{:else}
 								<XCircle size={15} class="text-red-400" />
-								<span class="text-muted-foreground">Tectonic not found on PATH</span>
+								<span class="text-muted-foreground"
+									>Tectonic not found: run <code class="bg-muted rounded px-1"
+										>python scripts/download_tectonic.py</code
+									></span
+								>
 							{/if}
 						</div>
 					</div>

@@ -46,7 +46,7 @@
 			<div class="divide-y divide-border/40">
 				{#each [
 					['Writing model', setupStatus.llm_key_set, 'Claude Code or Codex CLI on PATH (LLM_PROVIDER=auto), or LLM_API_KEY / LLM_BASE_URL in .env; used for CV tailoring and written answers', Cpu],
-					['Adzuna API Keys', setupStatus.adzuna_key_set, 'ADZUNA_APP_ID & ADZUNA_APP_KEY in .env for job search', Code],
+					['Adzuna API Keys', setupStatus.adzuna_key_set, 'Optional: ADZUNA_APP_ID & ADZUNA_APP_KEY in .env for an extra job source', Code],
 					['Tectonic Engine', setupStatus.tectonic_found, 'Local LaTeX compiler (download via script or cargo install)', Cpu],
 					['Base CV Uploaded', setupStatus.base_cv_uploaded, 'Master .tex file uploaded in CV Manager', User]
 				] as [label, ok, hint, Icon]}

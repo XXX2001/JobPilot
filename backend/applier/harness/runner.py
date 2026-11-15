@@ -20,7 +20,7 @@ from backend.applier.form_filler import (
     _publish_review,
     _wait_decision,
 )
-from backend.applier.manual_apply import ApplicationResult
+from backend.applier.manual_apply import ApplicationResult, ResultMethod
 from backend.applier.verification import verify_page
 from backend.config import settings
 from backend.latex.artifacts import resolve_base_source, sha256_file
@@ -325,7 +325,7 @@ async def _review(
 
 async def harness_apply(
     *,
-    mode: str,
+    mode: ResultMethod,
     apply_url: str,
     job_id: int | None,
     applicant,

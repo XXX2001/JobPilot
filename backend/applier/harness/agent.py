@@ -489,12 +489,13 @@ class _Run:
         value = self.slots.get(slot, ("", ""))[1] if p >= 0.5 else ""
         source = slot
         if slot == "needs_written_answer" and p >= 0.5 and self.writer is not None:
-            frame_text = snap["frames"][action["frame"]]["text"]
-            start = max(0, frame_text.find(action["label"]) - 500)
+            frame_text = self.account_flow.clean(snap["frames"][action["frame"]]["text"])
+            label = self.account_flow.clean(action["label"])
+            start = max(0, frame_text.find(label) - 500)
             value = await self.writer(
                 {
-                    "label": self.account_flow.clean(action["label"]),
-                    "page_text": self.account_flow.clean(frame_text[start : start + 1500]),
+                    "label": label,
+                    "page_text": frame_text[start : start + 1500],
                     "page_title": self.account_flow.clean(snap["title"]),
                     "goal": self.goal,
                     "job_id": self.job_id,

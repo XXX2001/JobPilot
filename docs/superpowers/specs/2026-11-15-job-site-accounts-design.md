@@ -22,6 +22,15 @@ owner wants JobPilot to get through it alone and keep a list of the accounts in 
 4. **Required terms boxes** on a sign-up form are ticked by JobPilot and listed in the
    review. Marketing, newsletter and job-alert opt-ins stay unticked.
 5. **A list of accounts** in the app.
+6. **Fully automatic sign-up click** (owner's choice, 2026-11-15, after four safety reviews).
+   JobPilot clicks "Create account" / "Register" itself on pages that pass every check.
+   Accepted residual risk: a site that keeps a draft on its server, or puts account
+   creation at the end of applying with neutral wording ("Create your account") and the
+   application carried in hidden inputs, can send the application on that click without
+   the owner's review. The checks (explicit sign-in/sign-up words only, account fields
+   only, no application seen earlier in the run, application wording anywhere on the page
+   disqualifies) lower this risk; they cannot remove it. The alternative offered, the owner
+   pressing the first sign-up on each new site, was declined.
 
 ## What gets built
 

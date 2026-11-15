@@ -20,7 +20,9 @@ from backend.scraping.site_prompts import SITE_CONFIGS
 from tests.test_harness_agent import FIXTURES, PROFILE, ScriptedClient, run, step
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")
-SECRET = "account-only-Secret-8472!"
+# Avoid incidental matches between the password prefix and ordinary account labels.
+# The common-prefix redaction behavior has its own regression below.
+SECRET = "s9Q!account-only-Secret-8472!"
 HOST = "careers.example.com"
 URL = f"https://{HOST}"
 APPLICATION = "<label>Motivation<textarea></textarea></label><button>Postuler</button>"
@@ -1717,7 +1719,7 @@ async def test_critic4b_review_step_with_create_account_label_never_submits(page
 @pytest.mark.parametrize("text", [
     "Create a password to save your application", "Submit your application",
     "Your application will be saved", "Send your application", "Finalize application",
-    "Créer un compte pour soumettre votre candidature", "Enregistrer ma candidature",
+    "Créer un mot de passe pour soumettre votre candidature", "Enregistrer ma candidature",
     "Envoyer votre candidature", "Compléter votre candidature",
     "Votre candidature sera enregistrée", "Bewerbung abschließen", "Bewerbung absenden",
     "Review your application", "Récapitulatif de votre candidature",
@@ -1734,23 +1736,23 @@ async def test_application_text_in_account_control_container_disqualifies(page, 
 
 
 @pytest.mark.parametrize("inside", [False, True])
-async def test_application_text_only_counts_inside_the_signin_form(page, services, inside):
+async def test_application_text_inside_or_around_signin_form_disqualifies(page, services, inside):
     services[0].find_account.return_value = object()
     await page.goto(URL + "/signin")
-    # Even a surrounding section (including the sign-up link) is outside the form.
+    # Application wording in a surrounding section is also a reason to hand off.
     await page.locator("body").evaluate("e => e.innerHTML='<section>'+e.innerHTML+'</section>'")
     await page.locator("form" if inside else "section").evaluate(
         "e => e.insertAdjacentHTML('afterbegin',"
-        "'<p>Créer un compte pour soumettre votre candidature</p>')"
+        "'<p>Soumettre votre candidature</p>')"
     )
-    assert (await account_page(page) is not None) is (not inside)
+    assert await account_page(page) is None
     result = await run(
         page, ScriptedClient([
             step("TYPE_TEXT", "Email"), step("CLICK", "Connexion"), step("DONE"),
         ]), account_flow=flow(services),
     )
-    assert result.clicked_submit is (not inside)
-    assert page.url.endswith("/signin" if inside else "/application")
+    assert not result.clicked_submit
+    assert page.url.endswith("/signin")
 
 
 @pytest.mark.parametrize(
@@ -1864,7 +1866,7 @@ async def test_clicked_control_uses_its_form_owner_instead_of_ancestor(page, ser
         '<form id=review onsubmit="event.preventDefault(); window.submitted=true">'
         '<p>Save your application</p></form>'
     )
-    assert await account_page(page) is not None
+    assert await account_page(page) is None
     result = await run(
         page, ScriptedClient([step("CLICK", "Créer mon compte"), step("DONE")]),
         account_flow=flow(services),
@@ -2020,6 +2022,7 @@ async def test_critic5_application_text_gaps(page, phrase):
 @pytest.mark.parametrize("phrase", [
     "Créer votre compte", "Create your account to get started", "Konto erstellen",
     "Complete your profile",  # Profile alone is not an application noun.
+    "Connexion", "Créer un compte", "Sign in to your account",
 ])
 async def test_plain_signup_text_still_allows_account_page(page, phrase):
     await page.goto(URL + "/signin")
@@ -2037,9 +2040,6 @@ async def test_critic5_formless_application_text_never_submits(page, services, c
         '<label>Password<input type=password></label>'
         f'<button onclick="window.submitted=true">Create account</button></{container}>'
     )
-    # At body scope unrelated paragraphs are intentionally ignored; headings count.
-    if container == "body":
-        await page.locator("h1").evaluate("e => e.textContent='Submit your application'")
     assert await account_page(page) is None
     result = await run(page, ScriptedClient([
         step("CLICK", "Create account"), step("DONE"), step("DONE"),
@@ -2047,14 +2047,14 @@ async def test_critic5_formless_application_text_never_submits(page, services, c
     assert result.clicked == 0 and not await page.evaluate("!!window.submitted")
 
 
-async def test_formless_body_text_uses_field_children_and_all_headings(page):
+async def test_formless_body_text_includes_siblings_and_all_headings(page):
     await page.goto(URL + "/signin")
     await page.set_content(
         '<aside><p>Submit your application</p></aside>'
         '<div><label>Password<input type=password></label></div>'
         '<div><button>Create account</button></div>'
     )
-    assert await account_page(page) is not None
+    assert await account_page(page) is None
     await page.locator("aside").evaluate("e => e.innerHTML='<h3>Submit your application</h3>'")
     assert await account_page(page) is None
 
@@ -2278,3 +2278,229 @@ async def test_google_identity_scope_list_and_gmail_address_are_allowed(page):
     )
     assert await account_flow._google_step(page, "ada@gmail.com", set())
     assert await page.evaluate("!!window.approved")
+
+
+_CRITIC6_FORM = (
+    '<form onsubmit="event.preventDefault(); window.submitted=true">'
+    '<label>Email<input type=email value="ada@example.com"></label>'
+    '<label>Password<input type=password></label><button>Create account</button></form>'
+)
+
+
+@pytest.mark.parametrize("outside", [
+    "<h1>Submit your application</h1>",
+    "<h2>Last step: create an account to submit your application</h2>",
+    "<p>Step 4 of 4 - your application is sent when you create your account</p>",
+    "<section><h2>Review your application</h2><p>Ada Lovelace, CV.pdf</p></section>",
+])
+async def test_critic6_application_text_outside_form_never_submits(page, services, outside):
+    await page.goto(URL + "/signin")
+    await page.set_content(outside + _CRITIC6_FORM)
+    assert await account_page(page) is None
+    result = await run(page, ScriptedClient([
+        step("CLICK", "Create account"), step("DONE"), step("DONE"), step("DONE"),
+    ]), account_flow=flow(services))
+    assert not result.clicked_submit and not await page.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("container", ["form", "fieldset", "dialog open", "section", "div"])
+@pytest.mark.parametrize("heading", ["h1", "h2", "h3", 'div role="heading"', "legend", "title"])
+async def test_account_checks_headings_outside_container_parent(page, container, heading):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        f'<aside><{heading}>Submit your application</{heading.split()[0]}></aside>'
+        f'<main><div><{container}><label>Password<input type=password></label>'
+        f'<button>Sign in</button></{container.split()[0]}></div></main>'
+    )
+    assert await account_page(page) is None
+
+
+@pytest.mark.parametrize("container", ["form", "fieldset", "dialog open", "section", "div"])
+@pytest.mark.parametrize("outside", [
+    "Confirm your application", "<p>Confirm your application</p>",
+    "<section>Confirm your application</section>",
+])
+async def test_account_checks_parent_text_and_siblings(page, container, outside):
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        f'<main><{container}><label>Password<input type=password></label>'
+        f'<button>Sign in</button></{container.split()[0]}>{outside}</main>'
+    )
+    assert await account_page(page) is None
+
+
+@pytest.mark.parametrize("sentence", [
+    "<a href=/signup>Créer un compte</a> pour soumettre votre candidature",
+    "Create an account to apply for this job",
+    "Konto erstellen, um sich zu bewerben",
+])
+async def test_why_you_need_an_account_sentence_keeps_signin_page(page, sentence):
+    # Live FANUC SuccessFactors sign-in page: the sentence only explains the account.
+    await page.goto(URL + "/signin")
+    await page.locator("body").evaluate(
+        f"e => e.insertAdjacentHTML('beforeend', '<p>{sentence}</p>')"
+    )
+    assert await account_page(page) is not None
+
+
+@pytest.mark.parametrize("sentence", [
+    "Create a password to save your application",
+    "Create an account. Submit your application",
+    "<h1>Submit your application</h1>",
+])
+async def test_purpose_clause_exemption_is_narrow(page, sentence):
+    await page.goto(URL + "/signin")
+    await page.locator("body").evaluate(
+        f"e => e.insertAdjacentHTML('beforeend', '<p>{sentence}</p>')"
+    )
+    assert await account_page(page) is None
+
+
+async def test_application_heading_blocks_google_control(page):
+    await google_session(page)
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        '<h1>Confirm your application</h1><form>'
+        '<button onclick="window.submitted=true">Continue with Google</button></form>'
+    )
+    assert await account_page(page, email=PROFILE[1]) is None
+    assert await account_flow._google_button(page) is None
+    assert not await page.evaluate("!!window.submitted")
+
+
+async def test_application_confirmation_around_code_form_is_not_account(page, services):
+    await page.goto(URL + "/verify")
+    await page.locator("form").evaluate(
+        "e => e.insertAdjacentHTML('beforebegin', '<h1>Confirm your application</h1>')"
+    )
+    acct = flow(services)
+    acct.signup_since = datetime.now(UTC)
+    assert await account_page(page, after_signup=True) is None
+    assert await acct.detect(page) is None
+
+
+async def test_application_heading_blocks_switch_form_with_prior_account_state(page, services):
+    await page.goto(URL + "/signin")
+    acct = flow(services)
+    acct.mode = "signup"
+    state = await account_page(page)
+    assert state is not None
+    await page.locator("body").evaluate(
+        "e => e.insertAdjacentHTML('afterbegin', '<h1>Confirm your application</h1>')"
+    )
+    with pytest.raises(account_flow.AccountHandoff, match="No sign-up control"):
+        await acct._switch_form(page, state)
+    assert page.url.endswith("/signin")
+
+
+async def test_critic6_hidden_application_payload_first_page_never_submits(page, services):
+    await page.goto(URL + "/signin")
+    await page.set_content('<h1>Create your account</h1>' + _CRITIC6_FORM)
+    await page.locator("form").evaluate("""e => e.insertAdjacentHTML('afterbegin',
+        '<input type=hidden name=application_id value=42>' +
+        '<input type=hidden name=submit_application value=1>')""")
+    assert await account_page(page) is None
+    result = await run(page, ScriptedClient([
+        step("CLICK", "Create account"), step("DONE"), step("DONE"), step("DONE"),
+    ]), account_flow=flow(services))
+    assert not result.clicked_submit and not await page.evaluate("!!window.submitted")
+
+
+@pytest.mark.parametrize("pad", [5970, 5980, 5990])
+async def test_critic6_snapshot_truncation_does_not_leak_password_prefix(page, services, pad):
+    await page.goto(URL + "/signin")
+    filler = ("ab " * 3000)[:pad]
+    await page.set_content(
+        f'<p style="font-size:2px;line-height:2px">{filler}</p><p>Your password: {SECRET}</p>'
+        '<label>Password<input type=password></label><button>Log in</button>'
+    )
+    snap = await agent.observe(page)
+    if pad < 5990:
+        assert snap["text"].endswith(SECRET[: 6000 - len(filler.strip()) - 16])
+    client = ScriptedClient([step("DONE"), step("DONE"), step("DONE")])
+    with pytest.raises(agent.HarnessBlocked, match="Owner hand-off timed out"):
+        await run(page, client, account_flow=flow(services))
+    assert client.requests
+    assert SECRET[:4] not in json.dumps(client.requests)
+
+
+async def test_critic6_whitespace_password_in_label_does_not_leak(page, services):
+    password = "my  pass  phrase-77"
+    await page.goto(URL + "/signin")
+    await page.set_content(
+        '<label>Password<input type=password></label>'
+        f'<label>Confirm<input type=text aria-label="Strength for {password}: strong"></label>'
+        '<button>Log in</button>'
+    )
+    client = ScriptedClient([step("DONE"), step("DONE"), step("DONE")])
+    await run(page, client, account_flow=flow(services, password))
+    assert client.requests
+    assert "my pass phrase-77" not in json.dumps(client.requests)
+
+
+@pytest.mark.parametrize("length", [3, 4, 12, len(SECRET) - 1, len(SECRET)])
+async def test_clean_redacts_only_trailing_password_fragments_of_at_least_four(services, length):
+    prefix = SECRET[:length]
+    expected = "[redacted]" if length >= 4 else prefix
+    assert flow(services).clean({prefix: ["Echo: " + prefix]}) == {expected: ["Echo: " + expected]}
+    if length < len(SECRET):
+        assert flow(services).clean("Echo: " + prefix + " middle") == "Echo: " + prefix + " middle"
+
+
+@pytest.mark.parametrize("echo", ["my pass phrase-77", "my\npass   phrase-77", "my\tpass\nphrase"])
+async def test_clean_matches_flexible_whitespace_and_trailing_fragments(services, echo):
+    assert flow(services, "my  pass  phrase-77").clean("Echo: " + echo) == "Echo: [redacted]"
+
+
+@pytest.mark.parametrize("password,variants", [
+    ("mötdepasse1", ["m%C3%B6tdepasse1", "m%F6tdepasse1", "mötdepasse1"]),
+    ("pass€πword1", ["pass%E2%82%AC%CF%80word1", "pass%80%26%23960%3Bword1", "pass€πword1"]),
+])
+async def test_clean_matches_each_encoding_against_original_string(services, password, variants):
+    acct = flow(services, password)
+    for ordered in (variants, list(reversed(variants))):
+        assert acct.clean(" | ".join(ordered)) == " | ".join(["[redacted]"] * len(ordered))
+
+
+async def test_decision_redacts_before_clipping_merged_frame_text(services):
+    from backend.applier.harness.decide import build_request
+
+    snap = {"url": URL, "title": "Sign in", "text": "x" * 5998 + SECRET, "actions": []}
+    body, _, _ = build_request(snap, "goal", [], "scripted", clean=flow(services).clean)
+    assert body["state"]["page"]["text"] == "x" * 5998 + "[r"
+
+
+async def test_trailing_fragment_matching_account_label_keeps_original_click_target(page, services):
+    password = "account-only-Secret-8472!"
+    await page.goto(URL + "/signup")
+    await page.locator("button").evaluate("e => e.textContent='Create account'")
+    acct = flow(services, password)
+    assert acct.clean("Create account") == "Create [redacted]"
+    client = ScriptedClient(signin_steps("Create [redacted]"))
+    result = await run(page, client, account_flow=acct)
+    assert result.clicked_submit and page.url.endswith("/application")
+    assert "Create [redacted]" in json.dumps(client.requests)
+
+
+async def test_slot_instructions_redact_clipped_label_before_interpolation(services):
+    from backend.applier.harness.decide import pick_slot
+
+    client = ScriptedClient([], slots={"Name [redacted]": ("first_name", 0.9)})
+    limited = agent._LimitedClient(client, flow(services).clean)
+    slot, _ = await pick_slot(limited, {"label": "Name " + SECRET[:12]}, "Profile", {
+        "first_name": "First name", "none": "No matching slot",
+    })
+    assert slot == "first_name"
+    assert SECRET[:12] not in json.dumps(client.requests)
+
+
+@pytest.mark.parametrize("container", ["form", "div"])
+async def test_account_checks_sibling_text_inside_shadow_root(page, container):
+    await page.goto(URL + "/signin")
+    await page.set_content('<div id="host"></div>')
+    await page.locator("#host").evaluate("""(e, container) => {
+        e.attachShadow({mode:'open'}).innerHTML = `<${container}>
+            <label>Password<input type=password></label><button>Sign in</button>
+            </${container}><p>Confirm your application</p>`;
+    }""", container)
+    assert await account_page(page) is None

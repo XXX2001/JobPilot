@@ -2,11 +2,12 @@
 
 import asyncio
 import re
+import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
-from urllib.parse import SplitResult, parse_qs, unquote, urlsplit
+from urllib.parse import SplitResult, parse_qs, unquote_plus, urlsplit
 from xml.etree import ElementTree
 
 from playwright.async_api import BrowserContext, Page, Response
@@ -49,6 +50,28 @@ _NON_CODE_LABEL = re.compile(
     re.I,
 )
 _DURATION = re.compile(r"\s*(?:minutes?|hours?|jours?|heures?|days?|stunden?)\b", re.I)
+_APPLICATION_VERB = (
+    r"(sav|enregistr|submit|soumettr|envoy|sen[dt]|valid|confirm|complet|"
+    r"finali|transmet|abschließ|abschliess|ab(?:zu)?schick|ab(?:zu)?send|"
+    r"ein(?:zu)?reich|apply|postul|bewerb)"
+)
+_APPLICATION_NOUN = r"(application|candidature|dossier|bewerbung)"
+_APPLICATION_TEXT = re.compile(
+    _APPLICATION_VERB + r".{0,60}" + _APPLICATION_NOUN + "|"
+    + _APPLICATION_NOUN + r".{0,60}" + _APPLICATION_VERB
+    + r"|apply.{0,60}profile?|profile?.{0,60}apply|"
+    r"review your application|recapitulatif de (votre|ma) candidature|"
+    r"Zusammenfassung Ihrer Bewerbung|bewerbung bestatigen|"
+    r"confirm your application|confirmer votre candidature|"
+    r"/application|/apply|/candidature|/bewerbung",
+    re.I,
+)
+
+
+def _application_text(text: str) -> bool:
+    normalized = unicodedata.normalize("NFD", unquote_plus(text))
+    normalized = "".join(c for c in normalized if not unicodedata.combining(c))
+    return bool(_APPLICATION_TEXT.search(re.sub(r"\s+", " ", normalized)))
 
 
 @dataclass(frozen=True)
@@ -59,6 +82,8 @@ class Verification:
 
 def extract_code(text: str) -> str | None:
     """Choose a code up to 40 characters after a cue, excluding common unrelated numbers."""
+    if _application_text(text):
+        return None
     cues = [
         cue
         for cue in _CODE_WORD.finditer(text)
@@ -112,6 +137,14 @@ def _http_url(link: str) -> SplitResult | None:
         return None
 
 
+def _application_verification_link(link: str) -> bool:
+    url = _http_url(link)
+    if url is None:
+        return False
+    wording = unquote_plus(f"{url.path}?{url.query}#{url.fragment}")
+    return bool(_VERIFY_LINK.search(wording)) and _application_text(wording)
+
+
 def pick_link(links: list[str], site_host: str, sender_domain: str = "") -> str | None:
     """Choose an HTTPS verification link, binding ATS links to their sender or tenant."""
     site_domain = _registrable_domain(site_host)
@@ -130,8 +163,12 @@ def pick_link(links: list[str], site_host: str, sender_domain: str = "") -> str 
                 continue
         elif domain != site_domain:
             continue
-        wording = unquote(f"{url.path}?{url.query}#{url.fragment}")
-        if not _EXCLUDED_LINK.search(wording) and _VERIFY_LINK.search(wording):
+        wording = unquote_plus(f"{url.path}?{url.query}#{url.fragment}")
+        if (
+            not _application_text(wording)
+            and not _EXCLUDED_LINK.search(wording)
+            and _VERIFY_LINK.search(wording)
+        ):
             return link
     return None
 
@@ -200,6 +237,8 @@ def _matching_messages(xml: str, since: datetime, site_host: str, company: str) 
             _registrable_domain(sender.rsplit("@", 1)[-1].strip()) if "@" in sender else ""
         )
         title = entry.findtext(f"{_ATOM}title", "")
+        if _application_text(title + " " + entry.findtext(f"{_ATOM}summary", "")):
+            continue
         name = entry.findtext(f"{_ATOM}author/{_ATOM}name", "")
         if not (
             (site_domain and site_domain == sender_domain)
@@ -268,13 +307,20 @@ async def _read_mail(
             response = await _gmail_goto(page, message.url, signed_out, wait_until="load")
             if response is None or response.status != 200:
                 continue
-            text = await page.evaluate("() => document.body?.innerText || ''")
-            code = extract_code(text)
-            if code:
-                return Verification(code=code)
+            text = await page.evaluate(
+                "() => document.title + '\\n' + (document.body?.innerText || '')"
+            )
             anchors = await page.locator("a[href]").evaluate_all(
                 "anchors => anchors.map(a => ({href: a.href, text: a.innerText}))"
             )
+            if _application_text(text) or any(
+                _application_verification_link(anchor["href"]) or _application_text(anchor["text"])
+                for anchor in anchors
+            ):
+                continue
+            code = extract_code(text)
+            if code:
+                return Verification(code=code)
             links = [
                 anchor["href"] for anchor in anchors if not _EXCLUDED_LINK.search(anchor["text"])
             ]

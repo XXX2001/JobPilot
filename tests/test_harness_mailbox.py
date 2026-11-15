@@ -656,3 +656,83 @@ async def test_cancellation_during_new_page_does_not_leak_page(mailbox):
         with pytest.raises(asyncio.CancelledError):
             await task
     assert context.pages == [owner_page]
+
+
+@pytest.mark.parametrize("wording", [
+    "Confirm your application", "Confirmer votre candidature", "Bewerbung bestätigen",
+    "Submit your application", "Enregistrer ma candidature", "Bewerbung abschließen",
+    "Review your application", "Récapitulatif de votre candidature",
+    "Create an account to complete your profile and apply",
+    "CONFIRMER\nVOTRE   CANDIDATURE",
+])
+def test_extract_code_rejects_application_confirmation(wording):
+    assert extract_code(wording + ". Your verification code: 123456") is None
+    assert extract_code("Your verification code: 123456. " + wording) is None
+
+
+_APPLICATION_LINKS = [
+    "https://acme.com/application/confirm?token=1",
+    "https://acme.com/apply/verify?token=1",
+    "https://acme.com/candidature/valider?token=1",
+    "https://acme.com/bewerbung/confirm?token=1",
+    "https://acme.com/verify?next=%2Fapplication",
+    "https://acme.com/verify?next=%2Fapply",
+    "https://acme.com/verify?next=%2Fcandidature",
+    "https://acme.com/verify?next=%2Fbewerbung",
+    "https://acme.com/verify?text=confirm+your+application",
+    "https://acme.com/verify?text=confirmer%20votre%20candidature",
+    "https://acme.com/verify?text=Bewerbung+best%C3%A4tigen",
+]
+
+
+@pytest.mark.parametrize("link", _APPLICATION_LINKS)
+def test_pick_link_rejects_application_paths_and_queries(link):
+    assert pick_link([link], "jobs.acme.com") is None
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("source", ["title", "summary", "body", "page_title"])
+@pytest.mark.parametrize("wording", [
+    "Confirm your application", "Confirmer votre candidature", "Bewerbung bestätigen",
+])
+async def test_wait_rejects_application_email_subject_or_body(mailbox, source, wording):
+    fields = {source: "Acme: " + wording} if source in {"title", "summary"} else {}
+    mailbox[2][FEED] = ("application/atom+xml", feed_entry(**fields))
+    body = ('Your verification code: 123456 '
+            '<a href="https://acme.com/verify">Verify account</a>')
+    if source == "body":
+        body += f"<p>{wording}</p>"
+    elif source == "page_title":
+        body = f"<title>{wording}</title>" + body
+    mailbox[2][MESSAGE] = ("text/html", body)
+    assert await poll(mailbox, timeout_s=0.3) is None
+    if source in {"title", "summary"}:
+        assert MESSAGE not in mailbox[3]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+@pytest.mark.parametrize("link", _APPLICATION_LINKS)
+@pytest.mark.parametrize("code", ["", "Your verification code: 123456"])
+async def test_wait_rejects_application_link_and_any_code_in_same_mail(mailbox, link, code):
+    mailbox[2][FEED] = ("application/atom+xml", feed_entry())
+    mailbox[2][MESSAGE] = ("text/html", f'{code}<a href="{link}">Verify account</a>')
+    assert await poll(mailbox, timeout_s=0.3) is None
+    assert link not in mailbox[3]
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_wait_code_email_can_have_unrelated_jobs_footer(mailbox):
+    mailbox[2][FEED] = ("application/atom+xml", feed_entry())
+    mailbox[2][MESSAGE] = (
+        "text/html",
+        'Your account verification code: 123456 <a href="https://acme.com/apply">Careers</a>',
+    )
+    assert (await poll(mailbox)).code == "123456"
+
+
+@pytest.mark.asyncio(loop_scope="module")
+async def test_wait_application_link_filter_checks_path_not_hostname(mailbox):
+    mailbox[2][FEED] = ("application/atom+xml", feed_entry())
+    link = "https://application.acme.com/confirm?token=1"
+    mailbox[2][MESSAGE] = ("text/html", f'<a href="{link}">Verify account</a>')
+    assert (await poll(mailbox)).link == link

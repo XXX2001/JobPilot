@@ -3,11 +3,12 @@
 import asyncio
 import html
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from typing import Any
-from urllib.parse import quote, quote_plus, unquote_plus, urlsplit
+from urllib.parse import unquote_plus, urlsplit
 
 from playwright.async_api import ElementHandle, Frame, Page
 from playwright.async_api import Error as PlaywrightError
@@ -49,15 +50,18 @@ _GOOGLE_EXTRA_SCOPES = re.compile(
 _GOOGLE_IDENTITY_SCOPE = re.compile(
     r"\b(?:full name|name|e-?mail address|language preference|profile picture|"
     r"nom|adresse e-?mail|pr[eé]f[eé]rence linguistique|photo de profil|"
-    r"e-mail-adresse|spracheinstellung|profilbild)\b", re.I,
+    r"e-mail-adresse|spracheinstellung|profilbild)\b",
+    re.I,
 )
 _GOOGLE_SCOPE_VERB = re.compile(
     r"\b(?:see|view|read|manage|edit|delete|download|upload|"
     r"consulter|lire|g[eé]rer|modifier|supprimer|anzeigen|lesen|verwalten|l[oö]schen)\b|"
-    r"^access\b", re.I,
+    r"^access\b",
+    re.I,
 )
 _GOOGLE_SCOPE_CONNECTORS = re.compile(
-    r"\b(?:and|your|the|et|votre|vos|und|ihre?|ihren)\b|[\W_]+", re.I,
+    r"\b(?:and|your|the|et|votre|vos|und|ihre?|ihren)\b|[\W_]+",
+    re.I,
 )
 _GOOGLE_OTHER_ACCOUNT = re.compile(
     r"use another account|utiliser un autre compte|anderes konto|\b(?:not|pas)\s+",
@@ -115,7 +119,10 @@ _DOM = r"""
     };
     const accountField = e => {
         if (e.matches('textarea, [contenteditable], input[type=file]')) return false;
-        if (e.matches('input[type=password], input[type=email], input[type=hidden], ' +
+        if (e.matches('input[type=hidden]'))
+            return !/\b(application|apply|candidature|bewerbung|dossier)\b/i
+                .test([e.name, e.id].join(' ').replace(/[_-]/g, ' '));
+        if (e.matches('input[type=password], input[type=email], ' +
                       'input[type=checkbox], [role=checkbox]:not(input):not(select)'))
             return true;
         if (!e.matches('input:not([type]), input[type=text], input[type=tel], ' +
@@ -139,10 +146,16 @@ _DOM = r"""
         e.matches('button, input[type=submit], input[type=button], input[type=reset]') ||
         (e.matches('input, select') && (accountField(e) || (allowCode && code(e))));
     const applicationText = text => {
-        const verb = '(sav|enregistr|submit|soumettr|envoy|send|valid|confirm|complet|' +
+        const verb = '(sav|enregistr|submit|soumettr|envoy|sen[dt]|valid|confirm|complet|' +
             'finali|transmet|abschließ|abschliess|ab(?:zu)?schick|ab(?:zu)?send|' +
             'ein(?:zu)?reich|apply|postul|bewerb)';
         const noun = '(application|candidature|dossier|bewerbung)';
+        // "Créer un compte pour soumettre votre candidature" only says why an account is
+        // needed (live FANUC sign-in page): drop such purpose clauses. Owner-accepted risk,
+        // see the spec's decision 6. "Create a password to save your application" stays.
+        text = text.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(
+            /\b(creer|create|ouvrir|open|erstellen|registrieren|inscri\w*)\s+(un |an |ein |votre |your |ihr )?(compte|account|konto)\s*,?\s+(pour|to|um|afin de)\b[^.!?\n]{0,80}/gi,
+            ' ').replace(/\b(konto)\s+(erstellen|anlegen)\s*,?\s+um\b[^.!?\n]{0,80}/gi, ' ');
         return new RegExp(verb + '.{0,60}' + noun + '|' + noun + '.{0,60}' + verb +
             '|apply.{0,60}profile?|profile?.{0,60}apply|' +
             'review your application|recapitulatif de (votre|ma) candidature|' +
@@ -158,18 +171,26 @@ _DOM = r"""
     };
     const accountText = e => {
         let container = e.form || e.closest('form, fieldset, dialog, section');
-        if (container) return container.textContent || '';
-        const targets = [e, ...query(document, 'input[type=password]')];
-        container = e.parentElement || e.getRootNode().host;
-        while (container && !targets.every(target => contains(container, target)))
-            container = container.parentElement || container.getRootNode().host;
-        if (container === document.body) {
-            const parts = [...container.children].filter(child =>
-                targets.some(target => contains(child, target)));
-            parts.push(...query(document, 'h1, h2, h3, [role=heading]'));
-            return [...new Set(parts)].map(part => part.textContent || '').join(' ');
+        if (!container) {
+            const targets = [e, ...query(document, 'input[type=password]')];
+            container = e.parentElement || e.getRootNode().host;
+            while (container && !targets.every(target => contains(container, target)))
+                container = container.parentElement || container.getRootNode().host;
         }
-        return container?.textContent || '';
+        // The parent includes sibling paragraphs/sections, even below the form.
+        // Headings anywhere on the page can identify an application review step.
+        const parent = container?.parentNode || container?.getRootNode().host;
+        const text = part => {
+            if (!part) return '';
+            if (part.nodeType === Node.TEXT_NODE) return part.textContent || '';
+            if (part.nodeType === Node.ELEMENT_NODE &&
+                part.matches('script, style, noscript, template')) return '';
+            return [...part.childNodes, ...(part.shadowRoot?.childNodes || [])]
+                .map(text).join(' ');
+        };
+        return [document.title, ...[container, parent,
+            ...query(document, 'h1, h2, h3, [role=heading], legend, title')]
+            .map(text)].join(' ');
     };
     const accountContainer = (e, allowCode = false) => {
         // form= can associate controls outside the form's descendant tree.
@@ -240,7 +261,10 @@ _SWITCH_STATE_JS = r"""e => {
     return {label: (e.getAttribute('aria-label') || e.innerText || e.value || '').trim(),
         submits: !!e.form && e.type === 'submit'};
 }"""
-_APPLICATION_SEEN_JS = "nodes => {" + _DOM + r"""
+_APPLICATION_SEEN_JS = (
+    "nodes => {"
+    + _DOM
+    + r"""
     if (query(document, 'input[type=file], textarea, [contenteditable]').length) return true;
     if (query(document, 'input[type=radio], input[type=checkbox], [role=radio], ' +
         '[role=checkbox], [role=switch]').some(e => e.form || e.closest('form'))) return true;
@@ -253,6 +277,7 @@ _APPLICATION_SEEN_JS = "nodes => {" + _DOM + r"""
         return e?.isConnected && !search(e);
     });
 }"""
+)
 
 
 class AccountError(RuntimeError):
@@ -401,9 +426,11 @@ async def _google_button(page: Page) -> ElementHandle | None:
             "button, a, input[type=submit], input[type=button], [role=button], [role=link]"
         ).element_handles():
             if await control.evaluate(
-                "(e, origin) => {" + _DOM +
-                "return e.isConnected && e.ownerDocument.defaultView.origin === origin && "
-                "visible(e) && googleControl(e) && accountContainer(e); }", origin,
+                "(e, origin) => {"
+                + _DOM
+                + "return e.isConnected && e.ownerDocument.defaultView.origin === origin && "
+                "visible(e) && googleControl(e) && accountContainer(e); }",
+                origin,
             ):
                 return control
             await control.dispose()
@@ -439,10 +466,10 @@ async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) ->
             return False
         text += "\n" + await frame.locator("body").inner_text(timeout=1000)
         scope_checkboxes |= bool(
-            await frame.locator('input[type=checkbox], [role=checkbox]').count()
+            await frame.locator("input[type=checkbox], [role=checkbox]").count()
         )
         scope_rows.extend(
-            await frame.locator('li, [role=listitem], [data-scope]').all_inner_texts()
+            await frame.locator("li, [role=listitem], [data-scope]").all_inner_texts()
         )
     if _GOOGLE_CHALLENGE.search(text):
         return False
@@ -461,9 +488,10 @@ async def _google_step(page: Page, email: str, clicked: set[tuple[str, str]]) ->
         consent = _EMAIL_IN_TEXT.sub("", text)
         for line in consent.splitlines():
             if match := _GOOGLE_SCOPE_VERB.search(line):
-                scope_rows.append(line[match.start():])
+                scope_rows.append(line[match.start() :])
         if (
-            scope_checkboxes or _GOOGLE_EXTRA_SCOPES.search(consent)
+            scope_checkboxes
+            or _GOOGLE_EXTRA_SCOPES.search(consent)
             or any(not _basic_google_scope(row) for row in scope_rows)
         ):
             return False
@@ -611,12 +639,12 @@ async def tick_required_terms(page: Page) -> list[str]:
                     label = await box.evaluate(_LABEL_JS)
                     if label and _TERMS.search(label) and not OPT_IN_WORDS.search(label):
                         if await box.evaluate(
-                            "(e, [expected, origin]) => {" + _DOM +
-                            "return e.isConnected && "
+                            "(e, [expected, origin]) => {" + _DOM + "return e.isConnected && "
                             "e.ownerDocument.defaultView.origin === origin && visible(e) && "
                             "e.matches('input[type=checkbox], [role=checkbox]') && "
                             "!e.checked && e.getAttribute('aria-checked') !== 'true' && "
-                            "label(e) === expected && accountContainer(e); }", [label, origin],
+                            "label(e) === expected && accountContainer(e); }",
+                            [label, origin],
                         ):
                             await box.check(timeout=1500)
                             chosen.append(label)
@@ -668,6 +696,25 @@ async def _page_text(page: Page) -> str:
     )
 
 
+def _decode_with_spans(
+    text: str, spans: list[tuple[int, int]], pattern: str, decode: Callable[[str], str]
+) -> tuple[str, list[tuple[int, int]]]:
+    """Keep decoded characters tied to their original encoded span for redaction."""
+    parts = []
+    mapped = []
+    end = 0
+    for match in re.finditer(pattern, text):
+        parts.append(text[end : match.start()])
+        mapped.extend(spans[end : match.start()])
+        decoded = decode(match[0])
+        parts.append(decoded)
+        mapped.extend([(spans[match.start()][0], spans[match.end() - 1][1])] * len(decoded))
+        end = match.end()
+    parts.append(text[end:])
+    mapped.extend(spans[end:])
+    return "".join(parts), mapped
+
+
 @dataclass
 class AccountFlow:
     password: str | None = field(repr=False)
@@ -697,29 +744,55 @@ class AccountFlow:
         if isinstance(value, str):
             if not self.password:
                 return value
-            # GET forms may encode even unreserved characters and may use legacy charsets.
-            # Decode only when a secret is present, preserving unrelated outward data.
+            password = re.sub(r"\s+", " ", self.password)
+
+            def flexible(text: str) -> str:
+                return r"\s+".join(re.escape(part) for part in text.split(" "))
+
+            # DOM snapshots can truncate an echo partway through the password.
+            fragments = [flexible(password[:end]) for end in range(len(password) - 1, 3, -1)]
+            pattern = re.compile(
+                flexible(password) + (r"|(?:" + "|".join(fragments) + r")\Z" if fragments else "")
+            )
+            original_spans = [(i, i + 1) for i in range(len(value))]
+            views = [(value, original_spans)]
+            # Decode every charset from the original. A UTF-8 attempt must not destroy
+            # a legacy-encoded occurrence elsewhere in the same string.
             for encoding in ("utf-8", "latin-1", "cp1252"):
-                # Chromium uses decimal HTML entities for characters a legacy
-                # form charset cannot represent, then percent-encodes the entities.
-                for decoded in (value, unquote_plus(value, encoding=encoding)):
-                    for candidate in (decoded, html.unescape(decoded)):
-                        if self.password in candidate:
-                            value = candidate.replace(self.password, "[redacted]")
-            for encoded in {
-                quote(self.password),
-                quote(self.password, safe=""),
-                quote_plus(self.password),
-                quote_plus(self.password).replace("~", "%7E"),
-            }:
-                pattern = "".join(
-                    "%" + "".join(f"[{c.lower()}{c.upper()}]" for c in part[1:])
-                    if re.fullmatch(r"%[0-9A-Fa-f]{2}", part)
-                    else re.escape(part)
-                    for part in re.split(r"(%[0-9A-Fa-f]{2})", encoded)
+                views.append(
+                    _decode_with_spans(
+                        value,
+                        original_spans,
+                        r"\+|(?:%[0-9a-fA-F]{2})+",
+                        lambda text: unquote_plus(text, encoding=encoding),
+                    )
                 )
-                value = re.sub(pattern, "[redacted]", value)
-            return value.replace(self.password, "[redacted]")
+            matches = []
+            for decoded, spans in views:
+                # Legacy GET forms can use percent-encoded numeric HTML entities.
+                unescaped, unescaped_spans = _decode_with_spans(
+                    decoded,
+                    spans,
+                    r"&(?:#[xX][0-9a-fA-F]+;?|#[0-9]+;?|[A-Za-z][A-Za-z0-9]+;?)",
+                    html.unescape,
+                )
+                for candidate, positions in ((decoded, spans), (unescaped, unescaped_spans)):
+                    matches.extend(
+                        (positions[m.start()][0], positions[m.end() - 1][1])
+                        for m in pattern.finditer(candidate)
+                    )
+            merged: list[tuple[int, int]] = []
+            for start, end in sorted(matches):
+                if merged and start <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                else:
+                    merged.append((start, end))
+            parts = []
+            end = 0
+            for start, stop in merged:
+                parts.extend((value[end:start], "[redacted]"))
+                end = stop
+            return "".join(parts) + value[end:]
         if isinstance(value, dict):
             return {self.clean(k): self.clean(v) for k, v in value.items()}
         if isinstance(value, list):
@@ -782,8 +855,9 @@ class AccountFlow:
                 if identity in self.form_switches:
                     raise AccountHandoff("Account mode could not be switched")
                 if not await control.evaluate(
-                    "(e, [expected, allowCode, origin]) => {" + _DOM +
-                    f"const state = ({_SWITCH_STATE_JS})(e); "
+                    "(e, [expected, allowCode, origin]) => {"
+                    + _DOM
+                    + f"const state = ({_SWITCH_STATE_JS})(e); "
                     "return e.isConnected && e.ownerDocument.defaultView.origin === origin && "
                     "visible(e) && !state.submits && "
                     "state.label === expected && accountContainer(e, allowCode); }",
@@ -825,7 +899,8 @@ class AccountFlow:
             return
         for index, frame in enumerate(snap["_frame_refs"]):
             nodes = [
-                action["node"] for action in snap["actions"]
+                action["node"]
+                for action in snap["actions"]
                 if action["kind"] in {"fill", "select"} and action["frame"] == index
             ]
             if await frame.evaluate(_APPLICATION_SEEN_JS, nodes):

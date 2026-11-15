@@ -32,6 +32,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Install test browser
+        run: uv run playwright install --with-deps --only-shell chromium
+
       - name: Run backend tests
         run: uv run pytest -q
 

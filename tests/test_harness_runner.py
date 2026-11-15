@@ -812,3 +812,58 @@ async def test_applicant_linkedin_url_has_profile_length_bound():
         ApplicantInfo(linkedin_url="x" * (MAX_LEN_LOCATION + 1))
     assert exc.value.errors()[0]["loc"] == ("linkedin_url",)
     assert exc.value.errors()[0]["type"] == "string_too_long"
+
+
+@pytest.mark.parametrize(
+    ("href", "expected"),
+    [
+        (
+            "https://www.linkedin.com/safety/go/?url=https%3A%2F%2Facme%2Econtactrh%2Ecom%2Fjobs%2F1&urlhash=x",
+            "https://acme.contactrh.com/jobs/1",
+        ),
+        ("https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fjobs.acme.io%2Fa", "https://jobs.acme.io/a"),
+        ("https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fwww.linkedin.com%2Ffeed", None),
+        ("https://www.linkedin.com/safety/go/?url=javascript%3Aalert(1)", None),
+        ("https://www.linkedin.com/safety/go/", None),
+    ],
+)
+def test_unwrap_linkedin_redirect(href, expected):
+    assert runner.unwrap_linkedin_redirect(href) == expected
+
+
+async def test_linkedin_offsite_apply_opens_company_page(browser):
+    context = await browser.new_context()
+    page = await context.new_page()
+    posting = (
+        '<a href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fjobs.acme.io%2Fapply" '
+        'target="_blank" aria-label="Apply on company website">Apply</a>'
+        '<a href="https://www.linkedin.com/safety/go/?url=https%3A%2F%2Facme.io">Acme website</a>'
+    )
+
+    pages = {
+        "https://jobs.acme.io/apply": (
+            '<form action="https://jobs.acme.io/search/"><input name="q" aria-label="Rechercher par mot-clé">'
+            '<input name="locationsearch" aria-label="Rechercher par lieu"></form>'
+            '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>'
+            '<a href="https://jobs.acme.io/apply/form">Postuler »</a>'
+        ),
+        "https://jobs.acme.io/apply/form": '<label>Email <input type="email" name="email"></label>',
+        "https://jobs.acme.io/other": '<a href="https://jobs.acme.io/careers">Emplois &amp; candidature</a>',
+    }
+
+    async def serve(route):
+        url = route.request.url
+        body = posting if "linkedin.com/jobs" in url else pages.get(url, "<h1>other</h1>")
+        await route.fulfill(content_type="text/html", body=body)
+
+    await context.route("https://**/*", serve)
+    await page.goto("https://www.linkedin.com/jobs/view/1/")
+    await runner._follow_offsite_apply(page)
+    # LinkedIn -> company posting -> its "Postuler" link; the nav link is never followed.
+    assert page.url == "https://jobs.acme.io/apply/form"
+    await runner._follow_offsite_apply(page)  # a form is here: stays put
+    assert page.url == "https://jobs.acme.io/apply/form"
+    await page.goto("https://jobs.acme.io/other")
+    await runner._follow_offsite_apply(page)  # no apply verb link: stays put
+    assert page.url == "https://jobs.acme.io/other"
+    await context.close()

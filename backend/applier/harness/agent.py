@@ -49,6 +49,9 @@ _NON_SUBMIT_ROLES = {
     "gridcell",
 }
 _CHOICE_ROLES = {"radio", "checkbox", "switch"}
+_SEARCH_FIELD = re.compile(
+    r"\b(?:search|rechercher?|recherche par|suche|suchen|keywords?|mot-clé|mots-clés)\b", re.I
+)
 _UPLOAD_TARGET = """e => ({
     label: window.__jobpilotHarness?.guard(e, true)?.[2] || '',
     name: e.name || '', input_id: e.id || '', accept: e.accept || '',
@@ -406,8 +409,10 @@ class _Run:
     def submit_for_done(self, snap, decision):
         chosen = decision.submit_action
         # submit_target always names some click; trust it only for a submitting control.
-        if chosen is not None and decision.submit_p >= 0.3 and (
-            chosen.get("submits") or _matches(chosen, SUBMIT_PATTERN)
+        if (
+            chosen is not None
+            and decision.submit_p >= 0.3
+            and (chosen.get("submits") or _matches(chosen, SUBMIT_PATTERN))
         ):
             return chosen
         candidates = [
@@ -466,6 +471,14 @@ class _Run:
             self.check_limits()
             try:
                 snap = await observe(self.page)
+                # A site's job search box is never part of the application (live: FANUC's
+                # "Rechercher par lieu" got the owner's city).
+                self.excluded.update(
+                    _identity(snap, a)
+                    for a in snap["actions"]
+                    if a["kind"] == "fill"
+                    and (a.get("role") == "searchbox" or _SEARCH_FIELD.search(a.get("label", "")))
+                )
                 if previous is not None:
                     changed = snap["fingerprint"] != previous
                     self.history[-1]["page_changed"] = changed
@@ -513,9 +526,8 @@ class _Run:
                 # A reCAPTCHA badge on a usable form is not a blocking captcha (live Greenhouse
                 # was classed "captcha" while its fields were fillable): hand off only when the
                 # page offers nothing to fill or choose.
-                fillable = (
-                    bool(self.result.typed or self.result.uploads)
-                    or any(a["kind"] in ("fill", "select") for a in offered["actions"])
+                fillable = bool(self.result.typed or self.result.uploads) or any(
+                    a["kind"] in ("fill", "select") for a in offered["actions"]
                 )
                 if (
                     decision.page_kind == "login_wall"
@@ -586,7 +598,9 @@ class _Run:
                                 and not last.get("skipped")
                             )
                             question = last["action"].removeprefix("Open ") if opened else ""
-                            chosen = f"{question}: {action['label']}" if question else action["label"]
+                            chosen = (
+                                f"{question}: {action['label']}" if question else action["label"]
+                            )
                         self.chooser_document = kind
                         try:
                             await act(self.page, snap, action)

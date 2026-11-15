@@ -33,6 +33,98 @@ from .snapshot import fresh, observe
 
 logger = logging.getLogger(__name__)
 
+# LinkedIn wraps offsite apply links ("Apply on company website") in a redirect page.
+_LINKEDIN_OFFSITE_APPLY = """() => {
+    const a = [...document.querySelectorAll('a[href]')].find(e =>
+        /\\/(safety\\/go|redir\\/redirect)\\/?\\?/.test(e.href) &&
+        /apply|postul|candidat/i.test(e.innerText + ' ' + (e.getAttribute('aria-label') || '')));
+    return a ? a.href : null;
+}"""
+
+
+def unwrap_linkedin_redirect(href: str) -> str | None:
+    """The target of a LinkedIn safety/redirect link, if it is an http(s) URL off LinkedIn."""
+    from urllib.parse import parse_qs
+
+    target = (parse_qs(urlsplit(href).query).get("url") or [""])[0]
+    host = (urlsplit(target).hostname or "").lower()
+    if urlsplit(target).scheme not in ("http", "https") or not host:
+        return None
+    return None if host == "linkedin.com" or host.endswith(".linkedin.com") else target
+
+
+# A posting page's link to its application form: the whole link text is an apply verb.
+_POSTING_APPLY_LINK = """() => {
+    const verb = /^\\W*(apply( now| online| for this (job|position))?|postuler( maintenant| en ligne| à cette offre)?|je postule|candidater|(jetzt )?bewerben)\\W*$/i;
+    const a = [...document.querySelectorAll('a[href]')].find(e =>
+        /^https?:/.test(e.href) && e.href.split('#')[0] !== location.href.split('#')[0] &&
+        e.getClientRects().length && verb.test(e.innerText.trim()));
+    if (!a) return null;
+    document.querySelectorAll('[data-jobpilot-apply]').forEach(e => e.removeAttribute('data-jobpilot-apply'));
+    a.setAttribute('data-jobpilot-apply', '');
+    a.removeAttribute('target');  // stay in the harness's tab
+    return a.href;
+}"""
+_MAX_POSTING_HOPS = 3
+# Whether the page holds an application form, not just a job-search box or alert widget
+# (live: career.fanuc.eu's "Rechercher par mot-clé / lieu" and a job-alert number field).
+_HAS_APPLICATION_FIELDS = """() => {
+    const searchy = e => !!e.closest('form[role=search], [role=search], form[action*="search" i]') ||
+        /search|recherch|suche|keyword|^q$|location/i.test(
+            [e.name, e.id, e.placeholder, e.getAttribute('aria-label')].join(' '));
+    const fields = [...document.querySelectorAll('input, textarea, select')]
+        .filter(e => (e.type === 'file' || e.getClientRects().length) && !e.disabled && !searchy(e));
+    if (fields.some(e => ['email', 'tel', 'file'].includes(e.type) || e.tagName === 'TEXTAREA')) return true;
+    return fields.filter(e => e.tagName === 'SELECT' || e.type === 'text').length >= 2;
+}"""
+
+
+def _is_linkedin(url: str) -> bool:
+    host = (urlsplit(url).hostname or "").lower()
+    return host == "linkedin.com" or host.endswith(".linkedin.com")
+
+
+async def _follow_offsite_apply(page) -> None:
+    """From a job posting, open its application form before the harness starts.
+
+    The harness never clicks a link that reads like "Apply", so without this it stops
+    on the posting with nothing filled (live runs 2026-11-15: LinkedIn to contactrh.com,
+    then FANUC's SuccessFactors posting to its apply page). Links are followed with a
+    plain GET (page.goto), never a click, so no page script runs and nothing is sent.
+    """
+    if _is_linkedin(page.url):
+        href = None
+        for _ in range(8):  # the top card renders after domcontentloaded
+            href = await page.evaluate(_LINKEDIN_OFFSITE_APPLY)
+            if href or await page.locator("button.jobs-apply-button").count():
+                break
+            await page.wait_for_timeout(1000)
+        target = unwrap_linkedin_redirect(href) if href else None
+        if not target:
+            return  # Easy Apply (or nothing to follow): the harness starts on LinkedIn
+        logger.info("LinkedIn posting applies offsite; opening %s", urlsplit(target).hostname)
+        await page.goto(target, wait_until="domcontentloaded", timeout=20_000)
+    for _ in range(_MAX_POSTING_HOPS):
+        if await page.evaluate(_HAS_APPLICATION_FIELDS):
+            return  # a form is here
+        href = await page.evaluate(_POSTING_APPLY_LINK)
+        if not href or _is_linkedin(href):
+            return
+        # Click, not goto: ATS apply buttons often open their sign-in/apply dialog by script
+        # (live: SuccessFactors "dialogApplyBtn"; a direct GET bounced to the home page).
+        # The page has no application fields, so a click here cannot send an application.
+        logger.info("Posting page; opening its apply link %s", urlsplit(href).path)
+        before = page.url
+        await page.locator("[data-jobpilot-apply]").first.click(timeout=5_000)
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=10_000)
+        except Exception:  # noqa: BLE001 - a dialog opens without any navigation
+            pass
+        await page.wait_for_timeout(1500)
+        if page.url == before:
+            return  # a dialog opened in place: the harness takes it from here
+
+
 # Launched browsers handed to the owner need their Playwright connection to stay alive.
 _OPEN_BROWSERS = []
 
@@ -423,6 +515,7 @@ async def harness_apply(
             except ImportError:
                 pass
         await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
+        await _follow_offsite_apply(page)
 
         async def notify(kind, message):
             from backend.api.ws import manager

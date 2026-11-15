@@ -1365,3 +1365,20 @@ async def test_chosen_options_are_listed_with_their_question(page):
     client = ScriptedClient([step("CLICK", "Open Right to work"), step("CLICK", "Yes"), step("DONE")])
     result = await run(page, client)
     assert result.chosen == ["Right to work: Yes"]
+
+
+@pytest.mark.parametrize(
+    ("label", "is_search"),
+    [
+        ("Rechercher par lieu", True),
+        ("Rechercher par mot-clé", True),
+        ("Search jobs", True),
+        ("Keywords", True),
+        ("City", False),
+        ("Email", False),
+        ("Lieu de résidence", False),
+        ("Researcher ID (ORCID)", False),
+    ],
+)
+def test_search_fields_are_recognised(label, is_search):
+    assert bool(agent._SEARCH_FIELD.search(label)) is is_search

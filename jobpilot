@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Native launcher; Python handles portable process identity and advisory locking.
+set -euo pipefail
+
+SOURCE=${BASH_SOURCE[0]}
+while [[ -L "$SOURCE" ]]; do
+    SOURCE_DIR=$(cd -- "$(dirname -- "$SOURCE")" && pwd -P)
+    SOURCE=$(readlink "$SOURCE")
+    [[ "$SOURCE" = /* ]] || SOURCE="$SOURCE_DIR/$SOURCE"
+done
+ROOT=$(cd -- "$(dirname -- "$SOURCE")" && pwd -P)
+cd -- "$ROOT"
+
+case "${1:-help}" in
+    help|-h|--help)
+        set -- help
+        ;;
+    start|status|logs) [[ $# -eq 1 ]] || { echo 'Run ./jobpilot help'; exit 1; } ;;
+    stop)
+        [[ $# -eq 1 || ( $# -eq 2 && $2 == --chrome ) ]] || {
+            echo 'Run ./jobpilot help'; exit 1;
+        }
+        ;;
+    *) echo 'Unknown command. Run ./jobpilot help'; exit 1 ;;
+esac
+
+if [[ $1 == start ]] && ! command -v uv >/dev/null 2>&1; then
+    echo 'uv not found. Install uv: https://docs.astral.sh/uv/getting-started/installation/'
+    exit 1
+fi
+
+# Do not inherit ROS's Python packages into either the controller or backend.
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    exec env -u PYTHONPATH "$ROOT/.venv/bin/python" "$ROOT/scripts/launcher/main.py" "$@"
+elif command -v uv >/dev/null 2>&1; then
+    exec env -u PYTHONPATH uv run python "$ROOT/scripts/launcher/main.py" "$@"
+else
+    echo 'Python environment missing. Install uv, then run: uv sync'
+    exit 1
+fi

@@ -4,10 +4,13 @@ JobPilot drives one long-lived genuine Chrome on a profile of its own, `$DATA/jo
 
 | Module | Role |
 |---|---|
+| `jobpilot`, `scripts/launcher/main.py` | Native backend lifecycle and opening the app in JobPilot's Chrome |
+| `docker/supervisor.py` | Docker Chrome lifecycle, virtual display and noVNC |
 | `backend/browser/chrome.py` | Launch, find, attach, close |
 | `backend/api/browser.py` | `/api/browser/status`, `/api/browser/open` |
 | `backend/monitor/linkedin_detail.py` | Reads matched LinkedIn job pages in that Chrome |
 | `backend/applier/form_filler.py` | Tier 1 apply. Attaches when the Chrome runs (`open_context`, commit `ad687bd`) |
+| `backend/applier/_strategy_common.py` | Tier 2 apply. Attaches to JobPilot's Chrome; no fallback browser in Docker |
 | `backend/applier/harness/runner.py` | Optional System One harness, first for ASSISTED and AUTO, using the same `open_context` |
 | `frontend/src/lib/components/SetupWizard.svelte` | Step 4 "Accounts" |
 
@@ -18,6 +21,47 @@ JobPilot drives one long-lived genuine Chrome on a profile of its own, `$DATA/jo
 - The profile is the owner's applications browser and is signed into Google (Gmail), reversing D14 on the owner's decision of 2026-11-15: JobPilot uses that session for "Sign in with Google" on job sites and to read verification mail (`harness/mailbox.py`). Chrome Sync stays off. Community reports say Google can refuse sign-in in a browser started with a debug port; if it does, start the same `--user-data-dir` once without `--remote-debugging-port`, sign in, close it, and let JobPilot restart it: the session cookies carry over.
 
 ## Launch
+
+### Native launcher
+
+After the [native setup](../README.md#native-setup), run `./jobpilot start`. It checks
+`uv`, Google Chrome, the frontend build, Tectonic, `curl`, writer availability and
+the app port, starts the backend on loopback, and waits for `/api/health` before
+calling `show_app`. That helper starts or reuses the dedicated JobPilot Chrome and
+opens or focuses the app tab. The launcher finds Google Chrome on `PATH` or in the
+macOS Applications directories. If the app tab cannot open, it prints the URL.
+
+Complete **You** on the welcome page and choose **Open sign-in pages** to sign in to
+Google and LinkedIn in this Chrome. `./jobpilot status` reports backend health,
+Chrome and login state; `./jobpilot logs` follows the backend output.
+`./jobpilot stop` leaves Chrome running. `./jobpilot stop --chrome` also closes it
+cleanly through CDP, preserving the profile and logins for the next launch.
+
+### Docker (optional)
+
+With `docker compose up -d`, the container supervisor starts Xvfb, Chrome, x11vnc,
+noVNC and the backend in order, waiting for each dependency. You control this Chrome
+through [the noVNC view](http://127.0.0.1:6080/vnc.html?autoconnect=true), or **Open
+the Chrome view** in the app at `http://127.0.0.1:8000`. Read its password from
+`data/chrome-view.password` on the Docker host and sign in to Google and LinkedIn
+there. The profile persists in `/app/data/jobpilot-chrome` (host `data/jobpilot-chrome`).
+
+Compose sets `JOBPILOT_CHROME_VIEW_URL`; only the supervisor owns Chrome's lifecycle
+in this mode. Chrome uses a sandbox and the supplied seccomp profile, with CDP on
+container loopback port 9222. The supervisor records `DevToolsActivePort` for the
+backend's attach helpers. It omits the native `AutomationControlled` flag below.
+Neither CDP nor raw VNC (5900) is published; the app and Chrome view are published
+on host loopback only.
+
+**In Docker, no fallback browser is ever launched.** Endpoint discovery retries
+three one-second probes with pauses (up to roughly five seconds). If Chrome is
+still unavailable, `/api/browser/open` returns 503 and the application harness,
+Tier 1 and Tier 2 fail instead of launching a per-site browser. A supervised child
+exit stops the other processes; if Chrome's sandbox cannot start, startup fails
+closed and never retries with the sandbox disabled. See the [Docker guide](docker.md)
+for setup, private remote access and sandbox troubleshooting.
+
+### Native Chrome helper
 
 `ensure_chrome_running(data_dir, port=0, extra_args=(), timeout=20)` (`chrome.py:48`) returns `{"port", "ws", "version", "reused", "pid"?}` and is idempotent:
 
@@ -35,18 +79,18 @@ JobPilot drives one long-lived genuine Chrome on a profile of its own, `$DATA/jo
 | `--no-first-run`, `--no-default-browser-check` | No first-run dialogs |
 | `--disable-blink-features=AutomationControlled` | Without it, genuine Chrome reports `navigator.webdriver = true` whenever a debug port is open (measured, `proofs/chrome/t1_launcher.py`). Cost: a dismissible "unsupported command-line flag" infobar that pages cannot see |
 
-Never pass (D12): `--enable-automation`, `--no-sandbox`, `--remote-allow-origins=*`, `--headless`, or browser-use's `disable_security=True`. browser-use attaches with `permissions=[]` and opens its own tab. Tasks close their page, never the context, because the context is the owner's session. `ensure_chrome_running` does not check `extra_args` against this list. Its only caller (`POST /api/browser/open`) passes none.
+Never pass to the dedicated JobPilot Chrome (D12): `--enable-automation`, `--no-sandbox`, `--remote-allow-origins=*`, `--headless`, or browser-use's `disable_security=True`. browser-use attaches with `permissions=[]` and opens its own tab. Tasks close their page, never the context, because the context is the owner's session. `ensure_chrome_running` does not check `extra_args` against this list. Native callers (`show_app` and `POST /api/browser/open`) pass none.
 
 Other helpers:
 
 - `running_endpoint()` (`chrome.py:130`): the endpoint when the JobPilot Chrome is running, else `None`. It never starts Chrome. Every reader goes through it.
-- `close_chrome(ws)` (`chrome.py:88`): CDP `Browser.close`. Chrome shuts down cleanly and flushes the cookie DB, which SIGTERM may not do. **No app code calls it yet.**
+- `close_chrome(ws)`: CDP `Browser.close`. Chrome shuts down cleanly and flushes the cookie DB, which SIGTERM may not do. The native launcher calls it for `./jobpilot stop --chrome`.
 - `my_chrome_pids(data_dir)`, `wait_gone(data_dir)`: processes started on this data dir only. Also not used by app code.
-- `open_context(pw, profile_dir, args)` (`chrome.py:135`, commit `ad687bd`): `(context, attached)`. The running JobPilot Chrome's default context if there is one, else a per-site Playwright persistent context as before.
+- `open_context(pw, profile_dir, args)`: `(context, attached)`. Uses the running JobPilot Chrome's default context. Native installs retain the per-site Playwright fallback when Chrome is absent; Docker raises an error instead.
 
 ## Risk: the local debug port
 
-The CDP port listens on 127.0.0.1 without authentication. Any local process can find it and drive the logged-in Chrome (demonstrated in the proofs). Accepted for a single-user machine (spec, known unknowns). The spec's mitigation, closing Chrome when idle, is not built: nothing calls `close_chrome`, and Chrome keeps running after the app stops. The data dir is mode 700, so other users cannot read `DevToolsActivePort` or the cookies. A process of the same user can.
+The CDP port listens on 127.0.0.1 without authentication. Any local process can find it and drive the logged-in Chrome (demonstrated in the proofs). Accepted for a single-user machine (spec, known unknowns). Automatic closing when idle is not built. Natively, Chrome keeps running after `./jobpilot stop`; use `./jobpilot stop --chrome` to close it. The data dir is mode 700, so other users cannot read `DevToolsActivePort` or the cookies. A process of the same user can. Docker keeps CDP on container loopback without publishing it; stopping the container also stops Chrome.
 
 ## API and setup wizard
 
@@ -57,9 +101,14 @@ The CDP port listens on 127.0.0.1 without authentication. Any local process can 
 | `GET /status` (`browser_status`) | `{"running": false, "logged_in": {}}` when the Chrome is not running. It never starts it. Otherwise `{"running": true, "logged_in": {"linkedin": bool, "google": bool}}` |
 | `POST /open` (`open_browser`) | `ensure_chrome_running(chrome_dir())` in a thread (503 if Chrome does not start). Then opens a tab (`PUT /json/new?<url>`) on each login page in `LOGIN_PAGES` (LinkedIn, Google/Gmail) whose site is not logged in. Needs the local session, like every POST under `/api` |
 
+In Docker, both responses also include `view_url` from `JOBPILOT_CHROME_VIEW_URL`
+and `view_password_hint: "data/chrome-view.password"`, never the password itself.
+`POST /open` only attaches to the supervised Chrome and opens missing sign-in tabs;
+it returns 503 if that Chrome is unavailable. It never calls the native launcher.
+
 Login detection (`_logged_in` in `backend/api/browser.py`) attaches with Playwright and looks for a session cookie by name: `SESSION_COOKIES` checks LinkedIn's `li_at` at `https://www.linkedin.com` and Google's `SID` at `https://mail.google.com`. Indeed has no entry in either `LOGIN_PAGES` or `SESSION_COOKIES`, so `/open` does not open it and `/status` does not report it.
 
-The welcome page's first step ("You") and the setup wizard show Google and LinkedIn login state with "Open sign-in pages" (`POST /open`) and a refresh (`GET /status`). They tell the owner to sign in to Google and LinkedIn there once.
+The welcome page's first step ("You") and the setup wizard show Google and LinkedIn login state with "Open sign-in pages" (`POST /open`) and a refresh (`GET /status`). They tell the owner to sign in to Google and LinkedIn there once. In Docker the control becomes **Open the Chrome view**, opens missing sign-in tabs, and links to noVNC with the host password-file hint.
 
 ## Reading LinkedIn job pages
 
@@ -95,9 +144,11 @@ This is the only automated use of a logged-in account in discovery. It is bounde
 
 Set `DECISION_MODEL_URL` to enable the OpenJev/System One harness before Tier 1 and
 Tier 2 on every site, including multi-step applications. It opens its own tab through
-`open_context`, using the dedicated JobPilot Chrome when running, or the existing
-per-site profile otherwise. Stealth patches apply only to the latter. It never closes
-an attached context. ASSISTED leaves the filled tab open for the owner, with lists of
+`open_context`, using the dedicated JobPilot Chrome when running. Only native
+installs can fall back to the existing per-site profile; Docker fails if its
+supervised Chrome is unavailable. Stealth patches apply only to a native per-site
+browser. It never closes an attached context. ASSISTED leaves the filled tab open
+for the owner, with lists of
 filled fields, generated answers and fields left empty. With a launched per-site
 browser, the harness keeps Playwright, the context and the page referenced in memory
 and leaves the connection running so the tab stays open for manual submission.
@@ -167,8 +218,7 @@ against the FANUC/SuccessFactors posting is still pending.
 
 ## Not built
 
-- **Apply through the attached Chrome, Tier 2.** The Tier 1 Playwright form filler attaches since `ad687bd`. The browser-use strategies (`_strategy_common.build_browser`, `assisted_apply.py`, `auto_apply.py`) still launch their own browser at that commit. Uncommitted work towards a CDP attach was in the working tree when this page was written. Check `git log` before relying on either state.
 - **Challenge pause and resume (D13).** The proofs (`proofs/chrome/challenge.py`: Cloudflare, Turnstile, hCaptcha, reCAPTCHA and login-wall detection; `t5_challenge.py`: pause, then resume once a second client clears it; `pacing.py`: log-normal delays, per-site gap and cap, backoff after a challenge) are not wired into the app. The existing `backend/applier/captcha_handler.py` (WebSocket notice, then poll until cleared or 300 s) predates this design. The LinkedIn reader stops at a wall and does not pause.
 - **Removing stored passwords and auto-login (D14).** `SiteCredential` and `BrowserSessionManager._attempt_auto_login` (`backend/scraping/session_manager.py:88`) are still there.
-- **Closing Chrome when idle.** `close_chrome` exists and is not called.
+- **Closing Chrome automatically when idle.** Native users can close it explicitly with `./jobpilot stop --chrome`.
 - **Session check for sites other than LinkedIn and Google (Gmail).**

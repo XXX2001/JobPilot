@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 # JobPilot — production container.
-# Multi-stage: (1) Python deps via uv  (2) Frontend build via Node  (3) Slim runtime.
+# Multi-stage Python, frontend, Tectonic and optional locked CLI dependencies.
 
 # ─── Stage 1: Python dependencies ────────────────────────────────────────────
-FROM python:3.12-slim AS python-builder
+FROM python:3.12-slim-bookworm AS python-builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -22,7 +22,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-install-project --no-dev
 
 # ─── Stage 2: Frontend build ─────────────────────────────────────────────────
-FROM node:20-slim AS frontend-builder
+FROM node:22-bookworm-slim AS frontend-builder
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -30,7 +30,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # ─── Stage 3: Tectonic LaTeX engine ──────────────────────────────────────────
-FROM python:3.12-slim AS tectonic-fetcher
+FROM python:3.12-slim-bookworm AS tectonic-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl ca-certificates tar \
     && rm -rf /var/lib/apt/lists/*
@@ -50,8 +50,21 @@ RUN ARCH="$(uname -m)" && \
     tar -xzf tectonic.tar.gz && \
     install -m 0755 tectonic /usr/local/bin/tectonic
 
-# ─── Stage 4: Runtime ────────────────────────────────────────────────────────
-FROM python:3.12-slim AS runtime
+# Optional CLI dependencies: exact @anthropic-ai/claude-code / @openai/codex
+# versions and artifact integrity hashes live in docker/cli/package-lock.json.
+FROM node:22-bookworm-slim AS cli-builder
+USER root
+WORKDIR /opt/jobpilot-cli
+COPY docker/cli/package.json docker/cli/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+# Claude's pinned postinstall links the locked native package into its bin path.
+# Run that one required script offline; no untracked install-time downloads.
+RUN --network=none node node_modules/@anthropic-ai/claude-code/install.cjs \
+    && ./node_modules/.bin/claude --version \
+    && ./node_modules/.bin/codex --version
+
+# ─── Runtime ────────────────────────────────────────────────────────────────
+FROM python:3.12-slim-bookworm AS runtime-base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -59,15 +72,47 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     JOBPILOT_HOST=0.0.0.0 \
     JOBPILOT_PORT=8000 \
     JOBPILOT_DATA_DIR=/app/data \
-    JOBPILOT_SCRAPER_HEADLESS=true
+    JOBPILOT_SCRAPER_HEADLESS=true \
+    JOBPILOT_CHROME_VIEW_URL="http://127.0.0.1:6080/vnc.html?autoconnect=true" \
+    DISPLAY=:99 \
+    HOME=/tmp/jobpilot-home \
+    XDG_CONFIG_HOME=/tmp/jobpilot-home/.config \
+    XDG_CACHE_HOME=/home/jobpilot/.cache \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
-# Runtime libs for Playwright/Chromium (headless) + wget for HEALTHCHECK.
+# Google Chrome is amd64-only. Keep its repository key scoped with signed-by.
+# Debian packages pin noVNC/websockify; never download an unverified git snapshot.
+# Runtime libs for Playwright/Chromium + wget for HEALTHCHECK.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        wget ca-certificates \
+        wget ca-certificates gnupg \
+        xvfb x11-utils xauth x11vnc tini \
+        novnc=1:1.3.0-1 websockify=0.10.0+dfsg1-4+b1 \
         libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
         libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
         libgbm1 libpango-1.0-0 libcairo2 libasound2 \
     && rm -rf /var/lib/apt/lists/*
+
+RUN test "$(dpkg --print-architecture)" = amd64 \
+    && mkdir -m 0700 /tmp/google-gnupg \
+    && wget -q -O /tmp/google-linux.asc \
+        https://dl.google.com/linux/linux_signing_key.pub \
+    && gpg --homedir /tmp/google-gnupg --batch --import /tmp/google-linux.asc \
+    && GOOGLE_KEY_FINGERPRINT="$(gpg --homedir /tmp/google-gnupg --batch --with-colons \
+        --fingerprint EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796 \
+        | awk -F: '$1 == "pub" {primary=1; next} primary && $1 == "fpr" {print $10; primary=0}')" \
+    && test "$GOOGLE_KEY_FINGERPRINT" = EB4C1BFD4F042F6DDDCCEC917721F63BD38B4796 \
+    && gpg --homedir /tmp/google-gnupg --batch --armor \
+        --export "$GOOGLE_KEY_FINGERPRINT" > /usr/share/keyrings/google-linux.asc \
+    && test -s /usr/share/keyrings/google-linux.asc \
+    && rm -rf /tmp/google-gnupg /tmp/google-linux.asc \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux.asc] https://dl.google.com/linux/chrome/deb/ stable main" \
+        > /etc/apt/sources.list.d/google-chrome.list \
+    && echo "path-include=/usr/share/doc/google-chrome-stable/changelog.gz" \
+        > /etc/dpkg/dpkg.cfg.d/zz-jobpilot-chrome-build-date \
+    && apt-get update && apt-get install -y --no-install-recommends google-chrome-stable \
+    && test -s /usr/share/doc/google-chrome-stable/changelog.gz \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s vnc.html /usr/share/novnc/index.html
 
 # Non-root user
 RUN groupadd --system --gid 1000 jobpilot && \
@@ -82,19 +127,36 @@ COPY --chown=jobpilot:jobpilot backend/ ./backend/
 COPY --chown=jobpilot:jobpilot alembic/ ./alembic/
 COPY --chown=jobpilot:jobpilot alembic.ini start.py pyproject.toml ./
 COPY --from=frontend-builder --chown=jobpilot:jobpilot /frontend/build ./frontend/build
+COPY docker/supervisor.py /app/docker/supervisor.py
+COPY docker/check_chrome_age.py /app/docker/check_chrome_age.py
+COPY --chmod=0755 docker/entrypoint.sh /usr/local/bin/jobpilot-entrypoint
 
 # Data dir for SQLite/logs/browser sessions (mounted as a volume in compose).
-RUN mkdir -p /app/data && chown -R jobpilot:jobpilot /app
+RUN mkdir -p /app/data /home/jobpilot/.cache && chown -R jobpilot:jobpilot /app /home/jobpilot
+
+# Scrapers still use Playwright; install at build time outside the ephemeral HOME.
+RUN python -m playwright install chromium \
+    && chmod -R a+rX /opt/ms-playwright
 
 USER jobpilot
 
-# Install Playwright Chromium for browser-use (user-scoped cache).
-RUN python -m playwright install chromium 2>/dev/null || true
-
-EXPOSE 8000
+EXPOSE 8000 6080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD wget --quiet --tries=1 --spider http://localhost:8000/api/health || exit 1
 
-# Launch uvicorn directly (bypasses start.py's webbrowser.open + 127.0.0.1 default).
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Tini reaps orphaned Chrome children; the supervisor owns all service lifetimes.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/jobpilot-entrypoint"]
+CMD ["python", "/app/docker/supervisor.py"]
+
+# Optional CLI writer image, selected by docker-compose.cli.yml.
+FROM runtime-base AS cli
+USER root
+COPY --from=frontend-builder /usr/local/bin/node /usr/local/bin/node
+COPY --from=cli-builder /opt/jobpilot-cli /opt/jobpilot-cli
+RUN ln -s /opt/jobpilot-cli/node_modules/.bin/claude /usr/local/bin/claude \
+    && ln -s /opt/jobpilot-cli/node_modules/.bin/codex /usr/local/bin/codex
+USER jobpilot
+
+# The default image keeps the API writer path; CLI writers are opt-in.
+FROM runtime-base AS runtime

@@ -9,6 +9,7 @@ No embeddings, no LLM, no network.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 import unicodedata
 from collections.abc import Iterable
@@ -18,9 +19,19 @@ from typing import NamedTuple
 SKILLS_PATH = Path(__file__).resolve().parent / "data" / "skills.txt"
 
 
+def _read_skills(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        logging.getLogger(__name__).warning(
+            "Skills file %s missing; using an empty skills vocabulary", path
+        )
+        return b""
+
+
 def file_version(path: Path) -> str:
     """First 12 hex chars of the file's sha256."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    return hashlib.sha256(_read_skills(path)).hexdigest()[:12]
 
 
 GAZETTEER_VERSION: str = file_version(SKILLS_PATH)
@@ -164,7 +175,7 @@ class Gazetteer:
         a curated skill ("Python Developer", "Ingénieur Robotique") is a job title, not a
         skill: as an alias it would win the longest match and hide the skill inside it.
         """
-        entries, families = _parse(path.read_text(encoding="utf-8"))
+        entries, families = _parse(_read_skills(path).decode("utf-8"))
         # The owner's own file comes second: the first claim on an alias wins, so an
         # alias the vocabulary knows resolves to the vocabulary's skill.
         mine, my_families = _parse(my_skills)

@@ -12,6 +12,11 @@ import time
 import urllib.request
 from pathlib import Path
 
+CONTAINER_CHROME_UNAVAILABLE = (
+    "The JobPilot Chrome in the container is not answering. "
+    "Check container logs and docker/README.md; only the supervisor may start it."
+)
+
 # ponytail: a genuine Chrome on PATH. Windows and macOS install paths when someone runs there.
 CHROME = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or "google-chrome"
 FLAGS = [
@@ -27,7 +32,8 @@ FLAGS = [
 
 def _probe(port: int) -> dict | None:
     try:
-        return json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1))
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=1) as response:
+            return json.load(response)
     except Exception:
         return None
 
@@ -39,12 +45,18 @@ def _active(data_dir: Path) -> dict | None:
     """
     try:
         port_s, ws_path = (data_dir / "DevToolsActivePort").read_text().split()[:2]
+        port = int(port_s)
     except (OSError, ValueError):
         return None
-    v = _probe(int(port_s))
-    if v and v["webSocketDebuggerUrl"].endswith(ws_path):
+    v = _probe(port)
+    if (
+        isinstance(v, dict)
+        and isinstance(v.get("webSocketDebuggerUrl"), str)
+        and v["webSocketDebuggerUrl"].endswith(ws_path)
+        and isinstance(v.get("Browser"), str)
+    ):
         return {
-            "port": int(port_s),
+            "port": port,
             "ws": v["webSocketDebuggerUrl"],
             "version": v["Browser"],
         }
@@ -52,6 +64,13 @@ def _active(data_dir: Path) -> dict | None:
 
 
 def ensure_chrome_running(data_dir, port: int = 0, extra_args=(), timeout: float = 20) -> dict:
+    from backend.config import settings
+
+    # Includes callers such as show_app: the supervisor alone owns container Chrome.
+    if settings.JOBPILOT_CHROME_VIEW_URL:
+        if ep := running_endpoint():
+            return ep | {"reused": True}
+        raise RuntimeError(CONTAINER_CHROME_UNAVAILABLE)
     data_dir = Path(data_dir).resolve()
     if data_dir == (Path.home() / ".config/google-chrome").resolve():
         raise ValueError(
@@ -138,7 +157,17 @@ def chrome_dir() -> Path:
 
 def running_endpoint() -> dict | None:
     """The JobPilot Chrome's CDP endpoint when it is running; never starts it."""
-    return _active(chrome_dir())
+    from backend.config import settings
+
+    # Allow a busy supervised Chrome up to ~5 s (3 one-second probes + 2 pauses).
+    # Native callers keep their existing single-probe behavior.
+    attempts = 3 if settings.JOBPILOT_CHROME_VIEW_URL else 1
+    for attempt in range(attempts):
+        if endpoint := _active(chrome_dir()):
+            return endpoint
+        if attempt < attempts - 1:
+            time.sleep(1)
+    return None
 
 
 async def open_context(pw, profile_dir: Path, args: list[str]):
@@ -146,12 +175,17 @@ async def open_context(pw, profile_dir: Path, args: list[str]):
 
     The running JobPilot Chrome when there is one: ``attached`` is True and the context
     is the owner's logged-in session, so the caller closes its own page, never the
-    context. Otherwise a per-site Playwright profile is launched, as before.
+    context. Native installs may launch a per-site Playwright profile; containers
+    fail closed when the supervised Chrome is unavailable.
     """
+    from backend.config import settings
+
     endpoint = running_endpoint()
     if endpoint is not None:
         browser = await pw.chromium.connect_over_cdp(f"http://127.0.0.1:{endpoint['port']}")
         return browser.contexts[0], True
+    if settings.JOBPILOT_CHROME_VIEW_URL:
+        raise RuntimeError(CONTAINER_CHROME_UNAVAILABLE)
     context = await pw.chromium.launch_persistent_context(
         user_data_dir=profile_dir.as_posix(), headless=False, args=args
     )

@@ -1,0 +1,27 @@
+# Opt in: docker compose -f docker-compose.yml -f docker-compose.cli.yml up -d --build
+# Remove entries for unused providers or absent optional files; see docker/README.md.
+# Missing sources fail before startup rather than creating host directories.
+services:
+  jobpilot:
+    build:
+      target: cli
+    volumes:
+      - type: bind
+        source: "${HOME}/.claude/.credentials.json"
+        target: /host-cli/.claude/.credentials.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: "${HOME}/.codex/auth.json"
+        target: /host-cli/.codex/auth.json
+        read_only: true
+        bind:
+          create_host_path: false
+      # Optional: remove this entry if Codex has no config.toml on the host.
+      - type: bind
+        source: "${HOME}/.codex/config.toml"
+        target: /host-cli/.codex/config.toml
+        read_only: true
+        bind:
+          create_host_path: false

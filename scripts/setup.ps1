@@ -56,7 +56,7 @@ Copy-Item $Example $EnvFile -Force
 # real, non-empty values).
 foreach ($k in @(
   'ADZUNA_APP_ID','ADZUNA_APP_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY',
-  'SERPAPI_KEY','LLM_API_KEY','LLM_BASE_URL','LLM_MODEL','EMBEDDING_API_KEY','EMBEDDING_BASE_URL',
+  'SERPAPI_KEY','LLM_API_KEY','LLM_BASE_URL','LLM_MODEL',
   'BROWSER_LLM_API_KEY','BROWSER_LLM_BASE_URL','BROWSER_LLM_MODEL')) {
   Set-Env $k ''
 }
@@ -81,32 +81,15 @@ switch ($choice) {
     Set-Env 'BROWSER_LLM_PROVIDER' 'openai'
     Set-Env 'BROWSER_LLM_BASE_URL' $base
     if ($model) { Set-Env 'BROWSER_LLM_MODEL' $model }
-    Write-Host ''
-    Write-Host 'Embeddings power job/CV fit-scoring. Most local servers do NOT serve'
-    Write-Host 'embeddings, so you can point them at a hosted OpenAI-compatible key or skip scoring.'
-    $ek = Ask 'API key for embeddings (blank = use the local server)' ''
-    if ($ek) {
-      Set-Env 'EMBEDDING_PROVIDER' 'openai'
-      Set-Env 'EMBEDDING_API_KEY' $ek
-    } else {
-      # No cloud key: point embeddings at the same local server. Config stays
-      # valid and the app boots; if the server lacks /v1/embeddings, fit-scoring
-      # degrades at runtime instead of blocking startup.
-      Set-Env 'EMBEDDING_PROVIDER' 'openai'
-      Set-Env 'EMBEDDING_BASE_URL' $base
-      Write-Host "  (embeddings will use $base - fit-scoring needs an embeddings-capable server)"
-    }
   }
   '2' {
     $ok = Ask 'API key (sk-... for hosted OpenAI)' ''
     $burl = Ask 'Base URL (blank = hosted OpenAI; set for another OpenAI-compatible endpoint)' ''
     Set-Env 'LLM_PROVIDER' 'openai'
-    Set-Env 'EMBEDDING_PROVIDER' 'openai'
     Set-Env 'BROWSER_LLM_PROVIDER' 'openai'
     Set-Env 'OPENAI_API_KEY' $ok
     if ($burl) {
       Set-Env 'LLM_BASE_URL' $burl
-      Set-Env 'EMBEDDING_BASE_URL' $burl
       Set-Env 'BROWSER_LLM_BASE_URL' $burl
     }
   }
@@ -115,10 +98,9 @@ switch ($choice) {
     Set-Env 'LLM_PROVIDER' 'anthropic'
     Set-Env 'ANTHROPIC_API_KEY' $ak
     Write-Host ''
-    Write-Host 'Note: Anthropic has no embeddings API and browser-use ships no Anthropic'
-    Write-Host 'client, so embeddings + the browser agent fall back to an OpenAI-compatible endpoint.'
-    $ek = Ask 'OpenAI-compatible API key for embeddings + browser agent' ''
-    Set-Env 'EMBEDDING_PROVIDER' 'openai'
+    Write-Host 'Note: browser-use ships no Anthropic client, so the browser agent falls'
+    Write-Host 'back to an OpenAI-compatible endpoint.'
+    $ek = Ask 'OpenAI-compatible API key for the browser agent' ''
     Set-Env 'BROWSER_LLM_PROVIDER' 'openai'
     if ($ek) { Set-Env 'OPENAI_API_KEY' $ek }
   }

@@ -13,6 +13,7 @@ import asyncio
 import logging
 from pathlib import Path
 from urllib.parse import urlparse
+
 from backend.config import settings as _settings  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,12 @@ def get_session_path(url: str) -> Path:
 
 async def save_session(page) -> None:
     """Persist the browser context's storage state for the page's domain."""
+    from backend.browser.chrome import running_endpoint
+
+    if running_endpoint() is not None:
+        # Attached to the owner's Chrome: it keeps its own logins, and a dump would
+        # copy every site's cookies into a plain file.
+        return
     try:
         path = get_session_path(page.url)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -206,6 +213,13 @@ async def wait_for_captcha_resolution(
         )
     )
 
+    try:  # the owner may be away from the page: push to the phone too
+        from backend.monitor.notify import notify_text
+
+        await notify_text("Captcha: your turn", f"Solve the check on {site} in the JobPilot window")
+    except Exception:  # noqa: BLE001 - a push that fails must not stop the wait
+        logger.warning("Captcha push failed", exc_info=True)
+
     elapsed = 0.0
     while elapsed < timeout:
         # Honour user cancellation immediately — do not wait for the next
@@ -265,120 +279,3 @@ async def check_and_handle_captcha(
             page, job_id=job_id, cancel_event=cancel_event
         )
     return False
-
-
-async def preflight_check_url(
-    url: str,
-    *,
-    headless: bool = True,
-    job_id: int | None = None,
-    timeout: float = 300.0,
-) -> bool:
-    """Probe *url* with a raw Playwright browser and handle any block.
-
-    Uses Playwright directly (not browser-use's lazy ``Browser`` wrapper)
-    so we can reliably navigate before an agent is created.
-
-    1. Launch a headless browser and navigate to *url*.
-    2. If blocked → relaunch as **visible**, notify user via WS, poll until
-       the user solves the challenge, save the session, then close.
-    3. Returns True if the page is accessible (immediately or after solving).
-       Returns False on timeout or unrecoverable error.
-    """
-    try:
-        from playwright.async_api import async_playwright
-    except ImportError:
-        logger.warning("Playwright not installed — skipping preflight check")
-        return True  # optimistic: let the agent try
-
-    session_path = get_session_path(url)
-    site_key = _domain_key(url)
-    profile_dir = PROFILES_DIR / site_key
-
-    # ── Phase 1: quick headless probe ───────────────────────────────────
-    pw = await async_playwright().start()
-    try:
-        launch_args = [
-            "--disable-blink-features=AutomationControlled",
-            "--disable-dev-shm-usage",
-            "--no-first-run",
-            "--disable-infobars",
-        ]
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        context = await pw.chromium.launch_persistent_context(
-            user_data_dir=profile_dir.resolve().as_posix(),
-            headless=headless,
-            args=launch_args,
-        )
-        page = await context.new_page()
-
-        # Apply stealth patches to avoid bot detection
-        if _STEALTH_AVAILABLE and stealth_async:
-            await stealth_async(page)
-
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
-        except Exception as exc:
-            logger.warning("Preflight navigation to %s failed: %s", url, exc)
-            await context.close()
-            await pw.stop()
-            return False
-
-        blocked = await detect_any_block(page)
-        if not blocked:
-            logger.info("Preflight: %s is accessible (no block)", url)
-            # Save storage-state snapshot alongside profile dir for browser-use consumers
-            try:
-                await context.storage_state(path=session_path.resolve().as_posix())
-            except Exception:
-                pass
-            await context.close()
-            await pw.stop()
-            return True
-
-        logger.info("Preflight: block detected on %s", url)
-        await context.close()
-    except Exception as exc:
-        logger.warning("Preflight headless probe failed: %s", exc)
-        await pw.stop()
-        return True  # let the agent try
-
-    # ── Phase 2: visible browser for user to solve ──────────────────────
-    if headless:
-        logger.info("Preflight: reopening %s in visible browser for user to solve", url)
-    try:
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        context = await pw.chromium.launch_persistent_context(
-            user_data_dir=profile_dir.resolve().as_posix(),
-            headless=False,
-            args=launch_args,
-        )
-        page = await context.new_page()
-
-        # Apply stealth patches
-        if _STEALTH_AVAILABLE and stealth_async:
-            await stealth_async(page)
-        await page.goto(url, wait_until="domcontentloaded", timeout=15_000)
-    except Exception as exc:
-        logger.warning("Preflight visible browser failed: %s", exc)
-        try:
-            await context.close()
-        except Exception:
-            pass
-        await pw.stop()
-        return False
-
-    # Notify + poll
-    resolved = await wait_for_captcha_resolution(page, job_id=job_id, timeout=timeout)
-
-    if resolved:
-        # Save storage-state snapshot for browser-use consumers that load storage_state=
-        try:
-            await context.storage_state(path=session_path.resolve().as_posix())
-            logger.info("Preflight: saved session for %s after block resolution", url)
-        except Exception as exc:
-            logger.debug("Preflight session save failed: %s", exc)
-
-    await context.close()
-    await pw.stop()
-    return resolved

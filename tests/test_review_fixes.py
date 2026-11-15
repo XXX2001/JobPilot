@@ -228,7 +228,7 @@ class _CrashingAgent:
     def __init__(self, **_kw):
         pass
 
-    async def run(self):
+    async def run(self, max_steps=None):
         raise RuntimeError("LLM connection reset")
 
 

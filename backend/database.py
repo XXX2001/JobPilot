@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 engine = create_async_engine(
     f"sqlite+aiosqlite:///{settings.jobpilot_data_dir}/jobpilot.db",
     echo=False,
+    # sqlite3 waits 5 s for the write lock by default; a seeding monitor poll can
+    # hold it longer, and the waiter then fails with "database is locked".
+    connect_args={"timeout": 30},
 )
 
 

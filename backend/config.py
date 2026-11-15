@@ -68,11 +68,6 @@ class Settings(BaseSettings):
     # Ollama for these models) — typically a ~10x latency win. No effect on
     # models/servers that don't recognise the flag.
     LLM_DISABLE_THINKING: bool = False
-    # Embeddings (anthropic unsupported — has no embeddings API)
-    EMBEDDING_PROVIDER: str = "openai"  # openai
-    EMBEDDING_MODEL: str = "text-embedding-3-small"
-    EMBEDDING_BASE_URL: str = ""
-    EMBEDDING_API_KEY: SecretStr = SecretStr("")
     # Browser agent (anthropic only via openai-compatible base_url)
     BROWSER_LLM_PROVIDER: str = "openai"  # openai
     BROWSER_LLM_MODEL: str = ""
@@ -85,6 +80,13 @@ class Settings(BaseSettings):
     SCRAPLING_ENABLED: bool = True
     # Feature flag: enable Tier 1 Playwright direct filler (mirrors SCRAPLING_ENABLED)
     APPLY_TIER1_ENABLED: bool = True
+    # Tier 2 (browser agent) caps per agent run. Past either one the run fails
+    # closed: nothing is recorded as applied.
+    APPLY_TIER2_MAX_STEPS: int = 25
+    APPLY_TIER2_TIMEOUT_SECONDS: float = 300.0
+    # Minimum pause between two automatic applications on the same site; the actual
+    # pause is 1x to 2.5x this, at random. 0 disables it.
+    APPLY_MIN_GAP_SECONDS: float = 90.0
 
     # Timeouts (seconds) — fail loudly instead of hanging forever.
     # (Field name already maps to the env var; no need for a deprecated env=.)
@@ -102,6 +104,13 @@ class Settings(BaseSettings):
     GMAIL_REDIRECT_URI: str = "http://localhost:8000/api/gmail/oauth/callback"
     GMAIL_BACKFILL_DAYS: int = 30
     GMAIL_POLL_INTERVAL_MINUTES: int = 5
+
+    # ── Discovery monitor ────────────────────────────────────────────────
+    # Off by default: nothing polls until the owner turns it on.
+    MONITOR_ENABLED: bool = False
+    MONITOR_TICK_SECONDS: int = 30
+    MONITOR_MAX_CONCURRENCY: int = 8
+    NTFY_URL: str = ""
 
     def is_configured(self, field_name: str) -> bool:
         """Return True if *field_name* holds a real, non-placeholder value.
@@ -143,14 +152,14 @@ class Settings(BaseSettings):
     def validate_runtime_config(self) -> list[str]:
         """Return human-readable problems with the selected LLM providers.
 
-        Empty list == ready to run. Each of generation / embeddings / browser
-        picks a provider; this checks only the credentials *that* provider
+        Empty list == ready to run. Generation and the browser agent each
+        pick a provider; this checks only the credentials *that* provider
         needs, so a local-model user is never asked for a hosted key. Called
         at startup (fail-fast) by the app lifespan.
         """
         problems: list[str] = []
         _VALID_GEN = ("openai", "anthropic")
-        _VALID_EMBED_BROWSER = ("openai",)
+        _VALID_BROWSER = ("openai",)
 
         def _openai_compatible_ok(base_url_attr: str, key_attr: str) -> bool:
             # A base_url means a local/self-hosted server (key is usually
@@ -174,19 +183,8 @@ class Settings(BaseSettings):
         ):
             problems.append("LLM_PROVIDER=anthropic requires ANTHROPIC_API_KEY (or LLM_API_KEY).")
 
-        emb = (self.EMBEDDING_PROVIDER or "openai").lower()
-        if emb not in _VALID_EMBED_BROWSER:
-            problems.append(
-                f"EMBEDDING_PROVIDER={emb!r} must be openai "
-                "(the only provider with an embeddings adapter; anthropic has no embeddings API)."
-            )
-        elif emb == "openai" and not _openai_compatible_ok("EMBEDDING_BASE_URL", "EMBEDDING_API_KEY"):
-            problems.append(
-                "EMBEDDING_PROVIDER=openai requires EMBEDDING_BASE_URL or EMBEDDING_API_KEY/OPENAI_API_KEY."
-            )
-
         br = (self.BROWSER_LLM_PROVIDER or "openai").lower()
-        if br not in _VALID_EMBED_BROWSER:
+        if br not in _VALID_BROWSER:
             problems.append(f"BROWSER_LLM_PROVIDER={br!r} must be openai.")
         elif br == "openai" and not (
             self.is_configured("BROWSER_LLM_BASE_URL")

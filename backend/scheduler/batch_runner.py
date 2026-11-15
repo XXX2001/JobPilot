@@ -22,14 +22,17 @@ from backend.latex.artifacts import diff_to_json, pdf_sha256, resolve_base_sourc
 from backend.latex.regeneration import additional_context
 from backend.defaults import CONCURRENCY_LLM, DAILY_LIMIT, MIN_JOB_SKILLS_FOR_FIT_ENGINE, MIN_MATCH_SCORE
 from backend.matching.cv_parser import CVParser
-from backend.matching.embedder import Embedder
 from backend.matching.filters import JobFilters
 from backend.matching.fit_engine import FitAssessment, FitEngine
-from backend.matching.job_skill_extractor import JobSkillExtractor
+from backend.matching.gazetteer import Gazetteer
+from backend.matching.job_skills import extract_job_skills
+from backend.matching.matcher import load_matcher
+from backend.matching.scorer import PROVISIONAL_MIN_CHARS
 from backend.models.document import TailoredDocument
 from backend.models.job import Job, JobMatch, JobSource
 from backend.models.schemas import JobDetails
 from backend.models.user import SearchSettings, UserProfile
+from backend.monitor.store import raw_to_details
 
 logger = logging.getLogger(__name__)
 
@@ -92,20 +95,17 @@ class BatchRunner:
     def __init__(
         self,
         scraper: Any,  # ScrapingOrchestrator
-        matcher: Any,  # JobMatcher
+        matcher: Any,  # JobMatcher; None: the owner's, loaded per batch (load_matcher)
         cv_pipeline: Any,  # CVPipeline
         db_factory: Callable[[], AsyncSession],
         fit_engine: FitEngine | None = None,
-        embedder: Embedder | None = None,
     ) -> None:
         self._scraper = scraper
         self._matcher = matcher
         self._cv_pipeline = cv_pipeline
         self._db_factory = db_factory
         self._fit_engine = fit_engine or FitEngine()
-        self._embedder = embedder
         self._cv_parser = CVParser()
-        self._job_extractor = JobSkillExtractor()
         # Batch state tracking
         self.running: bool = False
         self.last_status: Status | None = None
@@ -209,9 +209,10 @@ class BatchRunner:
         await self._broadcast_and_track(f"Found {len(raw_jobs)} raw jobs — ranking…", progress=0.35)
 
         # ── Step 2: Match & rank ─────────────────────────────────────────
-        job_details = [self._raw_to_details(j) for j in raw_jobs]
+        matcher = self._matcher or await load_matcher(db)
+        job_details = [raw_to_details(j) for j in raw_jobs]
         ranked: list[tuple[JobDetails, float]] = [
-            (jd, self._matcher.score(jd, filters)) for jd in job_details
+            (jd, matcher.score(jd, filters)) for jd in job_details
         ]
         ranked = [(jd, s) for jd, s in ranked if s >= filters.min_score]
         ranked.sort(key=lambda x: x[1], reverse=True)
@@ -238,45 +239,25 @@ class BatchRunner:
 
         # ── Step 3: Store new matches ────────────────────────────────────
         await self._broadcast_and_track("Storing new matches…", progress=0.55)
-        stored = await self._store_matches(db, ranked, filters)
+        stored = await self._store_matches(db, ranked, filters, matcher)
         logger.info("Stored %d new job matches", len(stored))
 
         # ── Step 3.5: Fit Assessment ─────────────────────────────────────
         await self._broadcast_and_track("Analyzing job fit…", progress=0.58)
         sensitivity = getattr(settings_row, "cv_modification_sensitivity", "balanced")
 
-        # Parse and embed CV profile (cached by hash)
-        cv_profile = None
-        if cv_path and cv_path.exists() and self._embedder:
-            cv_tex = cv_path.read_text(encoding="utf-8")
-            cv_profile = self._cv_parser.build_profile(cv_tex)
-            cv_profile = await self._embedder.embed_cv_profile(cv_profile)
-
-        assessments: dict[int, Any] = {}  # match_id -> FitAssessment or None
-        if cv_profile and self._embedder:
-            # Run extraction + embedding + FitEngine.assess concurrently for each
-            # match (bounded by CONCURRENCY_LLM). DB writes and WS broadcasts
-            # MUST happen sequentially after the gather — AsyncSession is not
-            # safe for concurrent use, and we want deterministic broadcast order.
-            sem = asyncio.Semaphore(CONCURRENCY_LLM)
-
-            async def _gated_assess(mid: int, jd: Any) -> tuple[int, FitAssessment | None]:
-                async with sem:
-                    return await self._assess_one(mid, jd, cv_profile, sensitivity)
-
-            assess_pairs = [(sm.match_id, sm.job) for sm in stored]
-            results = await asyncio.gather(
-                *[_gated_assess(mid, jd) for mid, jd in assess_pairs],
-                return_exceptions=True,
-            )
-
-            # Sequential post-gather merge: DB writes (single session) + WS broadcasts.
-            for (mid, _jd), outcome in zip(assess_pairs, results):
-                if isinstance(outcome, BaseException):
-                    logger.warning("Fit assessment failed for match %d: %s", mid, outcome)
-                    assessments[mid] = None
-                    continue
-                _result_mid, assessment = outcome
+        assessments: dict[int, FitAssessment | None] = {}
+        if cv_path and cv_path.exists():
+            # The owner's keywords extend the gazetteer, as they do for the match score.
+            gaz = Gazetteer.load(filters.keywords)
+            cv_profile = self._cv_parser.build_profile(cv_path.read_text(encoding="utf-8"), gaz)
+            for sm in stored:
+                mid = sm.match_id
+                try:
+                    assessment = self._assess_one(sm.job, cv_profile, gaz, sensitivity)
+                except Exception as exc:  # noqa: BLE001 - one bad posting must not end the batch
+                    logger.warning("Fit assessment failed for match %d: %s", mid, exc)
+                    assessment = None
                 assessments[mid] = assessment
                 if assessment is None:
                     continue
@@ -306,7 +287,18 @@ class BatchRunner:
         cv_tailoring_enabled = getattr(settings_row, "cv_tailoring_enabled", True)
         guard = await DailyLimitGuard.from_settings(db)
         remaining = await guard.remaining_today()
-        selected = stored[:remaining]
+        # A card with no description was scored on its title alone and can outrank real
+        # postings: it takes no CV slot, and there is no text to tailor a CV to.
+        described = [
+            sm for sm in stored
+            if len((sm.job.description or "").strip()) >= PROVISIONAL_MIN_CHARS
+        ]
+        if len(described) < len(stored):
+            logger.info(
+                "%d match(es) without a description: no CV pre-generated",
+                len(stored) - len(described),
+            )
+        selected = described[:remaining]
         top_ids = [sm.match_id for sm in selected]
 
         if cv_tailoring_enabled:
@@ -408,36 +400,15 @@ class BatchRunner:
         await self._broadcast_and_track(summary, progress=1.0)
         logger.info("Batch complete — %d ready, %d failed of %d selected", done, failed, len(top_ids))
 
-    async def _assess_one(
-        self,
-        mid: int,
-        jd: Any,
-        cv_profile: Any,
-        sensitivity: str,
-    ) -> tuple[int, FitAssessment | None]:
-        """Run job-skill extraction → job-skill embedding → FitEngine.assess for ONE match.
-
-        Returns ``(mid, assessment_or_None)``. Returning ``None`` means the job
-        had too few extracted skills to feed the FitEngine (caller will record
-        the fallback). Exceptions propagate to the gather caller, which logs
-        them and records ``assessments[mid] = None``.
-
-        IMPORTANT: This coroutine MUST NOT touch the DB session — multiple
-        copies of this run concurrently and AsyncSession isn't concurrent-safe.
-        All DB writes happen in the sequential merge loop after gather.
-        """
-        assert self._embedder is not None  # caller guarantees this
-        job_profile = self._job_extractor.extract(jd.description or "")
-        if len(job_profile.skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE:
-            return mid, None
-        job_profile = await self._embedder.embed_job_profile(job_profile)
-        # assess() is pure CPU (O(job×cv) cosine similarity, ~15-125ms) and
-        # touches no DB/shared state, so run it off the event loop to keep
-        # concurrent embedding I/O and WS progress broadcasts responsive.
-        assessment = await asyncio.to_thread(
-            self._fit_engine.assess, job_profile, cv_profile, sensitivity
-        )
-        return mid, assessment
+    def _assess_one(
+        self, jd: Any, cv_profile: Any, gaz: Gazetteer, sensitivity: str
+    ) -> FitAssessment | None:
+        """Fit of ONE job, or ``None`` when its posting names too few skills to judge
+        (the caller then tailors through the original pipeline)."""
+        job_skills = extract_job_skills(jd.title or "", jd.description or "", gaz)
+        if len(job_skills) < MIN_JOB_SKILLS_FOR_FIT_ENGINE:
+            return None
+        return self._fit_engine.assess(job_skills, cv_profile, gaz, sensitivity)
 
     # ------------------------------------------------------------------ #
     #  DB helpers                                                          #
@@ -472,6 +443,7 @@ class BatchRunner:
         db: AsyncSession,
         ranked: list[tuple[JobDetails, float]],
         filters: JobFilters,
+        matcher: Any = None,  # the one that ranked; default: the injected matcher
     ) -> list[StoredMatch]:
         """Persist new job matches; return each match with its own job.
 
@@ -483,17 +455,16 @@ class BatchRunner:
         repeated batch runs do not create duplicate Job rows.  If a job
         already exists the existing row is reused for the new JobMatch.
         """
-        import hashlib
+        from backend.scraping.deduplicator import dedup_key
 
+        matcher = matcher or self._matcher
         today = date.today()
         stored: list[StoredMatch] = []
         seen: set[int] = set()
 
         for jd, score in ranked:
             # Compute dedup hash — same logic as /api/jobs/search
-            dedup_hash = hashlib.md5(
-                f"{jd.company}|{jd.title}|{jd.location}".lower().encode()
-            ).hexdigest()
+            dedup_hash = dedup_key(jd.company, jd.title, jd.location)
 
             # Check for existing Job with same hash
             existing = (
@@ -525,14 +496,15 @@ class BatchRunner:
                 db.add(job_row)
                 await db.flush()
 
-            # Skip jobs that already have a non-new match (applied/skipped)
+            # Skip jobs that already have a non-new match (applied/skipped/rejected)
             any_actioned = (
                 await db.execute(
                     select(JobMatch).where(
                         JobMatch.job_id == job_row.id,
                         # "applying" = prepared for the user or possibly
                         # submitted (W06): re-queueing it invites a duplicate.
-                        JobMatch.status.in_(["applied", "skipped", "applying"]),
+                        # "rejected" would otherwise take a top-N CV slot every day.
+                        JobMatch.status.in_(["applied", "skipped", "applying", "rejected"]),
                     )
                     .limit(1)
                 )
@@ -544,13 +516,15 @@ class BatchRunner:
                 )
                 continue
 
-            # Skip creating a duplicate match for the same job on the same day
+            # One match per job, ever (spec D3): a later batch reuses the match
+            # instead of queueing the job again. Newest first, because rows
+            # written before D3 may hold one match per day.
             existing_match = (
                 await db.execute(
-                    select(JobMatch).where(
-                        JobMatch.job_id == job_row.id,
-                        JobMatch.batch_date == today,
-                    )
+                    select(JobMatch)
+                    .where(JobMatch.job_id == job_row.id)
+                    .order_by(JobMatch.id.desc())
+                    .limit(1)
                 )
             ).scalar_one_or_none()
 
@@ -564,11 +538,16 @@ class BatchRunner:
                 # panel can render the keyword breakdown. Stored as a dict of
                 # keyword -> True: the column is ``Mapped[Optional[dict]]`` and
                 # the frontend treats a dict of truthy values as the hit set.
-                matched = self._matcher.matched_keywords(jd, filters)
+                matched = matcher.matched_keywords(jd, filters)
+                explain = getattr(matcher, "explain", None)  # absent on an injected stub
+                result = explain(jd, filters) if explain else None
                 match_row = JobMatch(
                     job_id=job_row.id,
                     score=score,
                     keyword_hits={kw: True for kw in matched},
+                    score_basis=getattr(matcher, "score_basis", None),
+                    provisional=bool(result and result.provisional),
+                    location_unverified=bool(result and result.location_unverified),
                     batch_date=today,
                     status="new",
                 )
@@ -603,23 +582,6 @@ class BatchRunner:
         )
         db.add(doc)
         await db.commit()
-
-    @staticmethod
-    def _raw_to_details(raw: Any) -> JobDetails:
-        """Convert a RawJob to a JobDetails for matching."""
-        return JobDetails(
-            title=raw.title,
-            company=raw.company,
-            location=getattr(raw, "location", ""),
-            country=getattr(raw, "country", ""),
-            description=getattr(raw, "description", ""),
-            salary_min=getattr(raw, "salary_min", None),
-            salary_max=getattr(raw, "salary_max", None),
-            url=getattr(raw, "url", ""),
-            apply_url=getattr(raw, "apply_url", ""),
-            apply_method=getattr(raw, "apply_method", ""),
-            posted_at=getattr(raw, "posted_at", None),
-        )
 
 
 __all__ = ["BatchRunner"]

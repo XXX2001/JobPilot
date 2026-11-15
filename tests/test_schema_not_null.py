@@ -19,7 +19,6 @@ Two layers of coverage, mirroring ``tests/test_schema_checks.py`` and
 """
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 import tempfile
 
@@ -30,6 +29,7 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.config import PROJECT_ROOT
 from backend.database import AsyncSessionLocal
+from backend.scraping.deduplicator import dedup_key
 
 # Pre-N2-T3 Alembic head — the revision this migration's ``down_revision`` is at.
 _PRE_N2T3_REVISION = "t2b2_unique_keys"
@@ -257,13 +257,11 @@ def test_migration_cleans_up_null_columns_then_enforces():
             assert dedup_hash is not None and dedup_hash[0] is not None, (
                 f"dedup_hash not backfilled: {dedup_hash}"
             )
-            # The NULL-location row's backfilled hash must EQUAL the app's raw
-            # formula for that exact row (None -> "None" -> "none"), proving
-            # alignment — not merely that it is non-NULL.
-            location = None  # the row's location column is NULL
-            expected = hashlib.md5(
-                f"{'Globex'}|{'Dev'}|{location}".lower().encode()
-            ).hexdigest()
+            # The NULL-location row's hash must EQUAL the app's formula for that
+            # exact row, proving alignment — not merely that it is non-NULL.
+            # Since m01 that formula is ``dedup_key`` (m01 re-hashes every row);
+            # before it was the raw md5 with None -> "none".
+            expected = dedup_key("Globex", "Dev", None)
             assert dedup_hash_null_loc == (expected,), (
                 f"NULL-location backfill diverges from app formula: "
                 f"{dedup_hash_null_loc} != {expected!r}"

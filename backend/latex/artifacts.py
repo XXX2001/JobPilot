@@ -61,12 +61,24 @@ def sha256_file(path: Path) -> str:
 
 
 def pdf_sha256(path: Optional[Path]) -> Optional[str]:
-    """Hash of a real PDF file, or ``None`` if *path* is missing or not a PDF."""
+    """Hash of a real PDF file, or ``None`` if *path* is missing or not a PDF.
+
+    "Real" = the magic bytes match and pypdf parses it with at least one page
+    (second review R09). ponytail: structure only; checking the text for the
+    candidate's key facts is the factual-validation work (R04).
+    """
     if path is None or path.suffix.lower() != ".pdf" or not path.is_file():
         return None
     with path.open("rb") as f:
         if f.read(len(PDF_MAGIC)) != PDF_MAGIC:
             return None
+    try:
+        from pypdf import PdfReader
+
+        if len(PdfReader(path).pages) < 1:
+            return None
+    except Exception:  # noqa: BLE001 — any parse failure means "not a usable PDF"
+        return None
     return sha256_file(path)
 
 

@@ -10,12 +10,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from backend.models.schemas import RawJob
 from backend.scraping.site_prompts import SITE_CONFIGS, SITE_PROMPTS
 from backend.scraping.source_health import SourceHealthTracker
+from backend.utils.time import naive_utc_now
 
 if TYPE_CHECKING:
     from backend.matching.filters import JobFilters
@@ -406,10 +407,16 @@ class ScrapingOrchestrator:
         # Post-scrape date filter (safety net for sources without URL-level filtering)
         # ------------------------------------------------------------------
         if max_age_days is not None and all_jobs:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+            # posted_at is naive UTC (_parse_posted_date); tzinfo is dropped so a
+            # stray aware value cannot raise on the comparison.
+            cutoff = naive_utc_now() - timedelta(days=max_age_days)
             before = len(all_jobs)
             # Keep jobs with no posted_at (can't be filtered) or within the cutoff
-            all_jobs = [j for j in all_jobs if j.posted_at is None or j.posted_at >= cutoff]
+            all_jobs = [
+                j
+                for j in all_jobs
+                if j.posted_at is None or j.posted_at.replace(tzinfo=None) >= cutoff
+            ]
             filtered_out = before - len(all_jobs)
             if filtered_out:
                 logger.info("Post-scrape date filter: removed %d old jobs (cutoff=%s)", filtered_out, cutoff.date())

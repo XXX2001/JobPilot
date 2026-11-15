@@ -34,7 +34,6 @@
 	}
 	interface TestConnResult {
 		generation: ProbeResult;
-		embedding: ProbeResult;
 	}
 	let testing = $state(false);
 	let testResult = $state<TestConnResult | null>(null);
@@ -44,8 +43,7 @@
 	let testRows = $derived(
 		testResult
 			? [
-					{ label: 'Generation', r: testResult.generation },
-					{ label: 'Embeddings', r: testResult.embedding }
+					{ label: 'Generation', r: testResult.generation }
 				]
 			: []
 	);

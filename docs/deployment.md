@@ -19,9 +19,9 @@ Every install starts by writing a valid `.env`. Use the interactive setup script
 
 | Choice | Sets | Notes |
 | --- | --- | --- |
-| 1 — Local / self-hosted | `LLM_PROVIDER=openai` + `LLM_BASE_URL` (+ matching `BROWSER_LLM_*`) | OpenAI-compatible servers (Ollama, llama.cpp, LM Studio, vLLM). Defaults base URL to `http://host.docker.internal:11434/v1`. Embeddings can point at a hosted OpenAI-compatible key or the same local server (`scripts/setup.sh:73-98`). |
+| 1 — Local / self-hosted | `LLM_PROVIDER=openai` + `LLM_BASE_URL` (+ matching `BROWSER_LLM_*`) | OpenAI-compatible servers (Ollama, llama.cpp, LM Studio, vLLM). Defaults base URL to `http://host.docker.internal:11434/v1`. |
 | 2 — OpenAI-compatible | all three providers `=openai`, `OPENAI_API_KEY` (+ optional `*_BASE_URL` for another OpenAI-compatible endpoint) | Hosted OpenAI, or any vendor exposing an OpenAI-compatible endpoint. |
-| 3 — Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` | Generation only; embeddings + browser agent fall back to an OpenAI-compatible endpoint, so it also asks for an OpenAI-compatible key (`scripts/setup.sh:113-124`). |
+| 3 — Anthropic | `LLM_PROVIDER=anthropic`, `ANTHROPIC_API_KEY` | Generation only; the browser agent falls back to an OpenAI-compatible endpoint, so it also asks for an OpenAI-compatible key (`scripts/setup.sh`). |
 
 It optionally prompts for Adzuna keys (the job-search source) and finally writes a Fernet `CREDENTIAL_KEY` (`scripts/setup.sh:140`). The PowerShell variant (`scripts/setup.ps1`) is functionally identical and is built for the Docker Desktop path — no Python/uv/Node required, only PowerShell.
 

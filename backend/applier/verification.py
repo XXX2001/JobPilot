@@ -38,6 +38,14 @@ _REJECTED = re.compile(
     r"|invalid (email|phone|value)|champ (est )?obligatoire|veuillez (remplir|corriger|saisir)",
     re.IGNORECASE,
 )
+# A failure word near a confirmation phrase ("not successfully submitted",
+# "thank you for applying! An error occurred") makes the page contradictory.
+_FAILURE = re.compile(
+    r"\b(not|never|unable|unsuccessful|failed|failure|error|could ?n.t|cannot|try again)\b"
+    r"|n.a pas|n.ont pas|\bpas (été|encore)\b|échec|erreur|réessayer|impossible",
+    re.IGNORECASE,
+)
+_CONFLICT_WINDOW = 80
 _EVIDENCE_CHARS = 300
 
 
@@ -47,22 +55,62 @@ class SubmissionCheck:
     evidence: str
 
 
-def classify_page(*, text: str, invalid_count: int, url: str, before_url: str | None = None) -> SubmissionCheck:
+def classify_page(
+    *,
+    text: str,
+    invalid_count: int,
+    url: str,
+    before_url: str | None = None,
+    before_text: str | None = None,
+) -> SubmissionCheck:
     """Confirmation first. ``rejected`` (= nothing was submitted) only when
     the page did not navigate and still has invalid fields; everything else
     without a confirmation is ``unknown`` → needs verification, because a
-    false "rejected" invites a duplicate submission."""
-    if m := _CONFIRMED.search(text):
+    false "rejected" invites a duplicate submission.
+
+    A confirmation phrase counts only when no failure word sits near it and
+    it was not already on the page before the click (*before_text*)."""
+    matches = list(_CONFIRMED.finditer(text))
+    for m in matches:
+        window = text[max(0, m.start() - _CONFLICT_WINDOW) : m.end() + _CONFLICT_WINDOW]
+        if f := _FAILURE.search(window):
+            snippet = " ".join(window.split())
+            return SubmissionCheck(
+                "unknown", f"conflicting text ({f.group(0)!r}): {snippet} @ {url}"[:_EVIDENCE_CHARS]
+            )
+    if before_text is not None:
+        before = before_text.lower()
+        matches = [m for m in matches if m.group(0).lower() not in before]
+        if not matches and _CONFIRMED.search(text):
+            return SubmissionCheck(
+                "unknown", f"confirmation text was already shown before submit @ {url}"
+            )
+    if matches:
+        m = matches[0]
         start = max(0, m.start() - 80)
         snippet = " ".join(text[start : m.end() + 120].split())
         return SubmissionCheck("confirmed", f"{snippet} @ {url}"[:_EVIDENCE_CHARS])
     if invalid_count > 0 and before_url is not None and url == before_url:
-        return SubmissionCheck("rejected", f"{invalid_count} form field(s) failed validation at {url}")
+        return SubmissionCheck(
+            "rejected", f"{invalid_count} form field(s) failed validation at {url}"
+        )
     hint = f"; validation text {m.group(0)!r}" if (m := _REJECTED.search(text)) else ""
     return SubmissionCheck("unknown", f"no confirmation found at {url}{hint}"[:_EVIDENCE_CHARS])
 
 
-async def verify_page(page: Any, *, before_url: str | None = None) -> SubmissionCheck:
+async def page_text(page: Any) -> str | None:
+    """Visible page text, or ``None`` if it cannot be read (used as *before_text*)."""
+    try:
+        raw = await page.evaluate(PROBE_JS)
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return str(data.get("text", ""))
+    except Exception:  # noqa: BLE001 — no baseline is the old behaviour
+        return None
+
+
+async def verify_page(
+    page: Any, *, before_url: str | None = None, before_text: str | None = None
+) -> SubmissionCheck:
     """Inspect the current page; any failure to read it is ``unknown``, never confirmed."""
     try:
         raw = await page.evaluate(PROBE_JS)
@@ -72,6 +120,7 @@ async def verify_page(page: Any, *, before_url: str | None = None) -> Submission
             invalid_count=int(data.get("invalid", 0)),
             url=str(data.get("url", "")),
             before_url=before_url,
+            before_text=before_text,
         )
     except Exception as exc:  # noqa: BLE001 — unreadable page = no evidence
         return SubmissionCheck("unknown", f"could not inspect the page: {exc}"[:_EVIDENCE_CHARS])

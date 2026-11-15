@@ -13,6 +13,7 @@ prompt scaffolding; only the truly-shared fragments live here.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
@@ -21,6 +22,8 @@ from urllib.parse import urlparse
 # import surface for the shared helpers; this IS the captcha_handler function
 # (the old per-strategy ``_site_key`` copies were removed in T4a).
 from backend.applier.captcha_handler import site_profile_key
+from backend.browser.chrome import running_endpoint
+from backend.config import settings
 
 if TYPE_CHECKING:
     # Concrete type the Tier-2 strategies instantiate. Imported under
@@ -51,8 +54,8 @@ def build_browser(
 
     Mutates *browser_kwargs* in place to add ``storage_state`` /
     ``user_data_dir`` when *saved_session_path* exists, then returns
-    ``Browser(**browser_kwargs)``. Callers remain responsible for assigning the
-    result to ``self._active_browser`` and for their own session-load logging.
+    ``Browser(**browser_kwargs)``. Callers remain responsible for handing the
+    result to their ``on_browser`` callback and for their own session-load logging.
     """
     if _Browser is None:  # pragma: no cover - guarded at the call sites
         raise RuntimeError("browser_use is not available")
@@ -73,6 +76,16 @@ def build_browser(
     # W08: a site-delivered download must never become an uploadable file.
     browser_kwargs["accept_downloads"] = False
     browser_kwargs["auto_download_pdfs"] = False
+    endpoint = running_endpoint()
+    if endpoint is not None:
+        # The owner's logged-in JobPilot Chrome: attach, never launch. No launch flags,
+        # no saved-session file, no disable_security, and no granted site permissions.
+        for key in ("headless", "storage_state", "user_data_dir", "disable_security", "args"):
+            browser_kwargs.pop(key, None)
+        browser_kwargs["cdp_url"] = f"http://127.0.0.1:{endpoint['port']}"
+        browser_kwargs["permissions"] = []
+        browser_kwargs["keep_alive"] = True
+        return _Browser(**browser_kwargs)
     browser_kwargs.setdefault("chromium_sandbox", False)
     extra_args = ["--no-sandbox", "--disable-dev-shm-usage"]
     existing_args = list(browser_kwargs.get("args") or [])
@@ -105,6 +118,26 @@ __all__ = [
 # go is limited by ``allowed_domains`` in build_browser.
 _FORBIDDEN_ACTIONS = ("search", "switch", "close", "evaluate",
                       "write_file", "replace_file", "read_file", "save_as_pdf")
+
+
+async def open_own_tab(browser: "Browser", apply_url: str) -> None:
+    """Attached to the owner's Chrome: work in a new tab, not in the one they have open."""
+    if running_endpoint() is None:
+        return
+    await browser.start()
+    await browser.navigate_to(apply_url, new_tab=True)
+
+
+async def run_capped(agent):
+    """Run a browser agent under the step cap and the wall-clock cap.
+
+    Raises ``TimeoutError`` past the time cap; a run that hits the step cap
+    returns a history that is not done. Callers treat both as "not applied".
+    """
+    return await asyncio.wait_for(
+        agent.run(max_steps=settings.APPLY_TIER2_MAX_STEPS),
+        timeout=settings.APPLY_TIER2_TIMEOUT_SECONDS,
+    )
 
 
 def restricted_tools(*, allow_upload: bool):

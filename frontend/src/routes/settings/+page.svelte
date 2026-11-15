@@ -1,20 +1,20 @@
 <script lang="ts">
-	import { AlertCircle, CheckCircle2, Key, Globe, User, Search, Code, Cpu, X, Plug } from 'lucide-svelte';
+	import { AlertCircle, CheckCircle2, Globe, User, Search, Code, Cpu, X, Plug, Activity } from 'lucide-svelte';
 	import ProfileTab from '$lib/components/settings/ProfileTab.svelte';
 	import SearchTab from '$lib/components/settings/SearchTab.svelte';
 	import SitesTab from '$lib/components/settings/SitesTab.svelte';
-	import CredentialsTab from '$lib/components/settings/CredentialsTab.svelte';
 	import SourcesTab from '$lib/components/settings/SourcesTab.svelte';
+	import MonitorTab from '$lib/components/settings/MonitorTab.svelte';
 	import IntegrationsTab from '$lib/components/settings/IntegrationsTab.svelte';
 	import SystemTab from '$lib/components/settings/SystemTab.svelte';
 
-	type TabId = 'profile' | 'search' | 'sites' | 'credentials' | 'sources' | 'integrations' | 'system';
+	type TabId = 'profile' | 'search' | 'sites' | 'sources' | 'monitor' | 'integrations' | 'system';
 	const tabs: [TabId, string, typeof User][] = [
 		['profile', 'Profile', User],
 		['search', 'Search', Search],
 		['sites', 'Sites', Globe],
-		['credentials', 'Credentials', Key],
 		['sources', 'Sources', Code],
+		['monitor', 'Monitor', Activity],
 		['integrations', 'Integrations', Plug],
 		['system', 'System', Cpu]
 	];
@@ -84,8 +84,8 @@
 	<div hidden={activeTab !== 'profile'}><ProfileTab bind:error bind:successMsg /></div>
 	<div hidden={activeTab !== 'search'}><SearchTab bind:error bind:successMsg /></div>
 	<div hidden={activeTab !== 'sites'}><SitesTab bind:error refreshKey={sitesRefreshKey} /></div>
-	<div hidden={activeTab !== 'credentials'}><CredentialsTab bind:error bind:successMsg onSessionCleared={() => sitesRefreshKey++} /></div>
 	<div hidden={activeTab !== 'sources'}><SourcesTab bind:error /></div>
+	<div hidden={activeTab !== 'monitor'}><MonitorTab bind:error /></div>
 	<div hidden={activeTab !== 'integrations'}><IntegrationsTab /></div>
 	<div hidden={activeTab !== 'system'}><SystemTab /></div>
 </div>

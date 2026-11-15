@@ -513,7 +513,11 @@
 				<div class="min-w-0 flex-1">
 					<p class="truncate text-sm font-medium">{match.job.title}</p>
 					<p class="text-muted-foreground truncate text-xs">
-						{match.job.company}{match.job.location ? ` · ${match.job.location}` : ''}
+						{match.job.company}{match.job.location
+							? ` · ${match.job.location}`
+							: ''}{match.provisional ? ' · scored on the title only' : ''}{match.location_unverified
+							? ' · location unverified'
+							: ''}
 					</p>
 				</div>
 

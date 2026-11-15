@@ -1,0 +1,385 @@
+{
+ "offset": 0,
+ "limit": 100,
+ "totalFound": 288,
+ "content": [
+  {
+   "id": "744000161565892",
+   "name": "Conseiller.ère en Ressources Humaines",
+   "uuid": "1f4a1d90-048e-41d4-af50-92b32f98fd53",
+   "jobAdId": "2cc419c9-268c-4f06-85cf-30fb538f5926",
+   "defaultJobAd": true,
+   "refNumber": "REF32072W",
+   "company": {
+    "identifier": "Ubisoft2",
+    "name": "Ubisoft"
+   },
+   "releasedDate": "2026-11-13T19:51:33.734Z",
+   "location": {
+    "city": "Montreal",
+    "region": "QC",
+    "country": "ca",
+    "remote": false,
+    "hybrid": false,
+    "latitude": "45.5018869",
+    "longitude": "-73.56739189999999",
+    "fullLocation": "Montreal, QC, Canada"
+   },
+   "industry": {
+    "id": "entertainment",
+    "label": "Entertainment"
+   },
+   "department": {
+    "id": "13847731",
+    "label": "Ubisoft"
+   },
+   "function": {
+    "id": "human_resources",
+    "label": "Human Resources"
+   },
+   "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+   },
+   "experienceLevel": {
+    "id": "mid_senior_level",
+    "label": "Mid-Senior Level"
+   },
+   "customField": [
+    {
+     "fieldId": "56c253c2e4b0cabf01d19d37",
+     "fieldLabel": "Organizational Unit",
+     "valueId": "21cb51c2-24e9-4088-8f65-52ce10f74bcf",
+     "valueLabel": "Montréal studio"
+    },
+    {
+     "fieldId": "56c2539de4b0cabf01d19d36",
+     "fieldLabel": "Recruitment Programs",
+     "valueId": "cb9660da-dde8-48ec-ba09-d33d9bb77edc",
+     "valueLabel": "N/A"
+    },
+    {
+     "fieldId": "5bb3995c6d8bc56bc081b87d",
+     "fieldLabel": "Contract",
+     "valueId": "b5a86fc0-2681-4b3c-98b6-b73a4be23ef1",
+     "valueLabel": "Permanent"
+    },
+    {
+     "fieldId": "6ada082b6ae170d3b7d5b0cc",
+     "fieldLabel": "MU/zone work location",
+     "valueId": "08889926-b1db-4491-a364-c178e54f2253",
+     "valueLabel": "Not applicable"
+    },
+    {
+     "fieldId": "68e4ce369c52964c7125078a",
+     "fieldLabel": "Job Family",
+     "valueId": "0fef8861-6d3d-47c5-bedc-f738a1ecb89f",
+     "valueLabel": "Human Resources"
+    },
+    {
+     "fieldId": "56d1aa7ae4b0a07f777a4ef4",
+     "fieldLabel": "Brands",
+     "valueId": "default",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "6904811aa8fa2db78e2ee2ed",
+     "fieldLabel": "Job  Function",
+     "valueId": "5a411052-4847-4926-83e5-5a41fe790439",
+     "valueLabel": "HR Business Partnering"
+    },
+    {
+     "fieldId": "691ca2ee342dfb96e5364508",
+     "fieldLabel": "Reference Job",
+     "valueId": "e6b7b862-ff37-4a9a-a6df-be2148fa5654",
+     "valueLabel": "Human Resources Generalist"
+    },
+    {
+     "fieldId": "6a158e3c77b1f5657b57af9d",
+     "fieldLabel": "Management Unit L0&1 (New)",
+     "valueId": "62637202-e40e-4b9b-b287-b354affa8ddc",
+     "valueLabel": "CORPORATE"
+    },
+    {
+     "fieldId": "58b7e4d0e4b09a6d37a0cd8b",
+     "fieldLabel": "Department",
+     "valueId": "13847731",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "COUNTRY",
+     "fieldLabel": "Country/Region",
+     "valueId": "ca",
+     "valueLabel": "Canada"
+    },
+    {
+     "fieldId": "6904797c56f594d5ed50988d",
+     "fieldLabel": "Work flexibility",
+     "valueId": "ccb10278-8410-4710-b0e7-698fc2195139",
+     "valueLabel": "Office-based"
+    },
+    {
+     "fieldId": "5def94650389ad3cc4be9d17",
+     "fieldLabel": "OU sub location (select when applicable)",
+     "valueId": "8282aec3-a755-4c6d-b27f-88e4344879af",
+     "valueLabel": "Canada"
+    }
+   ],
+   "visibility": "PUBLIC",
+   "ref": "https://api.smartrecruiters.com/v1/companies/ubisoft2/postings/744000161565892",
+   "language": {
+    "code": "fr",
+    "label": "French",
+    "labelNative": "français"
+   }
+  },
+  {
+   "id": "744000161531273",
+   "name": "Spécialiste Prompt",
+   "uuid": "f6e1f49c-78f0-4238-bb2e-9acef9acd1a0",
+   "jobAdId": "5e5caae6-8783-4484-8a0e-7cebcf4d9e47",
+   "defaultJobAd": true,
+   "refNumber": "REF32073K",
+   "company": {
+    "identifier": "Ubisoft2",
+    "name": "Ubisoft"
+   },
+   "releasedDate": "2026-11-13T16:28:35.166Z",
+   "location": {
+    "city": "Montreal",
+    "region": "QC",
+    "country": "ca",
+    "remote": false,
+    "hybrid": false,
+    "latitude": "45.5018869",
+    "longitude": "-73.56739189999999",
+    "fullLocation": "Montreal, QC, Canada"
+   },
+   "industry": {
+    "id": "it_and_services",
+    "label": "Information Technology And Services"
+   },
+   "department": {
+    "id": "13847731",
+    "label": "Ubisoft"
+   },
+   "function": {
+    "id": "engineering",
+    "label": "Engineering"
+   },
+   "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+   },
+   "experienceLevel": {
+    "id": "not_applicable",
+    "label": "Not Applicable"
+   },
+   "customField": [
+    {
+     "fieldId": "56c253c2e4b0cabf01d19d37",
+     "fieldLabel": "Organizational Unit",
+     "valueId": "21cb51c2-24e9-4088-8f65-52ce10f74bcf",
+     "valueLabel": "Montréal studio"
+    },
+    {
+     "fieldId": "5bb3995c6d8bc56bc081b87d",
+     "fieldLabel": "Contract",
+     "valueId": "b5a86fc0-2681-4b3c-98b6-b73a4be23ef1",
+     "valueLabel": "Permanent"
+    },
+    {
+     "fieldId": "6ada082b6ae170d3b7d5b0cc",
+     "fieldLabel": "MU/zone work location",
+     "valueId": "08889926-b1db-4491-a364-c178e54f2253",
+     "valueLabel": "Not applicable"
+    },
+    {
+     "fieldId": "68e4ce369c52964c7125078a",
+     "fieldLabel": "Job Family",
+     "valueId": "bf95041c-301d-4886-bf5f-d7071ce99444",
+     "valueLabel": "Project & Product Management"
+    },
+    {
+     "fieldId": "56d1aa7ae4b0a07f777a4ef4",
+     "fieldLabel": "Brands",
+     "valueId": "default",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "6904811aa8fa2db78e2ee2ed",
+     "fieldLabel": "Job  Function",
+     "valueId": "1bb7de9a-0f3d-49d6-ba09-4c3d10af3f66",
+     "valueLabel": "Product Management"
+    },
+    {
+     "fieldId": "691ca2ee342dfb96e5364508",
+     "fieldLabel": "Reference Job",
+     "valueId": "8e263323-5ac6-42b0-919f-7cfd4e0d8464",
+     "valueLabel": "Product Manager"
+    },
+    {
+     "fieldId": "6a158e3c77b1f5657b57af9d",
+     "fieldLabel": "Management Unit L0&1 (New)",
+     "valueId": "90ac58f7-898e-4979-811d-3012228931f7",
+     "valueLabel": "MOTHERBRAIN"
+    },
+    {
+     "fieldId": "58b7e4d0e4b09a6d37a0cd8b",
+     "fieldLabel": "Department",
+     "valueId": "13847731",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "COUNTRY",
+     "fieldLabel": "Country/Region",
+     "valueId": "ca",
+     "valueLabel": "Canada"
+    },
+    {
+     "fieldId": "6904797c56f594d5ed50988d",
+     "fieldLabel": "Work flexibility",
+     "valueId": "ccb10278-8410-4710-b0e7-698fc2195139",
+     "valueLabel": "Office-based"
+    },
+    {
+     "fieldId": "5def94650389ad3cc4be9d17",
+     "fieldLabel": "OU sub location (select when applicable)",
+     "valueId": "8282aec3-a755-4c6d-b27f-88e4344879af",
+     "valueLabel": "Canada"
+    }
+   ],
+   "visibility": "PUBLIC",
+   "ref": "https://api.smartrecruiters.com/v1/companies/ubisoft2/postings/744000161531273",
+   "language": {
+    "code": "fr-CA",
+    "label": "French (Canada)",
+    "labelNative": "français (Canada)"
+   }
+  },
+  {
+   "id": "744000161524819",
+   "name": "Prompt Specialist",
+   "uuid": "45934db0-b6ae-430e-95c7-dff9a5a80990",
+   "jobAdId": "7159bf79-1088-4989-98de-1596f7abbb4f",
+   "defaultJobAd": false,
+   "refNumber": "REF32073K",
+   "company": {
+    "identifier": "Ubisoft2",
+    "name": "Ubisoft"
+   },
+   "releasedDate": "2026-11-13T15:58:49.344Z",
+   "location": {
+    "city": "Montreal",
+    "region": "QC",
+    "country": "ca",
+    "remote": false,
+    "hybrid": false,
+    "latitude": "45.5018869",
+    "longitude": "-73.56739189999999",
+    "fullLocation": "Montreal, QC, Canada"
+   },
+   "industry": {
+    "id": "it_and_services",
+    "label": "Information Technology And Services"
+   },
+   "department": {
+    "id": "13847731",
+    "label": "Ubisoft"
+   },
+   "function": {
+    "id": "engineering",
+    "label": "Engineering"
+   },
+   "typeOfEmployment": {
+    "id": "permanent",
+    "label": "Full-time"
+   },
+   "experienceLevel": {
+    "id": "not_applicable",
+    "label": "Not Applicable"
+   },
+   "customField": [
+    {
+     "fieldId": "56c253c2e4b0cabf01d19d37",
+     "fieldLabel": "Organizational Unit",
+     "valueId": "21cb51c2-24e9-4088-8f65-52ce10f74bcf",
+     "valueLabel": "Montréal studio"
+    },
+    {
+     "fieldId": "5bb3995c6d8bc56bc081b87d",
+     "fieldLabel": "Contract",
+     "valueId": "b5a86fc0-2681-4b3c-98b6-b73a4be23ef1",
+     "valueLabel": "Permanent"
+    },
+    {
+     "fieldId": "6ada082b6ae170d3b7d5b0cc",
+     "fieldLabel": "MU/zone work location",
+     "valueId": "08889926-b1db-4491-a364-c178e54f2253",
+     "valueLabel": "Not applicable"
+    },
+    {
+     "fieldId": "68e4ce369c52964c7125078a",
+     "fieldLabel": "Job Family",
+     "valueId": "bf95041c-301d-4886-bf5f-d7071ce99444",
+     "valueLabel": "Project & Product Management"
+    },
+    {
+     "fieldId": "56d1aa7ae4b0a07f777a4ef4",
+     "fieldLabel": "Brands",
+     "valueId": "default",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "6904811aa8fa2db78e2ee2ed",
+     "fieldLabel": "Job  Function",
+     "valueId": "1bb7de9a-0f3d-49d6-ba09-4c3d10af3f66",
+     "valueLabel": "Product Management"
+    },
+    {
+     "fieldId": "691ca2ee342dfb96e5364508",
+     "fieldLabel": "Reference Job",
+     "valueId": "8e263323-5ac6-42b0-919f-7cfd4e0d8464",
+     "valueLabel": "Product Manager"
+    },
+    {
+     "fieldId": "6a158e3c77b1f5657b57af9d",
+     "fieldLabel": "Management Unit L0&1 (New)",
+     "valueId": "90ac58f7-898e-4979-811d-3012228931f7",
+     "valueLabel": "MOTHERBRAIN"
+    },
+    {
+     "fieldId": "58b7e4d0e4b09a6d37a0cd8b",
+     "fieldLabel": "Department",
+     "valueId": "13847731",
+     "valueLabel": "Ubisoft"
+    },
+    {
+     "fieldId": "COUNTRY",
+     "fieldLabel": "Country/Region",
+     "valueId": "ca",
+     "valueLabel": "Canada"
+    },
+    {
+     "fieldId": "6904797c56f594d5ed50988d",
+     "fieldLabel": "Work flexibility",
+     "valueId": "ccb10278-8410-4710-b0e7-698fc2195139",
+     "valueLabel": "Office-based"
+    },
+    {
+     "fieldId": "5def94650389ad3cc4be9d17",
+     "fieldLabel": "OU sub location (select when applicable)",
+     "valueId": "8282aec3-a755-4c6d-b27f-88e4344879af",
+     "valueLabel": "Canada"
+    }
+   ],
+   "visibility": "PUBLIC",
+   "ref": "https://api.smartrecruiters.com/v1/companies/ubisoft2/postings/744000161524819",
+   "language": {
+    "code": "en",
+    "label": "English",
+    "labelNative": "English (US)"
+   }
+  }
+ ]
+}

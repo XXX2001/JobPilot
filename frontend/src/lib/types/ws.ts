@@ -128,6 +128,22 @@ export interface GmailMessageReceivedMsg {
 	link_confidence: number | null;
 }
 
+/** A job the monitor just discovered and matched. `posted_at` is naive UTC ISO 8601. */
+export interface NewMatchMsg {
+	type: 'new_match';
+	match_id: number;
+	job_id: number;
+	title: string;
+	company: string;
+	location: string;
+	score: number;
+	source: string;
+	posted_at: string | null;
+	url: string;
+	provisional?: boolean;
+	location_unverified?: boolean;
+}
+
 export type WSMessage =
 	| StatusMsg
 	| JobAssessmentMsg
@@ -143,7 +159,8 @@ export type WSMessage =
 	| PongMsg
 	| ErrorMsg
 	| GmailSyncStatusMsg
-	| GmailMessageReceivedMsg;
+	| GmailMessageReceivedMsg
+	| NewMatchMsg;
 
 export type WSMessageType = WSMessage['type'];
 
@@ -198,6 +215,7 @@ export function asWSMessage(value: unknown): WSMessage | null {
 		case 'error':
 		case 'gmail_sync_status':
 		case 'gmail_message_received':
+		case 'new_match':
 			return value as WSMessage;
 		default:
 			return null;

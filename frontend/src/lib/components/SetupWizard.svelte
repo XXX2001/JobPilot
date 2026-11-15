@@ -1,4 +1,5 @@
 <script lang="ts">
+	import BrowserLogins from '$lib/components/BrowserLogins.svelte';
 	import { createEventDispatcher } from 'svelte';
 	import { apiFetch } from '$lib/api';
 	import { CheckCircle2, AlertCircle, Upload, ArrowRight, X } from 'lucide-svelte';
@@ -84,7 +85,8 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 	const steps = [
 		{ n: 1, label: 'API Keys' },
 		{ n: 2, label: 'CV Template' },
-		{ n: 3, label: 'Keywords' }
+		{ n: 3, label: 'Keywords' },
+		{ n: 4, label: 'Accounts' }
 	];
 </script>
 
@@ -244,6 +246,8 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						<p class="text-xs text-muted-foreground">Press Enter to add each keyword.</p>
 					</div>
 				</div>
+			{:else if step === 4}
+				<BrowserLogins />
 			{/if}
 		</div>
 
@@ -264,7 +268,7 @@ ADZUNA_APP_KEY=your_adzuna_app_key`;
 						Back
 					</button>
 				{/if}
-				{#if step < 3}
+				{#if step < 4}
 					<button
 						onclick={() => (step += 1)}
 						class="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"

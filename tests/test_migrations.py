@@ -48,7 +48,9 @@ def test_w04_backfills_pdf_hash_for_existing_documents(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "jobpilot_data_dir", str(tmp_path))
     good = tmp_path / "cvs" / "1_x" / "cv.pdf"
     good.parent.mkdir(parents=True)
-    good.write_bytes(b"%PDF-1.4 hello")
+    from tests.pdfs import real_pdf
+
+    good.write_bytes(real_pdf("hello"))
     (tmp_path / "bad.pdf").write_bytes(b"not a pdf")
 
     db = tmp_path / "old.db"

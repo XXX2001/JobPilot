@@ -136,7 +136,16 @@ def main():
 
     import threading
 
-    threading.Timer(2.0, lambda: webbrowser.open(f"http://{browser_host}:{port}")).start()
+    def open_ui() -> None:
+        # The app lives in the JobPilot Chrome, next to the job-site logins; the
+        # default browser is only the fallback (no Chrome, Docker, no display).
+        from backend.browser.chrome import show_app
+
+        url = f"http://{browser_host}:{port}"
+        if not show_app(url):
+            webbrowser.open(url)
+
+    threading.Timer(2.0, open_ui).start()
 
     # Start FastAPI
     uvicorn.run(

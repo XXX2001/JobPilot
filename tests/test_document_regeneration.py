@@ -13,11 +13,12 @@ import pytest
 from starlette.testclient import TestClient
 
 from backend.config import DATA_DIR
+from tests.pdfs import real_pdf
 
 
 def _pdf(path: Path, body: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"%PDF-1.4\n" + body.encode() + b"\n%%EOF\n")
+    path.write_bytes(real_pdf(body))
     return path
 
 

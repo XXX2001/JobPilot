@@ -46,7 +46,6 @@ def test_happy_path_lifespan_populates_app_state(test_app: TestClient) -> None:
         "adaptive_scraper",
         "session_manager",
         "scraping_orchestrator",
-        "matcher",
         "apply_engine",
         "batch_runner",
     ):
@@ -105,3 +104,28 @@ def test_zz_migration_failure_aborts_startup(monkeypatch: pytest.MonkeyPatch) ->
     with pytest.raises(RuntimeError, match="simulated alembic upgrade failure"):
         with TestClient(app):
             pass  # pragma: no cover
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_lifespan_registers_monitor_tick_only_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool
+) -> None:
+    """The monitor polls nothing unless the owner turned it on (MONITOR_ENABLED)."""
+    from backend.config import Settings, settings
+    from backend.main import app
+
+    assert Settings.model_fields["MONITOR_ENABLED"].default is False
+    # Set both ways explicitly: a developer's .env must not decide this test.
+    monkeypatch.setattr(settings, "MONITOR_ENABLED", enabled)
+    monkeypatch.setattr(settings, "MONITOR_TICK_SECONDS", 45)
+
+    with TestClient(app) as client:
+        scheduler = client.app.state.scheduler  # type: ignore[attr-defined]
+        job = scheduler.get_job("monitor_tick")
+        assert scheduler.get_job("gmail_poll") is not None
+        if not enabled:
+            assert job is None
+            return
+        assert job is not None
+        assert job.trigger.interval.total_seconds() == 45
+        assert job.max_instances == 1 and job.coalesce is True

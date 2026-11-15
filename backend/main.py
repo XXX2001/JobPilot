@@ -95,6 +95,24 @@ async def lifespan(app: FastAPI):
         raise
     logger.info("Database initialized")
 
+    # Matches scored on another CV, keywords or skill list — or by the scorer before
+    # the gazetteer (NULL basis) — are stale. Non-fatal: the old scores still rank.
+    try:
+        from backend.monitor.poller import rescore_stale
+
+        async with database.AsyncSessionLocal() as session:
+            await rescore_stale(session, after_save=False)
+    except Exception:
+        logger.exception("Rescoring stored matches failed (non-fatal)")
+
+    # Reservations left ``pending`` by a crash/restart: nothing is running them
+    # any more. Fatal on failure — serving with them unresolved would let a
+    # possibly-submitted job be applied to again.
+    from backend.applier.recorder import sweep_stale_pending
+
+    async with database.AsyncSessionLocal() as session:
+        await sweep_stale_pending(session)
+
     # ── Validate provider configuration (fail-fast, provider-aware) ───────
     # Only the credentials the *chosen* providers need are required, so a
     # local-model setup never demands a Google key. See Settings.validate_runtime_config.
@@ -128,9 +146,7 @@ async def lifespan(app: FastAPI):
         from backend.llm.cv_editor import CVEditor
         from backend.llm.cv_modifier import CVModifier
         from backend.llm.job_analyzer import JobAnalyzer
-        from backend.matching.embedder import Embedder
         from backend.matching.fit_engine import FitEngine
-        from backend.matching.matcher import JobMatcher
         from backend.scheduler.batch_runner import BatchRunner
         from backend.scraping.adaptive_scraper import AdaptiveScraper
         from backend.scraping.adzuna_client import AdzunaClient
@@ -139,7 +155,7 @@ async def lifespan(app: FastAPI):
         from backend.scraping.scrapling_fetcher import ScraplingFetcher
         from backend.scraping.session_manager import BrowserSessionManager
 
-        from backend.llm.factory import make_embedding_client, make_llm_client
+        from backend.llm.factory import make_llm_client
         gen_client = make_llm_client()
         cv_editor = CVEditor(client=gen_client)
         cv_pipeline = CVPipeline(
@@ -160,7 +176,6 @@ async def lifespan(app: FastAPI):
             deduplicator=dedup,
             scrapling_fetcher=scrapling,
         )
-        matcher = JobMatcher()
 
         apply_engine = ApplicationEngine()  # W11: limit read from settings per reservation
 
@@ -169,11 +184,10 @@ async def lifespan(app: FastAPI):
 
         batch_runner = BatchRunner(
             scraper=orchestrator,
-            matcher=matcher,
+            matcher=None,  # loaded per batch from the owner's CV and keywords
             cv_pipeline=cv_pipeline,
             db_factory=AsyncSessionLocal,
             fit_engine=FitEngine(),
-            embedder=Embedder(embedding_client=make_embedding_client()),
         )
 
         # Store on app.state for dependency injection
@@ -184,7 +198,6 @@ async def lifespan(app: FastAPI):
         app.state.adaptive_scraper = adaptive
         app.state.session_manager = session_mgr
         app.state.scraping_orchestrator = orchestrator
-        app.state.matcher = matcher
         app.state.apply_engine = apply_engine
         app.state.batch_runner = batch_runner
 
@@ -262,6 +275,19 @@ async def lifespan(app: FastAPI):
         scheduler = AsyncIOScheduler()
         interval = max(1, int(settings.GMAIL_POLL_INTERVAL_MINUTES))
         scheduler.add_job(_run_gmail_poll, "interval", minutes=interval, id="gmail_poll")
+        if settings.MONITOR_ENABLED:
+            from backend.monitor.poller import monitor_tick
+
+            tick = max(1, int(settings.MONITOR_TICK_SECONDS))
+            scheduler.add_job(
+                monitor_tick,
+                "interval",
+                seconds=tick,
+                id="monitor_tick",
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info("Discovery monitor ticking every %d second(s)", tick)
         scheduler.start()
         app.state.scheduler = scheduler
         logger.info("Gmail poller scheduled every %d minute(s)", interval)
@@ -320,12 +346,14 @@ async def establish_session() -> Response:
 try:
     import backend.api.analytics as analytics  # type: ignore
     import backend.api.applications as applications  # type: ignore
+    import backend.api.browser as browser  # type: ignore
     import backend.api.applications_export as applications_export  # type: ignore
     import backend.api.documents as documents  # type: ignore
     import backend.api.correspondence as correspondence  # type: ignore
     import backend.api.gmail as gmail  # type: ignore
     import backend.api.gmail_auth as gmail_auth  # type: ignore
     import backend.api.jobs as jobs  # type: ignore
+    import backend.api.monitor as monitor  # type: ignore
     import backend.api.queue as queue  # type: ignore
     import backend.api.settings as api_settings  # type: ignore
     import backend.api.today as today  # type: ignore
@@ -343,6 +371,8 @@ try:
     app.include_router(gmail_auth.router)
     app.include_router(gmail.router)
     app.include_router(correspondence.router)
+    app.include_router(monitor.router)
+    app.include_router(browser.router)
     # ws.py is present but may not register routes yet
     app.include_router(ws.router)
 except Exception as e:

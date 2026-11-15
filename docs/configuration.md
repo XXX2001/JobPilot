@@ -24,7 +24,7 @@ defaults   ─┘    (config.py)     (friendly errors)     (provider-aware, fail
 
 ## AI provider selection
 
-JobPilot has three independent LLM roles — generation, embeddings, and the browser agent — each with its own provider/model/base-URL/key. You can mix providers (e.g. local generation + a hosted embedding provider). `openai` here means **any** OpenAI-compatible endpoint — hosted OpenAI, a local server (Ollama, LM Studio, vLLM, llama.cpp), or another vendor's OpenAI-compatible endpoint — selected with `*_BASE_URL`.
+JobPilot has two independent LLM roles — generation and the browser agent — each with its own provider/model/base-URL/key, so you can mix providers. Job scoring and fit assessment use no model at all (see [Matching](matching.md)); `EMBEDDING_*` keys left in an older `.env` are ignored. `openai` here means **any** OpenAI-compatible endpoint — hosted OpenAI, a local server (Ollama, LM Studio, vLLM, llama.cpp), or another vendor's OpenAI-compatible endpoint — selected with `*_BASE_URL`.
 
 ### Generation (`LLM_*`)
 
@@ -38,17 +38,6 @@ JobPilot has three independent LLM roles — generation, embeddings, and the bro
 
 `config.py:49-52`. Provider-default and base-URL details are wired through `backend/llm/factory.py` (`make_llm_client`, used at `backend/main.py:141`).
 
-### Embeddings (`EMBEDDING_*`)
-
-| Env var | Field | Default | Required? |
-|---|---|---|---|
-| `EMBEDDING_PROVIDER` | `EMBEDDING_PROVIDER` | `openai` | `openai` only (anthropic has no embeddings API) |
-| `EMBEDDING_MODEL` | `EMBEDDING_MODEL` | `text-embedding-3-small` | Optional |
-| `EMBEDDING_BASE_URL` | `EMBEDDING_BASE_URL` | `""` | OpenAI-compatible endpoint |
-| `EMBEDDING_API_KEY` | `EMBEDDING_API_KEY` (secret) | `""` | See validation rules |
-
-`config.py:54-57`. Note: many local builds (e.g. llama.cpp Qwen) do **not** serve `/v1/embeddings` (HTTP 501). Keep embeddings on an OpenAI-compatible endpoint that serves an embedding model — or fit-scoring breaks (`.env.example:69-72`).
-
 ### Browser agent (`BROWSER_LLM_*`)
 
 | Env var | Field | Default | Required? |
@@ -60,7 +49,7 @@ JobPilot has three independent LLM roles — generation, embeddings, and the bro
 
 `config.py:58-62`.
 
-> Changes to any `LLM_*` / `EMBEDDING_*` / `BROWSER_LLM_*` value are **applied on restart** — clients are constructed once in the lifespan, not per-request.
+> Changes to any `LLM_*` / `BROWSER_LLM_*` value are **applied on restart** — clients are constructed once in the lifespan, not per-request.
 
 ### Using a local / self-hosted OpenAI-compatible server
 
@@ -120,7 +109,7 @@ If `ADZUNA_APP_ID`/`ADZUNA_APP_KEY` are unset, the lifespan logs a warning and d
 
 ## Models
 
-Model names are configured per role via `LLM_MODEL` / `EMBEDDING_MODEL` / `BROWSER_LLM_MODEL` (see the provider tables above). Each is optional; when empty the provider adapter falls back to a sensible default (e.g. `text-embedding-3-small` for OpenAI-compatible embeddings).
+Model names are configured per role via `LLM_MODEL` / `BROWSER_LLM_MODEL` (see the provider tables above). Each is optional; when empty the provider adapter falls back to a sensible default.
 
 ---
 
@@ -132,6 +121,37 @@ Model names are configured per role via `LLM_MODEL` / `EMBEDDING_MODEL` / `BROWS
 | `APPLY_TIER1_ENABLED` | `APPLY_TIER1_ENABLED` | `true` | Enables the Tier 1 Playwright direct filler (mirrors `SCRAPLING_ENABLED`) |
 
 `config.py:66-69`.
+
+---
+
+## Discovery monitor
+
+| Env var | Field | Default | Effect |
+|---|---|---|---|
+| `MONITOR_ENABLED` | `MONITOR_ENABLED` | `false` | Schedules the monitor tick. Off: nothing polls |
+| `MONITOR_TICK_SECONDS` | `MONITOR_TICK_SECONDS` | `30` | Seconds between ticks; each tick polls the sources that are due |
+| `MONITOR_MAX_CONCURRENCY` | `MONITOR_MAX_CONCURRENCY` | `8` | Sources polled at the same time within a tick |
+| `APPLY_MIN_GAP_SECONDS` | `90` | Minimum pause between two automatic applications on the same site; the real pause is 1 to 2.5 times this. `0` disables it |
+| `APPLY_TIER2_MAX_STEPS` | `25` | Step cap for one run of the browser agent; past it the run stops without submitting |
+| `APPLY_TIER2_TIMEOUT_SECONDS` | `300` | Time cap for one run of the browser agent |
+| `NTFY_URL` | `NTFY_URL` | empty | ntfy topic URL (`https://ntfy.sh/<topic>` or a self-hosted server) for new-match and source-disabled notifications. Empty: no outbound notification; new matches still reach the web app over the WebSocket. The topic name is the only protection: anyone who knows it can read the pushes |
+
+Applied on restart. Per-source intervals are on the `job_sources` rows, not in `.env` (set with `interval_s` when a source is added). See [Getting started with the monitor](getting-started-monitor.md) for the owner's walkthrough and [Job scraping & sources](scraping.md#the-discovery-monitor) for the internals.
+
+These monitor limits are fixed in code, not settings: LinkedIn job pages opened in the JobPilot Chrome are capped at 5 per poll and 80 per day, with 6–18 s between pages (`backend/monitor/linkedin_detail.py`); a failing source waits at most 6 h before its next try (`backend/monitor/poller.py`).
+
+---
+
+## Files in the data directory
+
+Some behaviour is set by files in the data directory (`JOBPILOT_DATA_DIR`, default `./data`) rather than by `.env`:
+
+| File | Effect |
+|---|---|
+| `my_skills.txt` | Your skills, one per line (`name \| alias \| alias`). When it lists at least one skill, jobs are scored against it instead of the skills read from the CV. Read and replace it with `GET` / `PUT /api/settings/skills`. Example: `scripts/defaults/my_skills.example.txt`. See [Matching](matching.md#your-own-skill-files-data-directory) |
+| `skills.txt` | Optional. Replaces the bundled skill vocabulary (`backend/matching/data/skills.txt`) |
+| `jobpilot-chrome/` | The JobPilot Chrome's own profile, where your manual job-site logins are kept. Created by `POST /api/browser/open`. Never your everyday Chrome profile. Requires Google Chrome (`google-chrome` on the PATH) |
+| `.session_secret` | Per-installation key. Every POST/PUT/PATCH/DELETE under `/api` must send it, as the `jobpilot_session` cookie (the web app does this) or the `X-JobPilot-Session` header (for `curl` and scripts). Created on first start |
 
 ---
 
@@ -175,13 +195,6 @@ The credential helper `is_configured()` (`backend/config.py:83`) treats `""` and
 | invalid value | Must be one of `openai` \| `anthropic` |
 | `openai` | `LLM_BASE_URL` (local/self-hosted) **or** `LLM_API_KEY` **or** `OPENAI_API_KEY` |
 | `anthropic` | `ANTHROPIC_API_KEY` (or `LLM_API_KEY`) |
-
-### Embeddings (`EMBEDDING_PROVIDER`)
-
-| Provider | Requirement |
-|---|---|
-| invalid value | Must be `openai` (anthropic has no embeddings API) |
-| `openai` | `EMBEDDING_BASE_URL` **or** `EMBEDDING_API_KEY` **or** `OPENAI_API_KEY` |
 
 ### Browser agent (`BROWSER_LLM_PROVIDER`)
 

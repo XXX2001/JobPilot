@@ -12,15 +12,18 @@ from typing import Any, Literal, Optional, Type, TypeVar
 
 import httpx
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.deps import DBSession
 from backend.config import DATA_DIR, PROJECT_ROOT, settings
+from backend.matching.gazetteer import SKILLS_PATH, check_skill_lines
+from backend.matching.matcher import skill_files
 from backend.models.base import Base
 from backend.models.job import JobSource
 from backend.models.user import SearchSettings, SiteCredential, UserProfile
+from backend.monitor.poller import rescore_stale
 from backend.scraping.site_prompts import SITE_CONFIGS
 from backend.security.sanitizer import sanitize_url
 from backend.utils.time import utc_now
@@ -29,6 +32,19 @@ _T = TypeVar("_T", bound=Base)
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _rescore(db: AsyncSession, *, force: bool = False) -> None:
+    """Stored scores follow the CV and the search settings just saved.
+
+    The save is already committed: a rescoring failure is logged, not returned, and
+    the next startup catches up.
+    """
+    try:
+        await rescore_stale(db, force=force)
+    except Exception:
+        logger.exception("Rescoring stored matches failed after a settings save")
+        await db.rollback()
 
 
 async def _upsert_singleton(
@@ -71,6 +87,7 @@ async def _upsert_singleton(
     await db.commit()
     await db.refresh(row)
     return row
+
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], redirect_slashes=False)
 
@@ -170,6 +187,7 @@ class CvUploadResponse(BaseModel):
     filename: str
     size_bytes: int
 
+
 class SourceProviderStatus(BaseModel):
     configured: bool
     app_id_hint: Optional[str] = None
@@ -198,7 +216,6 @@ class ProbeResult(BaseModel):
 
 class TestConnectionResponse(BaseModel):
     generation: ProbeResult
-    embedding: ProbeResult
 
 
 class ModelListResponse(BaseModel):
@@ -265,7 +282,10 @@ async def update_profile(body: ProfileUpdate, db: DBSession):
         defaults={"full_name": body.full_name or "", "email": body.email or ""},
     )
     logger.info("Profile updated for user id=1")
-    return ProfileOut.model_validate(profile)
+    out = ProfileOut.model_validate(profile)
+    if "base_cv_path" in body.model_fields_set:
+        await _rescore(db)
+    return out
 
 
 @router.get("/search", response_model=SearchSettingsOut)
@@ -303,7 +323,58 @@ async def update_search_settings(body: SearchSettingsUpdate, db: DBSession):
         },
     )
     logger.info("Search settings updated")
-    return SearchSettingsOut.model_validate(ss)
+    out = SearchSettingsOut.model_validate(ss)
+    # The hard filters are not in ``score_basis``: rescore whatever the basis.
+    await _rescore(db, force=True)
+    return out
+
+
+class SkillsIn(BaseModel):
+    my_skills: str = Field(max_length=200_000)
+
+
+def _skills_out() -> dict[str, Any]:
+    my_path, vocab = skill_files()
+    text = my_path.read_text(encoding="utf-8") if my_path.is_file() else None
+    return {
+        "my_skills": text,
+        "vocabulary_overridden": vocab != SKILLS_PATH,
+        "skill_count": check_skill_lines(text) if text else 0,
+    }
+
+
+@router.get("/skills")
+async def get_skills():
+    """The owner's skill file ($DATA/my_skills.txt), which replaces skills read from the CV."""
+    try:
+        return _skills_out()
+    except ValueError as exc:  # hand-edited into a bad state: show it so it can be fixed
+        my_path, vocab = skill_files()
+        return {
+            "my_skills": my_path.read_text(encoding="utf-8"),
+            "vocabulary_overridden": vocab != SKILLS_PATH,
+            "skill_count": 0,
+            "error": str(exc),
+        }
+
+
+@router.put("/skills")
+async def put_skills(body: SkillsIn, db: DBSession):
+    """Replace the owner's skill file and rescore. An empty body removes it (back to the CV)."""
+    try:
+        check_skill_lines(body.my_skills)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    my_path, _ = skill_files()
+    if body.my_skills.strip():
+        my_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = my_path.with_suffix(".tmp")
+        tmp.write_text(body.my_skills, encoding="utf-8")
+        tmp.replace(my_path)
+    else:
+        my_path.unlink(missing_ok=True)
+    await _rescore(db)
+    return _skills_out()
 
 
 @router.get("/sources", response_model=SourcesOut)
@@ -316,9 +387,7 @@ async def get_sources() -> SourcesOut:
     return SourcesOut(
         adzuna=SourceProviderStatus(
             configured=bool(adzuna_id_set and adzuna_key_set),
-            app_id_hint=(
-                (adzuna_app_id[:4] + "****") if adzuna_id_set else None
-            ),
+            app_id_hint=((adzuna_app_id[:4] + "****") if adzuna_id_set else None),
         ),
         llm=LlmProviderStatus(
             configured=llm_key_set,
@@ -372,51 +441,15 @@ async def _probe_generation() -> ProbeResult:
         return ProbeResult(ok=False, error=str(exc)[:300])
 
 
-async def _probe_embedding() -> ProbeResult:
-    from backend.llm.factory import make_embedding_client
-
-    t0 = time.monotonic()
-    try:
-        client = make_embedding_client()
-        vecs = await asyncio.wait_for(
-            client.embed(["connection test"]), timeout=_PROBE_TIMEOUT_S
-        )
-        dt = int((time.monotonic() - t0) * 1000)
-        dim = len(vecs[0]) if vecs and vecs[0] else 0
-        return ProbeResult(
-            ok=dim > 0,
-            latency_ms=dt,
-            detail=f"dimension={dim}",
-            error=None if dim > 0 else "Endpoint returned no embedding vector.",
-        )
-    except asyncio.TimeoutError:
-        return ProbeResult(ok=False, error=f"No response within {int(_PROBE_TIMEOUT_S)}s.")
-    except Exception as exc:  # noqa: BLE001
-        # A chat-only local server often returns 404/501 on /embeddings — make
-        # that the most common failure mode legible.
-        msg = str(exc)
-        if "404" in msg or "501" in msg or "not found" in msg.lower():
-            msg = (
-                "Endpoint does not serve /v1/embeddings (chat-only server?). "
-                "Point EMBEDDING_BASE_URL at a server that hosts an embedding model. "
-                f"[{msg[:150]}]"
-            )
-        return ProbeResult(ok=False, error=msg[:300])
-
-
 @router.post("/test-connection", response_model=TestConnectionResponse)
 async def test_connection() -> TestConnectionResponse:
-    """Live-probe the configured generation + embedding endpoints.
+    """Live-probe the configured generation endpoint.
 
     Unlike ``/status`` (which only checks that a key/base_url is *present*),
-    this actually calls each endpoint, so a wrong base_url, a chat-only server
-    that can't embed, or a too-slow model surfaces at setup instead of failing
-    silently mid-run.
+    this actually calls the endpoint, so a wrong base_url or a too-slow model
+    surfaces at setup instead of failing silently mid-run.
     """
-    return TestConnectionResponse(
-        generation=await _probe_generation(),
-        embedding=await _probe_embedding(),
-    )
+    return TestConnectionResponse(generation=await _probe_generation())
 
 
 def _parse_model_ids(data: Any) -> list[str]:
@@ -438,22 +471,17 @@ def _parse_model_ids(data: Any) -> list[str]:
 
 
 @router.get("/models", response_model=ModelListResponse)
-async def list_models(role: Literal["llm", "embedding"] = "llm") -> ModelListResponse:
+async def list_models(
+    role: Literal["llm"] = "llm",  # noqa: ARG001 - the only role left
+) -> ModelListResponse:
     """List model ids the configured endpoint advertises at ``/models``.
 
     Lets the setup UI prefill the model field for a local/self-hosted server
     instead of the user having to know the exact served id. Only meaningful
     when a base_url is set (hosted OpenAI uses fixed, well-known model names).
     """
-    if role == "llm":
-        base = settings.LLM_BASE_URL or ""
-        key = settings.LLM_API_KEY.get_secret_value() or settings.OPENAI_API_KEY.get_secret_value()
-    else:
-        base = settings.EMBEDDING_BASE_URL or ""
-        key = (
-            settings.EMBEDDING_API_KEY.get_secret_value()
-            or settings.OPENAI_API_KEY.get_secret_value()
-        )
+    base = settings.LLM_BASE_URL or ""
+    key = settings.LLM_API_KEY.get_secret_value() or settings.OPENAI_API_KEY.get_secret_value()
 
     if not base.strip():
         return ModelListResponse(
@@ -554,6 +582,7 @@ async def _compile_check(tex: str, templates_dir: Path) -> None:
                 ),
             ) from exc
 
+
 def _sanitize_cv_filename(raw_filename: str) -> str:
     """Slug a user-supplied filename, preserving extension.
 
@@ -606,7 +635,7 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
             status_code=413,
             detail=(
                 f"File too large ({len(data)} bytes). Maximum allowed size is "
-                f"{_MAX_CV_SIZE_BYTES} bytes ({_MAX_CV_SIZE_BYTES // (1024*1024)} MB)."
+                f"{_MAX_CV_SIZE_BYTES} bytes ({_MAX_CV_SIZE_BYTES // (1024 * 1024)} MB)."
             ),
         )
 
@@ -684,6 +713,7 @@ async def upload_cv(db: DBSession, file: UploadFile = File(...)) -> CvUploadResp
     else:
         dest_tmp.rename(dest)
 
+    await _rescore(db)
     logger.info("CV uploaded: path=%s size=%d", dest, len(data))
 
     return CvUploadResponse(
@@ -784,9 +814,7 @@ async def get_sites(db: DBSession):
 
 
 @router.put("/sites/{site_name}", response_model=SiteToggleResponse)
-async def toggle_site(
-    site_name: str, body: SiteToggle, db: DBSession
-) -> SiteToggleResponse:
+async def toggle_site(site_name: str, body: SiteToggle, db: DBSession) -> SiteToggleResponse:
     """Enable or disable a job source site."""
     if site_name not in SITE_CONFIGS:
         raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
@@ -856,42 +884,15 @@ async def get_credentials(db: DBSession):
 async def save_credential(
     site_name: str, body: CredentialUpdate, db: DBSession
 ) -> CredentialSaveResponse:
-    """Encrypt and store email/password for a site that requires login."""
-    if site_name not in SITE_CONFIGS:
-        raise HTTPException(status_code=404, detail=f"Unknown site: {site_name}")
-    if not SITE_CONFIGS[site_name].get("requires_login", False):
-        raise HTTPException(status_code=400, detail=f"Site {site_name} does not require login.")
-    cred_key = settings.CREDENTIAL_KEY.get_secret_value()
-    if not cred_key:
-        raise HTTPException(
-            status_code=400,
-            detail="CREDENTIAL_KEY is not set. Add a Fernet key to your .env file.",
-        )
+    """Gone: site passwords are no longer stored. Log in by hand in the JobPilot browser.
 
-    from cryptography.fernet import Fernet
-
-    f = Fernet(cred_key.encode())
-    enc_email = f.encrypt(body.email.encode()).decode()
-    enc_pass = f.encrypt(body.password.encode()).decode()
-
-    stmt = select(SiteCredential).where(SiteCredential.site_name == site_name)
-    result = await db.execute(stmt)
-    row = result.scalar_one_or_none()
-
-    if row is None:
-        row = SiteCredential(
-            site_name=site_name,
-            encrypted_email=enc_email,
-            encrypted_password=enc_pass,
-        )
-        db.add(row)
-    else:
-        row.encrypted_email = enc_email
-        row.encrypted_password = enc_pass
-        row.updated_at = utc_now()
-
-    await db.commit()
-    return CredentialSaveResponse(site_name=site_name, saved=True)
+    ponytail: the encrypted_* columns stay until a migration drops them.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="Site passwords are no longer stored. Open the JobPilot browser "
+        "(Settings → Monitor) and log in there once.",
+    )
 
 
 @router.delete("/credentials/{site_name}/session", response_model=SessionClearResponse)

@@ -37,7 +37,7 @@ else:
                 return None
 
 
-from backend.api.ws_models import JobAssessment, Pong, SkillGap, Status
+from backend.api.ws_models import JobAssessment, NewMatch, Pong, SkillGap, Status
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -156,6 +156,11 @@ async def broadcast_status(message: str, progress: float = 0.0) -> None:
     guaranteed to validate against the discriminated ``WSMessage`` union.
     """
     await manager.broadcast(Status(message=message, progress=progress))
+
+
+async def broadcast_new_match(message: NewMatch) -> None:
+    """Broadcast a job the monitor just matched to all connected WebSocket clients."""
+    await manager.broadcast(message)
 
 
 async def broadcast_job_assessment(

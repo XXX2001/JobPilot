@@ -56,7 +56,7 @@ cp "$EXAMPLE" "$ENV_FILE"
 # contains what you actually choose below (placeholders otherwise read as
 # real, non-empty values).
 for _k in ADZUNA_APP_ID ADZUNA_APP_KEY OPENAI_API_KEY ANTHROPIC_API_KEY \
-          SERPAPI_KEY LLM_API_KEY LLM_BASE_URL LLM_MODEL EMBEDDING_API_KEY EMBEDDING_BASE_URL \
+          SERPAPI_KEY LLM_API_KEY LLM_BASE_URL LLM_MODEL \
           BROWSER_LLM_API_KEY BROWSER_LLM_BASE_URL BROWSER_LLM_MODEL; do
   set_env "$_k" ""
 done
@@ -81,31 +81,15 @@ case "$choice" in
     set_env BROWSER_LLM_PROVIDER openai
     set_env BROWSER_LLM_BASE_URL "$base"
     [ -n "$model" ] && set_env BROWSER_LLM_MODEL "$model"
-    say ""
-    say "Embeddings power job/CV fit-scoring. Most local servers do NOT serve"
-    say "embeddings, so you can point them at a hosted OpenAI-compatible key or"
-    say "skip scoring."
-    ek="$(ask "API key for embeddings (blank = use the local server)" "")"
-    if [ -n "$ek" ]; then
-      set_env EMBEDDING_PROVIDER openai; set_env EMBEDDING_API_KEY "$ek"
-    else
-      # No cloud key: point embeddings at the same local server. Config stays
-      # valid and the app boots; if the server doesn't serve /v1/embeddings,
-      # fit-scoring degrades at runtime instead of blocking startup.
-      set_env EMBEDDING_PROVIDER openai; set_env EMBEDDING_BASE_URL "$base"
-      say "  (embeddings will use $base — fit-scoring needs an embeddings-capable server)"
-    fi
     ;;
   2)
     ok="$(ask "API key (sk-… for hosted OpenAI)" "")"
     burl="$(ask "Base URL (blank = hosted OpenAI; set for another OpenAI-compatible endpoint)" "")"
     set_env LLM_PROVIDER openai
-    set_env EMBEDDING_PROVIDER openai
     set_env BROWSER_LLM_PROVIDER openai
     set_env OPENAI_API_KEY "$ok"
     if [ -n "$burl" ]; then
       set_env LLM_BASE_URL "$burl"
-      set_env EMBEDDING_BASE_URL "$burl"
       set_env BROWSER_LLM_BASE_URL "$burl"
     fi
     ;;
@@ -114,11 +98,9 @@ case "$choice" in
     set_env LLM_PROVIDER anthropic
     set_env ANTHROPIC_API_KEY "$ak"
     say ""
-    say "Note: Anthropic has no embeddings API and browser-use ships no Anthropic"
-    say "client, so embeddings + the browser agent fall back to an OpenAI-compatible"
-    say "endpoint."
-    ek="$(ask "OpenAI-compatible API key for embeddings + browser agent" "")"
-    set_env EMBEDDING_PROVIDER openai
+    say "Note: browser-use ships no Anthropic client, so the browser agent falls"
+    say "back to an OpenAI-compatible endpoint."
+    ek="$(ask "OpenAI-compatible API key for the browser agent" "")"
     set_env BROWSER_LLM_PROVIDER openai
     [ -n "$ek" ] && { set_env OPENAI_API_KEY "$ek"; }
     ;;

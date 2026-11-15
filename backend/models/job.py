@@ -16,6 +16,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,10 +46,35 @@ class JobSource(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     last_scraped_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)
+    # Monitor poll state (m01). NULL interval/window = the adapter's default.
+    poll_interval_s: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    next_poll_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    etag: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    fail_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    window_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # When the seeding poll succeeded (m02). Older postings are stored, not notified.
+    first_polled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+_HAS_EXTERNAL_ID = "external_id IS NOT NULL AND external_id != ''"
 
 
 class Job(Base):
     __tablename__ = "jobs"
+    # Job identity is (source, external_id) when the source gives a stable ID;
+    # ``dedup_hash`` stays the cross-source fallback (spec D2).
+    __table_args__ = (
+        Index(
+            "uq_jobs_source_external",
+            "source_id",
+            "external_id",
+            unique=True,
+            sqlite_where=text(_HAS_EXTERNAL_ID),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source_id: Mapped[Optional[int]] = mapped_column(
@@ -72,6 +99,8 @@ class Job(Base):
     scraped_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now, index=True)
     dedup_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    first_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
 class JobMatch(Base):
@@ -109,6 +138,17 @@ class JobMatch(Base):
     )
     score: Mapped[float] = mapped_column(Float, nullable=False)
     keyword_hits: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # What ``score`` was computed from: "{cv_hash12}:{GAZETTEER_VERSION}". NULL on rows
+    # scored before the gazetteer scorer; ``rescore_all`` recomputes a stale match.
+    score_basis: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    # What ``score`` rests on (``ScoreResult``): a title-only score, and a location a
+    # country filter let through without proof. The queue lists provisional matches last.
+    provisional: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
+    location_unverified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )
     status: Mapped[str] = mapped_column(String, default="new", nullable=False, index=True)
     batch_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     matched_at: Mapped[datetime] = mapped_column(DateTime, default=naive_utc_now)

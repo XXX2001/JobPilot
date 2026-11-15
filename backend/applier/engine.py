@@ -10,14 +10,17 @@ unchanged.
 from __future__ import annotations
 
 import asyncio
+import random
 from collections import OrderedDict
 import uuid
 import logging
 from enum import Enum
 from pathlib import Path
-from typing import Optional, cast
+from typing import Any, Optional, cast
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.applier import RESULT_CANCELLED, RESULT_CONFIRMED, RESULT_FAILED, RESULT_NEEDS_VERIFICATION
@@ -28,6 +31,7 @@ from backend.applier.manual_apply import ApplicationResult, ManualApplyStrategy
 from backend.utils.time import utc_now
 from backend.applier.recorder import ApplicationRecorder
 from backend.applier.state import ApplyContext, State, Statechart, Transition
+from backend.config import settings
 from backend.defaults import MAX_LEN_ADDITIONAL_ANSWERS, MAX_LEN_EMAIL, MAX_LEN_LOCATION, MAX_LEN_PHONE
 
 logger = logging.getLogger(__name__)
@@ -89,6 +93,14 @@ class ApplicationEngine:
         # so a client retrying a lost response still gets its ack.
         self._review_revisions: dict[int, int] = {}
         self._decisions: "OrderedDict[tuple[int, str], tuple[tuple, dict]]" = OrderedDict()
+        # job_id → reserved Application id of the live attempt (R03 midnight check).
+        self._reservations: dict[int, int] = {}
+        # Jobs with a live attempt. Keyed on the job, not the match: one job
+        # reachable through two match ids must not be applied to twice.
+        self._in_flight_jobs: set[tuple[str, int]] = set()
+        # host -> loop time before which the next automatic application must not start.
+        # ponytail: in memory, so a restart forgets the pause; persist if that matters.
+        self._next_auto_start: dict[str, float] = {}
         # T4a: guard the re-entrancy check (read-then-write of the events
         # dicts) so two concurrent apply() calls for the same job_match_id
         # cannot both pass the membership check before either one inserts.
@@ -159,6 +171,10 @@ class ApplicationEngine:
             self._decisions.popitem(last=False)
         return ack
 
+    def reservation_for(self, job_id: int) -> Optional[int]:
+        """The quota reservation of the attempt now running for *job_id*, if any."""
+        return self._reservations.get(job_id)
+
     def signal_confirm(self, job_id: int) -> None:
         """Release the waiting strategy for *job_id*. Callers go through :meth:`decide`."""
         if job_id in self._confirm_events:
@@ -221,6 +237,20 @@ class ApplicationEngine:
     #  Main entry point                                                    #
     # ------------------------------------------------------------------ #
 
+    async def _pace(self, apply_url: str) -> None:
+        """Space automatic applications on one site the way a person would."""
+        gap = settings.APPLY_MIN_GAP_SECONDS
+        host = (urlparse(apply_url).hostname or "").lower()
+        if gap <= 0 or not host:
+            return
+        loop = asyncio.get_running_loop()
+        start = max(loop.time(), self._next_auto_start.get(host, 0.0))
+        # Claimed before sleeping: two applications queued together wait in turn.
+        self._next_auto_start[host] = start + gap * random.uniform(1.0, 2.5)
+        if start > loop.time():
+            logger.info("Pacing: next application on %s in %.0f s", host, start - loop.time())
+            await asyncio.sleep(start - loop.time())
+
     async def apply(
         self,
         job_match_id: int,
@@ -264,11 +294,13 @@ class ApplicationEngine:
         # ``_registry_lock`` so two concurrent calls cannot both pass the
         # check before either one inserts. ``asyncio.Lock`` is cheap and
         # uncontended in the normal single-request case.
+        job_key = await self._job_key(db, job_match_id)
         already_in_flight = False
         async with self._registry_lock:
-            if job_match_id in self._confirm_events:
+            if job_match_id in self._confirm_events or job_key in self._in_flight_jobs:
                 already_in_flight = True
             else:
+                self._in_flight_jobs.add(job_key)
                 self._confirm_events[job_match_id] = asyncio.Event()
                 self._cancel_events[job_match_id] = asyncio.Event()
 
@@ -283,6 +315,13 @@ class ApplicationEngine:
                 method=mode.value,
                 message=f"Job {job_match_id} already has an application in progress.",
             )
+        # From here on this call owns ``job_key``; the ``finally`` below gives it back.
+
+        if reserved_app_id is not None:
+            self._reservations[job_match_id] = reserved_app_id
+
+        if mode == ApplyMode.AUTO:
+            await self._pace(apply_url)
 
         # ── Build FSM context ───────────────────────────────────────────
         ctx = ApplyContext(
@@ -328,6 +367,8 @@ class ApplicationEngine:
             self._cancel_events.pop(job_match_id, None)
             self._pending_reviews.pop(job_match_id, None)
             self._pending_patches.pop(job_match_id, None)
+            self._reservations.pop(job_match_id, None)
+            self._in_flight_jobs.discard(job_key)
 
         sr = ctx.strategy_result
         extra = (
@@ -336,6 +377,18 @@ class ApplicationEngine:
             else {}
         )
         return ApplicationResult(status=status, method=method, message=message or "", **extra)
+
+    @staticmethod
+    async def _job_key(db: AsyncSession, job_match_id: int) -> tuple[str, int]:
+        """In-flight key for *job_match_id*: its job, else (no such match) the match itself."""
+        from backend.models.job import JobMatch
+
+        job_id = (
+            await db.execute(select(JobMatch.job_id).where(JobMatch.id == job_match_id))
+        ).scalar_one_or_none()
+        if isinstance(job_id, int) and job_id > 0:
+            return ("job", job_id)
+        return ("match", job_match_id)
 
     # ------------------------------------------------------------------ #
     #  FSM transition table builder                                        #
@@ -570,42 +623,39 @@ class ApplicationEngine:
         cv_pdf: Optional[Path] = ctx.extras["cv_pdf"]
         letter_pdf: Optional[Path] = ctx.extras["letter_pdf"]
 
+        # The strategy hands its live browser straight to *this run's* ctx, so
+        # the FSM/cleanup net can close it even when apply() raises or is
+        # cancelled — and never another run's (the strategies are shared).
+        def on_browser(browser: Any) -> None:
+            ctx.browser = browser
+
         if mode == ApplyMode.AUTO:
-            # Copy the live browser onto ctx in a finally so the FSM/cleanup
-            # net can close it even when apply() raises or is cancelled before
-            # returning (otherwise the handle would leak).
-            try:
-                result = await self._auto.apply(
-                    job_id=ctx.job_match_id,
-                    apply_url=ctx.apply_url,
-                    full_name=applicant.full_name,
-                    email=applicant.email,
-                    phone=applicant.phone,
-                    location=applicant.location,
-                    additional_answers=applicant.additional_answers_json,
-                    cv_pdf=cv_pdf,
-                    letter_pdf=letter_pdf,
-                    confirm_event=ctx.confirm_event,
-                    cancel_event=ctx.cancel_event,
-                )
-            finally:
-                ctx.browser = getattr(self._auto, "_active_browser", None)
-            return result
+            return await self._auto.apply(
+                job_id=ctx.job_match_id,
+                apply_url=ctx.apply_url,
+                full_name=applicant.full_name,
+                email=applicant.email,
+                phone=applicant.phone,
+                location=applicant.location,
+                additional_answers=applicant.additional_answers_json,
+                cv_pdf=cv_pdf,
+                letter_pdf=letter_pdf,
+                confirm_event=ctx.confirm_event,
+                cancel_event=ctx.cancel_event,
+                on_browser=on_browser,
+            )
         if mode == ApplyMode.ASSISTED:
-            try:
-                result = await self._assisted.apply(
-                    apply_url=ctx.apply_url,
-                    full_name=applicant.full_name,
-                    email=applicant.email,
-                    phone=applicant.phone,
-                    location=applicant.location,
-                    additional_answers=applicant.additional_answers_json,
-                    cv_pdf=cv_pdf,
-                    letter_pdf=letter_pdf,
-                )
-            finally:
-                ctx.browser = getattr(self._assisted, "_active_browser", None)
-            return result
+            return await self._assisted.apply(
+                apply_url=ctx.apply_url,
+                full_name=applicant.full_name,
+                email=applicant.email,
+                phone=applicant.phone,
+                location=applicant.location,
+                additional_answers=applicant.additional_answers_json,
+                cv_pdf=cv_pdf,
+                letter_pdf=letter_pdf,
+                on_browser=on_browser,
+            )
         # MANUAL — no browser.
         return await self._manual.apply(
             apply_url=ctx.apply_url,

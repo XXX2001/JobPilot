@@ -1,200 +1,114 @@
 # Module: Matching
 
-Cross-references: [file-map.md](../file-map.md) | [architecture.md](../architecture.md) | [index.md](../index.md)
+Cross-references: [matching.md](../matching.md) (rules, worked examples, evaluation) | [monitor.md](../monitor.md) | [file-map.md](../file-map.md) | [architecture.md](../architecture.md) | [index.md](../index.md)
 
-Files in this module:
+Deterministic scoring on a curated skill gazetteer. No embeddings, no LLM, no network. The weighted keyword/location/recency matcher was replaced in `12ac325`. `skill_patterns.py`, `job_skill_extractor.py`, `embedder.py` and the cosine code were deleted in `1b289a8` (spec D10, Phase 2).
 
 | File | Brief |
 |---|---|
-| `backend/matching/matcher.py` | `JobMatcher` — weighted multi-factor job relevance scoring |
-| `backend/matching/fit_engine.py` | `FitEngine` — embedding-based skill-gap assessment |
-| `backend/matching/cv_parser.py` | `CVParser` — LaTeX CV skill extraction with context weights |
-| `backend/matching/embedder.py` | `Embedder` — populates `SkillEntry.embedding` vectors |
-| `backend/matching/skill_patterns.py` | `TECH_PATTERN` — compiled regex for tech skill extraction |
-| `backend/matching/filters.py` | `JobFilters` dataclass for search parameter passing |
+| `backend/matching/gazetteer.py` | `Gazetteer`: alias lookup over accent-folded tokens, `@family` relations, owner and keyword extensions |
+| `backend/matching/job_skills.py` | `extract_job_skills`: a posting's skills, each with a criticality |
+| `backend/matching/scorer.py` | `score_job`: hard filters, coverage, title factor, provisional score |
+| `backend/matching/matcher.py` | `JobMatcher`, `load_matcher`, `skill_files` |
+| `backend/matching/fit_engine.py` | `FitEngine`: gap severity, used for CV tailoring |
+| `backend/matching/cv_parser.py` | `latex_to_text`, `CVParser`: the CV's skills, with context |
+| `backend/matching/filters.py` | `JobFilters` dataclass |
+| `backend/matching/data/` | `skills.txt` (bundled vocabulary), `countries.txt`, `cities.txt` (location filter) |
 
 ---
+
+## Gazetteer
+
+`Gazetteer.load(extra_terms=(), *, path=SKILLS_PATH, my_skills="")` (`gazetteer.py:156`):
+
+1. Parses the vocabulary at `path` (`canonical | alias | …`, `!alias` case-sensitive, `@family`, `@family!` for no credit), then the owner's `my_skills` text in the same format. The first claim on an alias wins, so the vocabulary's skill takes an alias both files list.
+2. `extra_terms` (the owner's search keywords): a keyword in which the gazetteer finds nothing becomes a skill of its own (`extra_skills`). A keyword that contains a listed skill is a job title and adds nothing.
+3. `owner_skills` = the canonical skills the `my_skills` lines resolve to.
+
+`extract(text)` tokenises accent-stripped text, blanks noise (`_NOISE`: French elisions, `R&D`, "go-to-market", "Series C", …), and matches n-grams longest first. A case-sensitive one-token hit glued by `-` or `&` is dropped ("C-level"). `related(a, b)` is true when both skills share a family that does not end in `!`.
+
+`file_version(path)` = the first 12 hex characters of the file's sha256. `GAZETTEER_VERSION` is that of the bundled file. `check_skill_lines(text)` (`gazetteer.py:120`) validates an owner file and raises `ValueError` naming the first bad line.
+
+## Posting skills
+
+`extract_job_skills(title, description, gaz) -> {canonical: criticality}` (`job_skills.py:186`). Criticality is `REQUIRED 1.0`, `NEUTRAL 0.6`, `BLURB 0.4` or `NICE 0.3`. It comes from the section header above the mention, overridden by an inline marker in the same clause. A negated mention does not count. The strongest mention wins, and a skill in the title is `REQUIRED`.
+
+## Score
+
+`score_job(job, cv, filters, gaz, *, claimed_only=False) -> ScoreResult` (`scorer.py:286`):
+
+1. **Hard filters** (`_reject_reason`): excluded keyword in the title, excluded company, `remote_only`, location. A rejection scores 0 with `passed_filters=False` and is never matched. The location filter places a job by country name, ISO code (a two-letter US state or Canadian province stands for both countries), `JobDetails.country`, then a major city. An unplaceable location passes a country filter with `location_unverified=True`.
+2. **Weights**: `extract_job_skills("", description)` when the description is at least `PROVISIONAL_MIN_CHARS = 80` characters, plus the title's skills as `REQUIRED`.
+3. **Provisional**: fewer than `PROVISIONAL_MIN_SKILLS = 2` skills in the body. The score is title-only: `PROVISIONAL_KEYWORD_SCORE = 50` with a search keyword in the title (literally or through a skill it names), `PROVISIONAL_CV_SKILL_SCORE = 40` with a CV skill in the title, else 0. Lowered from 70 and 45 in `2ad7fc3`.
+4. **Otherwise**: `100 × coverage(weights, credit, MATCH_SHRINK) × multiplier`. Multiplier = `0.4 + 0.6 × T`. T is 1.0 for a keyword in the title, 0.1 for a non-technical title (and then the multiplier is 0.1, with no floor), 1.0 for a CV skill in the title, else 0.6.
+
+`coverage(weights, credit, shrink=SHRINK)` (`scorer.py:269`): per tier, `Σ w·credit / (Σ w + shrink)`. Required and other skills combine as `0.65 / 0.35` when both tiers exist. Credit (`skill_credit`) is 1.0 for a skill on the CV or one of the owner's `extra_skills`, `FAMILY_CREDIT = 0.5` for a same-family CV skill, else 0.
+
+| Constant | Value | Used by |
+|---|---|---|
+| `SHRINK` | 0.5 | `coverage` default: the fit assessment (`FitEngine`) |
+| `MATCH_SHRINK` | 1.0 | the match score. Two covered skills reach 67, not 80 (`8a2e557`) |
+
+`ScoreResult(score, passed_filters, reject_reason, covered, partial, missing, provisional, location_unverified)` (`scorer.py:119`).
+
+`SCORER_VERSION = 3`: bump it when a scoring rule or the location data changes, and every stored score goes stale.
 
 ## JobMatcher
 
-**File:** `backend/matching/matcher.py`
+`JobMatcher(cv_text="", extra_terms=(), *, my_skills="", vocab_path=SKILLS_PATH)` (`matcher.py:31`):
 
-Computes a composite relevance score [0, 100] for each scraped job against the user's search settings. Called by `BatchRunner` after scraping and before CV pre-generation.
+- The CV skill set is `owner_skills` when `my_skills` lists any. Otherwise it is the gazetteer skills of `latex_to_text(cv_text)`. Without either, `explain` scores with `claimed_only=True` against the skills the search keywords name.
+- `score_basis` = `sha256(SCORER_VERSION, CV text or "my_skills\0"+file, sorted keywords)[:12] + ":" + file_version(vocab_path)` (`matcher.py:56`). A stored match with another basis is stale ([monitor.md](../monitor.md#rescoring)).
+- `explain(job, filters) -> ScoreResult`; `score` returns its `.score`; `matched_keywords` returns `covered + partial`; `rank_and_filter` sorts by score.
 
-### Weighted Sub-Scores
+`load_matcher(db)` (`matcher.py:102`) builds the owner's matcher. It takes the base CV from `UserProfile.base_cv_path`, else the first `templates/*.tex` (`resolve_base_source`), the search keywords, and the skill files. `_matcher` is an `lru_cache(maxsize=4)` keyed on the CV text, the keywords, the `my_skills` text, the vocabulary path and its version. Both files are read on every call, so a hand edit applies to the next score without a restart. Stored scores catch up at the next rescore. Callers: `match_new` and `rescore_stale` (monitor), `BatchRunner._run_batch_inner` (batch, when no matcher is injected).
 
-| Component | Weight | Description |
-|---|---|---|
-| Keyword match | 40% | Fraction of `SearchSettings.keywords.include` found in title + description |
-| Location match | 20% | Jaccard similarity between job location and `SearchSettings.locations` |
-| Experience match | 15% | Whether the job's stated experience falls within `experience_min`/`experience_max` |
-| Salary match | 10% | Whether `job.salary_min >= SearchSettings.salary_min` |
-| Recency | 10% | Linear decay: 100 → 0 over `0 → 30 days` since `posted_at` |
+### Owner skill files
 
-### Instant Zero
+`skill_files() -> (my_skills_path, vocabulary_path)` (`matcher.py:95`):
 
-A job scores `0.0` immediately (bypassing all sub-score computation) if:
+| File | Effect |
+|---|---|
+| `$DATA/my_skills.txt` | The owner's skills, in the gazetteer format. When it lists any, it replaces the CV as the skill set. Names the vocabulary does not know are added to it |
+| `$DATA/skills.txt` | Replaces the bundled `backend/matching/data/skills.txt` when present |
 
-- Any term from `SearchSettings.excluded_keywords` appears in the title or description.
-- The company name appears in `SearchSettings.excluded_companies`.
-
-### `_recency_score(posted_at)`
-
-```
-score = max(0, 1 - (days_old / 30)) * 100
-```
-
-Jobs older than 30 days score 0. Jobs posted today score 100.
-
-### Persistence
-
-Matched jobs are inserted as `JobMatch` rows with `status="new"`. Existing matches for the same `job_id` are updated in-place to avoid duplicating the queue.
-
----
+`GET /api/settings/skills` returns `{my_skills, vocabulary_overridden, skill_count}`, plus `error` for a file edited by hand into a bad state. `PUT /api/settings/skills {"my_skills": text}` validates with `check_skill_lines` (422 with the line number), writes atomically (`.tmp` then rename), removes the file when the text is blank, and rescores (`backend/api/settings.py:361`). There is no frontend page for these routes. Template: `scripts/defaults/my_skills.example.txt`.
 
 ## FitEngine
 
-**File:** `backend/matching/fit_engine.py`
+`FitEngine().assess(job_skills, cv_profile, gaz, sensitivity="balanced") -> FitAssessment` (`fit_engine.py:48`). `severity = 1 − coverage` (with `SHRINK`), `simulated_ats_score = 100 × coverage`. `should_modify` is `severity >= threshold` (conservative 0.3, balanced 0.5, aggressive 0.7). `critical_gaps` are uncovered skills above `NICE`, and `preferred_gaps` the rest. A posting with no recognised skill returns severity 1.0 and `should_modify=False`.
 
-Performs a deeper, embedding-based assessment of how well the user's CV matches a specific job's requirements. Used inside `CVPipeline` to decide whether to tailor the CV and to guide the `CVModifier`.
-
-### Flow
-
-1. Parse the user's CV into `SkillEntry` list via `CVParser.build_profile()`.
-2. Embed all skill texts in batch via the embedding client's `embed()` (using `text-embedding-3-small`).
-3. Embed the job's `required_skills` and `nice_to_have_skills` from `JobContext`.
-4. Compute cosine similarity between each job requirement and all CV skills.
-5. For each requirement, take the max cosine similarity across all CV skills.
-6. Compute `ats_score` as the weighted average (required skills weight more than nice-to-have).
-
-### Sensitivity Modes
-
-`SearchSettings.cv_modification_sensitivity` maps to thresholds:
-
-| Mode | Apply threshold | Description |
-|---|---|---|
-| `conservative` | 0.75 | Only apply when there is a strong fit signal |
-| `balanced` | 0.60 | Default; apply when fit is reasonable |
-| `aggressive` | 0.45 | Apply even on weaker signals |
-
-### `FitAssessment`
-
-```python
-@dataclass
-class FitAssessment:
-    ats_score: float          # 0–100 compatibility score
-    gap_severity: float       # 0.0–1.0; higher means more missing skills
-    gaps: list[SkillGap]      # per-requirement gap analysis
-    covered: list[str]        # requirement strings the CV already covers
-    decision: str             # "apply" | "skip" | "apply_with_tailoring"
-```
-
-`FitAssessment.to_dict()` serialises to a JSON-compatible dict stored in `JobMatch.fit_assessment_json` and `TailoredDocument.fit_assessment_json`.
-
-### `SkillGap`
-
-```python
-@dataclass
-class SkillGap:
-    requirement: str    # the job requirement text
-    best_match: str     # closest CV skill found
-    similarity: float   # cosine similarity score [0, 1]
-    severity: float     # 1 - similarity; how significant the gap is
-```
-
----
+The batch calls it through `BatchRunner._assess_one` only when the posting names at least `MIN_JOB_SKILLS_FOR_FIT_ENGINE = 2` skills. It builds its own `Gazetteer.load(filters.keywords)` and a `CVParser` profile of the CV (`batch_runner.py:252`). It therefore uses the bundled vocabulary and the CV, never `$DATA/skills.txt` or `my_skills.txt`.
 
 ## CVParser
 
-**File:** `backend/matching/cv_parser.py`
-
-Extracts skills from a LaTeX CV source string with context-based weighting. Produces a `CVProfile` used by `FitEngine` and `Embedder`.
-
-### Context Weights
-
-```python
-CONTEXT_WEIGHTS = {
-    "experience_recent": 1.0,   # from most recent / current role bullets
-    "skills_section":    0.6,   # from the Skills or Technical Skills section
-    "profile":           0.5,   # from the Profile / Summary section
-    "experience_older":  0.4,   # from older role bullets
-}
-```
-
-These weights mirror the signal strength used by real Applicant Tracking Systems (ATS).
-
-### Three-Pass Extraction
-
-1. **Profile section:** Scans for `\begin{rSection}{Profile}` (and equivalent names). Checks for multi-word skills first, then runs `TECH_PATTERN` across the section text.
-2. **Skills section:** Tries `\cvskill{}{skills}` pattern first, then falls back to table-row pattern (`& skill1, skill2 \\`).
-3. **Experience section:** Detects role headers with `_ROLE_RE` to distinguish recent (first / "Present") from older roles. Extracts skill mentions from `\item` bullets in each role.
-
-### Fallback
-
-If fewer than 3 skills are extracted via the section passes, a full-text scan is performed using `TECH_PATTERN` and `_MULTI_WORD_SKILLS`. All fallback skills receive `skills_section` context weight.
-
-### `build_profile(cv_tex)`
-
-Calls `parse()` and wraps the result in a `CVProfile`:
-
-```python
-@dataclass
-class CVProfile:
-    skills: list[SkillEntry]
-    raw_text_hash: str  # SHA-256 of the original LaTeX source (for cache invalidation)
-```
-
----
-
-## Embedder
-
-**File:** `backend/matching/embedder.py`
-
-Post-processes a `CVProfile` by populating the `embedding` field of each `SkillEntry`. Called lazily by `FitEngine` before cosine-similarity computation.
-
-```python
-async def embed_profile(profile: CVProfile, embedding_client: EmbeddingClient) -> CVProfile:
-    texts = [s.text for s in profile.skills]
-    vectors = await embedding_client.embed(texts)
-    for skill, vector in zip(profile.skills, vectors):
-        skill.embedding = vector
-    return profile
-```
-
----
-
-## skill_patterns.py
-
-**File:** `backend/matching/skill_patterns.py`
-
-Defines `TECH_PATTERN`: a compiled regex that matches technology skill mentions in plain or LaTeX text. The pattern covers:
-
-- Exact-match keywords (Python, Go, Rust, Java, etc.)
-- Framework/library names (FastAPI, React, PyTorch, etc.)
-- Cloud and DevOps terms (AWS, GCP, Docker, Kubernetes, etc.)
-- Database names (PostgreSQL, MongoDB, Redis, etc.)
-- Methodology terms (Agile, Scrum, CI/CD, etc.)
-
-The pattern uses word boundaries (`\b`) and case-insensitive matching. It returns `match.group(1)` for the extracted skill text.
-
----
+`latex_to_text(cv_tex)` (`cv_parser.py:44`) de-escapes what a CV uses (`\&` → `&`, `\#` → `#`, accent macros → the bare letter, `~` and `\,` → space, table column specs dropped), so "R\&D" is not the skill R. Commands and environments stay, because the parser reads sections from them. `CVParser.parse` tags each CV skill with its strongest context (`CONTEXT_WEIGHTS`: `experience_recent` 1.0, `skills_section` 0.6, `profile` 0.5, `experience_older` 0.4). `build_profile` wraps the result as `CVProfile(skills, raw_text_hash)`.
 
 ## JobFilters
-
-**File:** `backend/matching/filters.py`
-
-Simple dataclass passed between `SearchSettings` parsing and Adzuna/scraper queries:
 
 ```python
 @dataclass
 class JobFilters:
-    keywords: list[str] = field(default_factory=list)
-    locations: list[str] = field(default_factory=list)
+    keywords: list[str]
+    excluded_keywords: list[str]
+    locations: list[str]
     salary_min: Optional[int] = None
-    experience_min: Optional[int] = None
-    experience_max: Optional[int] = None
+    experience_range: Optional[tuple[int, int]] = None
     remote_only: bool = False
-    job_types: list[str] = field(default_factory=list)
-    languages: list[str] = field(default_factory=list)
-    min_score: float = 30.0
+    job_types: list[str]
+    languages: list[str]
+    excluded_companies: list[str]
+    min_score: float = MIN_MATCH_SCORE  # 30.0
 ```
+
+The scorer reads `keywords`, `excluded_keywords`, `excluded_companies`, `locations` and `remote_only`. `min_score` is the caller's threshold. `salary_min`, `experience_range`, `job_types` and `languages` are carried but not scored.
+
+## Known shortcuts
+
+| Where | Shortcut | Upgrade path |
+|---|---|---|
+| `gazetteer.py:65` `_NOISE` | A phrase list, not grammar: "Go" as a capitalised verb in another phrase still matches | Require a second skill of the same family in the clause |
+| `job_skills.py:78` | A bare "plus" is not a nice-to-have marker; only "a plus" / "un plus" | — |
+| `scorer.py:63` `_REMOTE_NOISE` | Remote detection by phrase list | Parse the workplace type per source |
+| `scorer.py:106` `_SUBDIVISIONS` | US and Canadian two-letter codes only | Add Indian and Australian states if they show up |
+| `cv_parser.py:51` `latex_to_text` | The escapes a CV uses, not a LaTeX reader | A real detex |

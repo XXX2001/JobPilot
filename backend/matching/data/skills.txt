@@ -1,0 +1,204 @@
+# Curated bilingual (EN/FR) skill gazetteer. One skill per line:  canonical | alias | alias ...
+# Matching is on accent-folded, lowercased whole tokens, so "Intégration Continue" matches
+# "intégration continue". Aliases are tried longest first.
+# "!" prefix = case-sensitive alias, for names that are also common words (Go, R, C, Swift...).
+# Do not list a bare ordinary word as an alias ("vue", "node", "shell"): it matches prose.
+# "@family" starts a related-skill family: members get partial credit for each other.
+# "@family!" groups skills for readability only (languages, OS...): no credit between members.
+# GAZETTEER_VERSION is the hash of this file: any edit makes stored scores stale.
+# Seeded from the StackOverflow top-2000 tags + synonyms (CC BY-SA 4.0) and ESCO FR labels,
+# hand-filtered.
+@lang!
+python | python3 | python 3 | python 3.x
+!Go | golang | !Golang
+java | java 17 | java 21 | jvm
+kotlin
+scala
+javascript | js | ecmascript
+typescript
+ruby
+php
+c++ | cpp
+c# | csharp | .net | dotnet | asp.net
+rust | !Rust
+!C | langage c | c language
+!R | langage r
+!Swift | swiftui
+dart
+elixir
+haskell
+lua
+bash | shell scripting | scripting shell | shell script | shell scripts | script shell | scripts shell
+sql | t-sql | pl/sql | plsql
+sas programming | sas base | logiciel sas
+@pyweb
+django | django rest framework | drf | django orm
+fastapi | fast api
+flask
+sqlalchemy
+celery
+pydantic
+@jsweb
+react | reactjs | react.js | react native | react-native
+vue.js | vuejs | vue 3 | vue 2
+angular | angularjs
+node.js | nodejs
+next.js | nextjs
+nestjs
+express.js | expressjs
+@jvmweb
+spring boot | !Spring | spring framework
+hibernate
+maven
+gradle
+@rubyweb
+ruby on rails | rails | ror
+@sql
+postgresql | postgres | psql
+mysql | mariadb
+oracle | oracle database | oracle db
+sql server | mssql
+sqlite
+snowflake
+bigquery | google bigquery
+redshift
+@nosql
+mongodb | mongo
+cassandra
+elasticsearch | elastic search | opensearch
+dynamodb
+redis
+neo4j
+qdrant
+@stream
+kafka | apache kafka
+rabbitmq
+pulsar
+@data
+airflow | apache airflow
+dbt
+spark | apache spark | pyspark
+hadoop
+pandas
+numpy
+etl | elt | pipelines de données | data pipelines | data pipeline | pipeline de données
+data warehouse | entrepôt de données | datawarehouse
+metabase
+!Tableau | tableau software
+power bi | powerbi
+looker
+@ml
+machine learning | apprentissage automatique | !ML
+deep learning | apprentissage profond
+pytorch | torch
+tensorflow | keras
+scikit-learn | sklearn
+llm | llms | large language models | grands modèles de langage
+nlp | natural language processing | traitement du langage naturel
+mlops
+rag | retrieval-augmented generation
+cuda
+@cloud
+aws | amazon web services | !AWS
+gcp | google cloud | google cloud platform
+azure | microsoft azure
+@container
+docker | conteneurisation | containerisation | containerization | conteneurs docker | docker-compose | docker compose
+kubernetes | k8s | gke | eks | aks
+!Helm
+openshift
+@iac
+terraform
+ansible
+pulumi
+cloudformation
+@ci
+ci/cd | ci cd | cicd | continuous integration | intégration continue | déploiement continu | continuous delivery | continuous deployment
+github actions | !GitHub Actions
+gitlab ci | gitlab-ci | gitlab
+jenkins
+argocd | argo cd
+@vcs
+git | !Git | github
+@obs
+prometheus
+grafana
+datadog
+sentry
+opentelemetry
+!ELK | elk stack
+@os!
+linux | unix
+@arch!
+microservices | microservice | micro-services | microservices architecture | architecture microservices
+rest api | restful | api rest | apis rest | rest apis | restful apis | api restful
+graphql
+grpc
+openapi | open api | swagger
+event-driven | event driven | architecture événementielle
+distributed systems | systèmes distribués | système distribué | distributed system
+system design | conception de systèmes
+data modeling | modélisation de données | data modelling
+api design
+@test
+unit testing | tests unitaires | unit tests
+pytest
+junit
+integration testing | tests d'intégration
+tdd | test-driven development
+@sec
+oauth | oauth2 | jwt
+owasp
+@robot
+ros | ros 1 | ros1 | robot operating system
+ros 2 | ros2
+moveit | moveit 2 | moveit2
+gazebo | ignition gazebo
+isaac sim | isaacsim | nvidia isaac
+urdf | xacro
+slam | simultaneous localization and mapping | localisation et cartographie simultanées
+path planning | motion planning | trajectory planning | planification de trajectoire | planification de trajectoires | planification de mouvement
+kinematics | inverse kinematics | forward kinematics | cinématique | cinématique inverse | cinématique directe
+motion control | commande de mouvement | contrôle de mouvement | commande d'axes | contrôle d'axes
+robotics | robotique | roboticien | roboticienne | roboticist
+cobot | cobots | cobotics | cobotique | collaborative robot | collaborative robots | robot collaboratif | robots collaboratifs
+@embedded
+embedded systems | embedded software | firmware | systèmes embarqués | système embarqué | logiciel embarqué | logiciels embarqués
+rtos | real-time operating system | real-time os | os temps réel | système d'exploitation temps réel
+freertos | free rtos
+stm32 | stm32cube
+microcontroller | microcontrollers | microcontrôleur | microcontrôleurs
+can bus | canbus | can fd | !bus CAN | !Bus CAN
+embedded linux | linux embarqué
+yocto | yocto project | bitbake
+@automation
+plc | plcs | programmable logic controller | automate programmable | automates programmables | automate industriel | automates industriels | programmation automate | programmation d'automates | automaticien | automaticienne | automatisme | automatismes
+siemens tia portal | tia portal | step 7 | step7
+modbus | modbus tcp | modbus rtu
+ethercat
+profinet
+opc ua | opcua
+io-link | iolink
+scada
+@vision
+computer vision | machine vision | vision par ordinateur | vision industrielle
+opencv | open cv
+point cloud | point clouds | nuage de points | nuages de points
+pcl | point cloud library
+@cad
+solidworks | solid works
+@simulation
+matlab
+simulink
+@mobile!
+ios
+android
+@crm!
+salesforce | apex
+sap
+@office!
+!Excel | microsoft excel
+google analytics
+crm
+@method!
+agile | scrum | kanban | méthodes agiles

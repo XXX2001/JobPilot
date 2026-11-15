@@ -170,16 +170,10 @@ def test_test_connection_endpoint(test_app, monkeypatch):
         async def generate_text(self, *a, **k):
             return "OK"
 
-    class FakeEmb:
-        async def embed(self, texts):
-            return [[0.1, 0.2, 0.3, 0.4]]
-
     monkeypatch.setattr(factory, "make_llm_client", lambda: FakeLLM())
-    monkeypatch.setattr(factory, "make_embedding_client", lambda: FakeEmb())
 
     resp = test_app.post("/api/settings/test-connection")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["generation"]["ok"] is True
-    assert body["embedding"]["ok"] is True
-    assert body["embedding"]["detail"] == "dimension=4"
+    assert "embedding" not in body

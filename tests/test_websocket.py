@@ -61,3 +61,48 @@ def test_broadcast_status_helper():
     assert data["type"] == "status"
     assert data["message"] == "test"
     assert data["progress"] == 0.5
+
+
+def test_new_match_validates_against_ws_union():
+    """A broadcast ``new_match`` frame parses back through the WSMessage union."""
+    import asyncio
+    from datetime import datetime
+
+    from pydantic import TypeAdapter, ValidationError
+
+    from backend.api.ws import broadcast_new_match, manager
+    from backend.api.ws_models import NewMatch, WSMessage
+
+    sent: list[str] = []
+
+    class FakeWS:
+        async def send_text(self, data: str):
+            sent.append(data)
+
+    message = NewMatch(
+        match_id=3,
+        job_id=7,
+        title="Robotics Engineer",
+        company="Mirakl",
+        location="Paris",
+        score=87.4,
+        source="greenhouse:mirakl",
+        posted_at=datetime(2026, 11, 14, 8, 30),
+        url="https://example.test/jobs/7",
+    )
+    manager.active_connections.clear()
+    manager.active_connections["c1"] = FakeWS()  # type: ignore[assignment]
+    try:
+        asyncio.run(broadcast_new_match(message))
+    finally:
+        manager.active_connections.clear()
+
+    adapter = TypeAdapter(WSMessage)
+    parsed = adapter.validate_json(sent[0])
+    assert isinstance(parsed, NewMatch) and parsed == message
+    assert json.loads(sent[0])["type"] == "new_match"
+
+    # posted_at is optional; the other fields are not
+    assert adapter.validate_python({**message.model_dump(), "posted_at": None}).posted_at is None
+    with pytest.raises(ValidationError):
+        adapter.validate_python({"type": "new_match", "match_id": 3})

@@ -40,6 +40,10 @@ export interface QueueMatch {
 	id: number;
 	job_id: number;
 	score: number;
+	/** Scored on the title alone: no description, or one naming under two skills. */
+	provisional?: boolean;
+	/** The location passed a country filter without naming a country or a known city. */
+	location_unverified?: boolean;
 	status: string;
 	batch_date?: string;
 	matched_at: string;

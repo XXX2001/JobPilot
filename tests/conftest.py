@@ -46,12 +46,15 @@ if str(ROOT) not in sys.path:
 _WORKER_ID = os.environ.get("PYTEST_XDIST_WORKER", "main")
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix=f"jobpilot-test-{_WORKER_ID}-")
 os.environ["JOBPILOT_DATA_DIR"] = _TEST_DATA_DIR
+# The developer's .env may switch the monitor on: tests never poll or push for real.
+os.environ["MONITOR_ENABLED"] = "false"
+os.environ["NTFY_URL"] = ""
+os.environ["APPLY_MIN_GAP_SECONDS"] = "0"  # no real pauses between test applications
 
 # Seed dummy credentials so backend.config.Settings() doesn't refuse to load
 # on fresh checkouts / CI machines that don't have a real ``.env``.
 os.environ.setdefault("JOBPILOT_ALLOWED_HOSTS", "testserver")  # TestClient Host header (W07)
 os.environ.setdefault("LLM_API_KEY", "test-key-not-real")
-os.environ.setdefault("EMBEDDING_API_KEY", "test-key-not-real")
 os.environ.setdefault("BROWSER_LLM_API_KEY", "test-key-not-real")
 os.environ.setdefault("ADZUNA_APP_ID", "test-adzuna-id")
 os.environ.setdefault("ADZUNA_APP_KEY", "test-adzuna-key")
@@ -164,7 +167,6 @@ def test_settings(monkeypatch):
         sys.path.insert(0, os.getcwd())
 
     monkeypatch.setenv("LLM_API_KEY", "test-key-not-real")
-    monkeypatch.setenv("EMBEDDING_API_KEY", "test-key-not-real")
     monkeypatch.setenv("BROWSER_LLM_API_KEY", "test-key-not-real")
     monkeypatch.setenv("ADZUNA_APP_ID", "test-adzuna-id")
     monkeypatch.setenv("ADZUNA_APP_KEY", "test-adzuna-key")

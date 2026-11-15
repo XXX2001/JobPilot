@@ -2,7 +2,7 @@
 
 ## Purpose
 
-The `backend/llm/` module is JobPilot's provider-agnostic interface to the configured LLM provider. A small factory (`factory.py`) selects a concrete provider adapter at runtime — `openai` (the default, via `OpenAICompatClient`/`OpenAICompatEmbeddingClient`) or `anthropic` (via `AnthropicClient`) — and exposes it behind the `LLMClient` and `EmbeddingClient` protocols defined in `base.py`. On top of this it provides three coordinated capabilities: job description analysis (extracting structured skill and keyword data from raw postings), CV tailoring (producing surgical LaTeX text replacements to improve job fit without fabricating content), and motivation-letter customization (adapting a single customizable paragraph to the target role). The module exists to isolate all LLM concerns — API key management, prompt templating, JSON parsing, and output validation — behind clean, typed Python interfaces. The rest of JobPilot (the scheduler, the apply engine, and the CV pipeline) calls into this module through those protocols without knowing which provider is configured.
+The `backend/llm/` module is JobPilot's provider-agnostic interface to the configured LLM provider. A small factory (`factory.py`) selects a concrete provider adapter at runtime — `openai` (the default, via `OpenAICompatClient`) or `anthropic` (via `AnthropicClient`) — and exposes it behind the `LLMClient` protocol defined in `base.py`. On top of this it provides three coordinated capabilities: job description analysis (extracting structured skill and keyword data from raw postings), CV tailoring (producing surgical LaTeX text replacements to improve job fit without fabricating content), and motivation-letter customization (adapting a single customizable paragraph to the target role). The module exists to isolate all LLM concerns — API key management, prompt templating, JSON parsing, and output validation — behind clean, typed Python interfaces. The rest of JobPilot (the scheduler, the apply engine, and the CV pipeline) calls into this module through that protocol without knowing which provider is configured.
 
 ---
 
@@ -10,15 +10,15 @@ The `backend/llm/` module is JobPilot's provider-agnostic interface to the confi
 
 ### `base.py`
 
-Defines the shared, provider-neutral contract for the whole module: the `LLMClient` and `EmbeddingClient` protocols (the typed interfaces every adapter implements) and the provider-neutral exceptions `LLMRateLimitError`, `LLMCallFailed`, and `LLMJSONError`. Nothing in `base.py` is tied to a specific vendor SDK; callers depend only on these protocols and exceptions.
+Defines the shared, provider-neutral contract for the whole module: the `LLMClient` protocol (the typed interface every adapter implements) and the provider-neutral exceptions `LLMRateLimitError`, `LLMCallFailed`, and `LLMJSONError`. Nothing in `base.py` is tied to a specific vendor SDK; callers depend only on this protocol and these exceptions.
 
 ### `factory.py`
 
-Selects and constructs the concrete provider adapter based on configuration. The default generation provider is `openai` (valid generation providers: `openai | anthropic`); embeddings always use the `openai` provider. The factory returns objects typed as `LLMClient` / `EmbeddingClient`, so call sites never reference a concrete provider class.
+Selects and constructs the concrete provider adapter based on configuration. The default generation provider is `openai` (valid generation providers: `openai | anthropic`). The factory returns objects typed as `LLMClient`, so call sites never reference a concrete provider class.
 
 ### `providers/openai_compat.py`
 
-The default adapter. `OpenAICompatClient` wraps the OpenAI-compatible SDK for text and JSON generation, and `OpenAICompatEmbeddingClient` wraps it for embeddings. Because it speaks the OpenAI-compatible wire protocol, it can target the OpenAI API directly or any compatible endpoint reachable via a custom `LLM_BASE_URL` (a local model server, or any other deployment exposed through an OpenAI-compatible base URL). The adapter maps HTTP 429 responses to `LLMRateLimitError` and any other failure to `LLMCallFailed`. `generate_json` retries a malformed parse once, then raises `LLMJSONError`.
+The default adapter. `OpenAICompatClient` wraps the OpenAI-compatible SDK for text and JSON generation. Because it speaks the OpenAI-compatible wire protocol, it can target the OpenAI API directly or any compatible endpoint reachable via a custom `LLM_BASE_URL` (a local model server, or any other deployment exposed through an OpenAI-compatible base URL). The adapter maps HTTP 429 responses to `LLMRateLimitError` and any other failure to `LLMCallFailed`. `generate_json` retries a malformed parse once, then raises `LLMJSONError`.
 
 ### `providers/anthropic_client.py`
 
@@ -244,7 +244,6 @@ All configuration is sourced from environment variables or a `.env` file, loaded
 | `LLM_API_KEY` | `str` | _(required, no default)_ | API key for the configured provider. Provider-specific keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) are also honoured. Not required when `LLM_BASE_URL` points at an endpoint that needs no key. |
 | `LLM_BASE_URL` | `str` | `""` | Optional override for the OpenAI-compatible base URL. Lets the `openai` adapter target a local model server or any OpenAI-compatible endpoint (including a third-party model fronted by an OpenAI-compatible gateway). |
 | `LLM_MODEL` | `str` | _(provider default)_ | Model name sent on every generation call. |
-| `EMBEDDING_MODEL` | `str` | `"text-embedding-3-small"` | Embedding model used by `OpenAICompatEmbeddingClient`. Embeddings always use the `openai` provider. |
 | `LLM_TIMEOUT_SECONDS` | `int` | _(adapter default)_ | Per-call request timeout applied by the provider adapters. |
 
 **Error mapping:** the provider adapters translate transport failures into the module's neutral exceptions. An HTTP 429 from the provider becomes `LLMRateLimitError`; any other failure becomes `LLMCallFailed`. There is no in-process request-per-minute limiter and no multi-model fallback chain — both were provider-specific features that no longer exist.

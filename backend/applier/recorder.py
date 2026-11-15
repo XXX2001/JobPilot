@@ -194,4 +194,49 @@ class ApplicationRecorder:
             raise
 
 
-__all__ = ["ApplicationRecorder"]
+async def sweep_stale_pending(db: AsyncSession) -> int:
+    """Startup sweep: resolve reservations left ``pending`` by a dead process.
+
+    A reservation is ``pending`` only while its attempt runs, and the attempt
+    lived in the previous process. Whether it clicked submit is unknown, so
+    the row becomes ``needs_verification`` — it keeps its quota slot, blocks a
+    blind re-apply of the job, and is never counted as applied. Returns the
+    number of rows moved. Rows without a reservation (tracker entries the
+    user created as ``pending``) are left alone.
+    """
+    from sqlalchemy import select
+
+    from backend.applier import STATUS_NEEDS_VERIFICATION, STATUS_PENDING
+    from backend.models.application import Application, ApplicationEvent
+    from backend.models.job import JobMatch
+
+    # ponytail: assumes one backend process per database — a second live
+    # process would have its running attempts swept. If that ever exists, stamp
+    # the reservation with an owner/heartbeat and sweep only dead owners.
+    note = "Interrupted by a restart before the outcome was recorded — check the job site."
+    rows = (
+        await db.execute(
+            select(Application).where(
+                Application.status == STATUS_PENDING,
+                Application.quota_reserved_at.is_not(None),
+            )
+        )
+    ).scalars().all()
+    for app in rows:
+        app.status = STATUS_NEEDS_VERIFICATION
+        app.notes = note
+        db.add(
+            ApplicationEvent(
+                application_id=app.id, event_type=RESULT_NEEDS_VERIFICATION, details=note
+            )
+        )
+        match = await db.get(JobMatch, app.job_match_id) if app.job_match_id is not None else None
+        if match is not None:
+            match.status = "applying"  # same as a recorded needs_verification
+    if rows:
+        await db.commit()
+        logger.warning("Startup sweep: %d stale pending row(s) need verification", len(rows))
+    return len(rows)
+
+
+__all__ = ["ApplicationRecorder", "sweep_stale_pending"]

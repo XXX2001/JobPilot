@@ -20,17 +20,6 @@ def make_llm_client():
     raise ValueError(f"Unknown LLM_PROVIDER: {provider!r} (openai|anthropic)")
 
 
-def make_embedding_client():
-    """Return an EmbeddingClient for the configured EMBEDDING_PROVIDER."""
-    provider = (settings.EMBEDDING_PROVIDER or "openai").lower()
-    if provider == "openai":
-        from backend.llm.providers.openai_compat import OpenAICompatEmbeddingClient
-        return OpenAICompatEmbeddingClient()
-    if provider == "anthropic":
-        raise ValueError("EMBEDDING_PROVIDER=anthropic invalid: Anthropic has no embeddings API")
-    raise ValueError(f"Unknown EMBEDDING_PROVIDER: {provider!r} (openai)")
-
-
 def make_browser_llm():
     """Return a browser-use Chat* instance for the configured BROWSER_LLM_PROVIDER."""
     provider = (settings.BROWSER_LLM_PROVIDER or "openai").lower()

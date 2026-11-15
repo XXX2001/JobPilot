@@ -33,6 +33,47 @@ from .snapshot import fresh, observe
 
 logger = logging.getLogger(__name__)
 
+# LinkedIn wraps offsite apply links ("Apply on company website") in a redirect page.
+_LINKEDIN_OFFSITE_APPLY = """() => {
+    const a = [...document.querySelectorAll('a[href]')].find(e =>
+        /\\/(safety\\/go|redir\\/redirect)\\/?\\?/.test(e.href) &&
+        /apply|postul|candidat/i.test(e.innerText + ' ' + (e.getAttribute('aria-label') || '')));
+    return a ? a.href : null;
+}"""
+
+
+def unwrap_linkedin_redirect(href: str) -> str | None:
+    """The target of a LinkedIn safety/redirect link, if it is an http(s) URL off LinkedIn."""
+    from urllib.parse import parse_qs
+
+    target = (parse_qs(urlsplit(href).query).get("url") or [""])[0]
+    host = (urlsplit(target).hostname or "").lower()
+    if urlsplit(target).scheme not in ("http", "https") or not host:
+        return None
+    return None if host == "linkedin.com" or host.endswith(".linkedin.com") else target
+
+
+async def _follow_offsite_apply(page) -> None:
+    """On a LinkedIn posting without Easy Apply, open the company's application page.
+
+    The harness never clicks a link that reads like "Apply", so without this it stops
+    on the posting with nothing filled (live run 2026-11-15, FANUC via contactrh.com).
+    """
+    host = (urlsplit(page.url).hostname or "").lower()
+    if not (host == "linkedin.com" or host.endswith(".linkedin.com")):
+        return
+    href = None
+    for _ in range(8):  # the top card renders after domcontentloaded
+        href = await page.evaluate(_LINKEDIN_OFFSITE_APPLY)
+        if href or await page.locator("button.jobs-apply-button").count():
+            break
+        await page.wait_for_timeout(1000)
+    target = unwrap_linkedin_redirect(href) if href else None
+    if target:
+        logger.info("LinkedIn posting applies offsite; opening %s", urlsplit(target).hostname)
+        await page.goto(target, wait_until="domcontentloaded", timeout=20_000)
+
+
 # Launched browsers handed to the owner need their Playwright connection to stay alive.
 _OPEN_BROWSERS = []
 
@@ -423,6 +464,7 @@ async def harness_apply(
             except ImportError:
                 pass
         await page.goto(apply_url, wait_until="domcontentloaded", timeout=20_000)
+        await _follow_offsite_apply(page)
 
         async def notify(kind, message):
             from backend.api.ws import manager
